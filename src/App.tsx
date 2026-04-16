@@ -27,11 +27,10 @@ import {
   Box as BoxIcon
 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { BlueprintSpec, Order, OrderExtraction } from './types';
+import { Order } from './types';
 
 // Configure pdfjs worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 // Procedural 3D Model Component
 function Part3DModel({ model }: { model: Order['model3D'] }) {
@@ -81,7 +80,6 @@ function Part3DModel({ model }: { model: Order['model3D'] }) {
 }
 
 export default function App() {
-  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
   const [orderPdf, setOrderPdf] = useState<string | null>(null);
   const [workshopPdfs, setWorkshopPdfs] = useState<string[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -133,12 +131,7 @@ export default function App() {
    * that cause transient "Unable to process" errors.
    */
   const normalizeImage = (dataUrl: string, isBlueprint: boolean = false): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      if (!dataUrl.startsWith('data:image/')) {
-        reject(new Error('Imagen inválida: se esperaba un DataURL de imagen.'));
-        return;
-      }
-
+    return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         // Reduciendo resoluciones para mayor velocidad
@@ -162,41 +155,17 @@ export default function App() {
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('No se pudo crear el contexto de canvas para normalizar imagen.'));
-          return;
-        }
+        const ctx = canvas.getContext('2d')!;
         ctx.drawImage(img, 0, 0, width, height);
         // Normalize to JPEG for reliability, compression 0.7 for speed/weight balance
         resolve(canvas.toDataURL('image/jpeg', 0.7));
       };
-      img.onerror = () => reject(new Error('No se pudo cargar la imagen para normalización.'));
       img.src = dataUrl;
     });
   };
 
-  const extractBase64FromDataUrl = (dataUrl: string, expectedPrefix: string): string => {
-    if (!dataUrl.startsWith(expectedPrefix)) {
-      throw new Error(`Formato de archivo inválido. Se esperaba: ${expectedPrefix}.`);
-    }
-
-    const separator = ';base64,';
-    const separatorIndex = dataUrl.indexOf(separator);
-    if (separatorIndex < 0) {
-      throw new Error('DataURL inválido: no contiene payload en base64.');
-    }
-
-    const base64Data = dataUrl.slice(separatorIndex + separator.length).trim();
-    if (!base64Data) {
-      throw new Error('DataURL inválido: payload base64 vacío.');
-    }
-
-    return base64Data;
-  };
-
   const preparePdfPart = (dataUrl: string) => {
-    const base64Data = extractBase64FromDataUrl(dataUrl, 'data:application/pdf');
+    const base64Data = dataUrl.split(';base64,')[1];
     return {
       inlineData: {
         mimeType: "application/pdf",
@@ -206,7 +175,7 @@ export default function App() {
   };
 
   const prepareImagePart = (dataUrl: string) => {
-    const base64Data = extractBase64FromDataUrl(dataUrl, 'data:image/jpeg');
+    const base64Data = dataUrl.split(';base64,')[1];
     return {
       inlineData: {
         mimeType: "image/jpeg",
@@ -215,310 +184,53 @@ export default function App() {
     };
   };
 
-  const toUserFriendlyErrorMessage = (error: unknown): string => {
-    if (error instanceof Error) {
-      const message = error.message.toLowerCase();
-
-      if (
-        message.includes('fake worker') ||
-        message.includes('pdf.worker') ||
-        message.includes('dynamically imported module')
-      ) {
-        return 'No se pudo inicializar el worker de PDF.js. Reinicia el servidor de desarrollo y recarga el navegador.';
-      }
-
-      if (message.includes('json válido') || message.includes('formato inesperado')) {
-        return `La IA respondió con un formato no compatible: ${error.message}`;
-      }
-
-      return error.message;
-    }
-
-    return 'Error desconocido durante el análisis de PDFs.';
-  };
-
-  interface BlueprintSpecWithImage {
-    spec: BlueprintSpec;
-    image: string;
-  }
-
-  interface MatchResult {
-    entry: BlueprintSpecWithImage;
-    score: number;
-  }
-
-  const normalizePieceKey = (value: string): string =>
-    value
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9]/g, '')
-      .toLowerCase();
-
-  const tokenizePiece = (value: string): string[] =>
-    value
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 2);
-
-  const computePieceMatchScore = (left: string, right: string): number => {
-    const normalizedLeft = normalizePieceKey(left);
-    const normalizedRight = normalizePieceKey(right);
-
-    if (!normalizedLeft || !normalizedRight) return 0;
-    if (normalizedLeft === normalizedRight) return 1;
-
-    let score = 0;
-
-    if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) {
-      const shortest = Math.min(normalizedLeft.length, normalizedRight.length);
-      const longest = Math.max(normalizedLeft.length, normalizedRight.length);
-      score = Math.max(score, 0.7 + (shortest / longest) * 0.2);
-    }
-
-    const leftTokens = new Set(tokenizePiece(left));
-    const rightTokens = new Set(tokenizePiece(right));
-    if (leftTokens.size > 0 && rightTokens.size > 0) {
-      let sharedTokens = 0;
-      leftTokens.forEach((token) => {
-        if (rightTokens.has(token)) sharedTokens += 1;
-      });
-      const overlap = sharedTokens / Math.max(leftTokens.size, rightTokens.size);
-      score = Math.max(score, overlap * 0.75);
-    }
-
-    return Math.min(score, 1);
-  };
-
-  const parseJsonResponse = (rawText: string): unknown => {
-    const trimmed = rawText.trim();
-    if (!trimmed) {
-      throw new Error('La IA devolvió una respuesta vacía.');
-    }
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      throw new Error('La respuesta de IA no llegó en formato JSON válido.');
-    }
-  };
-
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === 'object' && value !== null;
-
-  const getStringField = (record: Record<string, unknown>, key: string): string | null => {
-    const value = record[key];
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
-  };
-
-  const normalizePriority = (value: string): 'URGENTE' | 'Normal' => {
-    const normalized = value.trim().toUpperCase();
-    return normalized === 'URGENTE' ? 'URGENTE' : 'Normal';
-  };
-
-  const parseOrdersResponse = (payload: unknown): OrderExtraction[] => {
-    if (!Array.isArray(payload)) {
-      throw new Error('La IA devolvió pedidos en un formato inesperado.');
-    }
-
-    const parsed: OrderExtraction[] = [];
-    payload.forEach((entry, idx) => {
-      if (!isRecord(entry)) return;
-      const pieza = getStringField(entry, 'pieza');
-      const cantidad = getStringField(entry, 'cantidad');
-      const orden = getStringField(entry, 'orden');
-      const fecha = getStringField(entry, 'fecha');
-      const prioridadValue = getStringField(entry, 'prioridad') ?? 'Normal';
-
-      if (!pieza || !cantidad || !orden || !fecha) {
-        console.warn(`Pedido omitido por campos faltantes en índice ${idx}`);
-        return;
-      }
-
-      parsed.push({
-        pieza,
-        cantidad,
-        orden,
-        fecha,
-        prioridad: normalizePriority(prioridadValue),
-      });
-    });
-
-    return parsed;
-  };
-
-  const isModelShape = (value: unknown): value is BlueprintSpec['model3D']['shape'] =>
-    value === 'box' || value === 'cylinder' || value === 'sphere' || value === 'torus';
-
-  const parseBoundingBox = (value: unknown): [number, number, number, number] | null => {
-    if (!Array.isArray(value) || value.length !== 4) return null;
-    const coords = value.map((item) => (typeof item === 'number' ? item : Number.NaN));
-    if (coords.some((coord) => !Number.isFinite(coord))) return null;
-    const [ymin, xmin, ymax, xmax] = coords;
-    if (ymin < 0 || xmin < 0 || ymax > 1000 || xmax > 1000 || ymin >= ymax || xmin >= xmax) return null;
-    return [ymin, xmin, ymax, xmax];
-  };
-
-  const parseBlueprintSpecsResponse = (payload: unknown): BlueprintSpec[] => {
-    if (!Array.isArray(payload)) {
-      throw new Error('La IA devolvió planos en un formato inesperado.');
-    }
-
-    const parsed: BlueprintSpec[] = [];
-    payload.forEach((entry, idx) => {
-      if (!isRecord(entry)) return;
-      const pieza_detectada = getStringField(entry, 'pieza_detectada');
-      const descripcionVisual = getStringField(entry, 'descripcionVisual');
-      const isometricBoundingBox = parseBoundingBox(entry.isometricBoundingBox);
-
-      if (!pieza_detectada || !descripcionVisual || !isometricBoundingBox) {
-        console.warn(`Plano omitido por campos inválidos en índice ${idx}`);
-        return;
-      }
-
-      if (!isRecord(entry.model3D)) {
-        console.warn(`Plano omitido por model3D inválido en índice ${idx}`);
-        return;
-      }
-
-      const shapeRaw = entry.model3D.shape;
-      const dimensionsRaw = entry.model3D.dimensions;
-      const color = getStringField(entry.model3D, 'color');
-      const metalness = entry.model3D.metalness;
-      const roughness = entry.model3D.roughness;
-
-      if (
-        !isModelShape(shapeRaw) ||
-        !Array.isArray(dimensionsRaw) ||
-        dimensionsRaw.some((dim) => typeof dim !== 'number' || !Number.isFinite(dim)) ||
-        !color ||
-        typeof metalness !== 'number' ||
-        !Number.isFinite(metalness) ||
-        typeof roughness !== 'number' ||
-        !Number.isFinite(roughness)
-      ) {
-        console.warn(`Plano omitido por model3D incompleto en índice ${idx}`);
-        return;
-      }
-
-      parsed.push({
-        pieza_detectada,
-        descripcionVisual,
-        isometricBoundingBox,
-        model3D: {
-          shape: shapeRaw,
-          dimensions: dimensionsRaw,
-          color,
-          metalness,
-          roughness,
-        },
-      });
-    });
-
-    return parsed;
-  };
-
-  const findBestBlueprintMatch = (
-    orderPiece: string,
-    blueprintEntries: BlueprintSpecWithImage[],
-  ): MatchResult | null => {
-    let best: MatchResult | null = null;
-    for (const entry of blueprintEntries) {
-      const score = computePieceMatchScore(orderPiece, entry.spec.pieza_detectada);
-      if (!best || score > best.score) {
-        best = { entry, score };
-      }
-    }
-    const threshold = 0.45;
-    return best && best.score >= threshold ? best : null;
-  };
-
   /**
-   * Converts every page of a PDF into JPEG images for visual analysis and cropping.
+   * Converts the first page of a PDF into a JPEG image for visual analysis and cropping.
    */
-  const convertPdfToImages = async (dataUrl: string): Promise<string[]> => {
+  const convertPdfToImage = async (dataUrl: string): Promise<string> => {
     try {
-      if (!dataUrl.startsWith('data:application/pdf')) {
-        throw new Error('El archivo proporcionado no es un PDF válido en formato DataURL.');
-      }
-
-      console.log("Rendering all PDF pages...");
+      console.log("Rendering PDF page 1...");
       const loadingTask = pdfjsLib.getDocument(dataUrl);
       const pdf = await loadingTask.promise;
-      if (pdf.numPages < 1) {
-        throw new Error('El PDF no contiene páginas renderizables.');
-      }
-      const images: string[] = [];
-
-      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        const page = await pdf.getPage(pageNumber);
-        const viewport = page.getViewport({ scale: 2.5 });
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        if (!context) {
-          throw new Error('No se pudo crear el contexto del canvas para procesar el PDF.');
-        }
-
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-
-        await page.render({ canvas, canvasContext: context, viewport }).promise;
-        images.push(canvas.toDataURL('image/jpeg', 0.85));
-      }
-
-      if (images.length === 0) {
-        throw new Error('No se pudieron renderizar páginas del PDF.');
-      }
-
-      return images;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 2.5 }); // Increased scale for better detail
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d')!;
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+      
+      await (page as any).render({ canvasContext: context, viewport }).promise;
+      return canvas.toDataURL('image/jpeg', 0.85);
     } catch (e) {
       console.error("PDF to Image conversion failed", e);
-      throw new Error(`No se pudo procesar el PDF como imagen para la extracción visual. ${toUserFriendlyErrorMessage(e)}`);
+      throw new Error("No se pudo procesar el PDF como imagen para la extracción visual.");
     }
   };
 
   // Helper to crop image based on AI bounding box
   const cropIsometricView = (base64: string, box: number[]): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      if (!Array.isArray(box) || box.length !== 4) {
-        reject(new Error('No se puede recortar vista isométrica: bounding box inválido.'));
-        return;
-      }
-
+    return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const padding = 20;
         const [ymin, xmin, ymax, xmax] = box;
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('No se pudo crear contexto de canvas para recortar vista isométrica.'));
-          return;
-        }
+        const ctx = canvas.getContext('2d')!;
         const x = Math.max(0, (xmin / 1000) * img.width - padding);
         const y = Math.max(0, (ymin / 1000) * img.height - padding);
         const width = Math.min(img.width - x, ((xmax - xmin) / 1000) * img.width + padding * 2);
         const height = Math.min(img.height - y, ((ymax - ymin) / 1000) * img.height + padding * 2);
-        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-          reject(new Error('No se pudo recortar vista isométrica: dimensiones fuera de rango.'));
-          return;
-        }
         canvas.width = width;
         canvas.height = height;
         ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
         resolve(canvas.toDataURL('image/jpeg', 0.9));
       };
-      img.onerror = () => reject(new Error('No se pudo cargar la imagen para recorte isométrico.'));
       img.src = base64;
     });
   };
 
   const extractInfo = async () => {
     if (!orderPdf && workshopPdfs.length === 0) return;
-    if (!geminiApiKey) {
-      setError('Falta la variable VITE_GEMINI_API_KEY. Defínela en tu archivo .env y reinicia el servidor de desarrollo.');
-      return;
-    }
     
     setIsExtracting(true);
     setError(null);
@@ -529,16 +241,16 @@ export default function App() {
     workshopPdfs.forEach((_, i) => { initialWorkshopStates[i] = 'loading'; });
     setWorkshopLoadingStates(initialWorkshopStates);
 
-    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     
     try {
-      // 1. Extract Orders (Flash) + strict validation
-      let ordersList: OrderExtraction[] = [];
+      // 1. Extract Orders (Flash)
+      let ordersList: any[] = [];
       if (orderPdf) {
         setExtractingStep('Leyendo tabla de pedidos...');
         try {
           const response = await ai.models.generateContent({
-            model: "gemini-flash-latest",
+            model: "gemini-flash-latest", 
             contents: [{
               role: 'user',
               parts: [
@@ -559,127 +271,119 @@ export default function App() {
                     fecha: { type: Type.STRING },
                     prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] }
                   },
-                  required: ["pieza", "cantidad", "orden", "fecha", "prioridad"]
+                  required: ["pieza, cantidad, orden, fecha, prioridad"]
                 }
               }
             }
           });
-          ordersList = parseOrdersResponse(parseJsonResponse(response.text));
+          ordersList = JSON.parse(response.text.trim());
           setOrderLoadingState('done');
-        } catch (orderError) {
+        } catch (e) {
           setOrderLoadingState('error');
-          throw orderError;
+          throw e;
         }
       }
 
-      // 2. Extract blueprints from every page/PDF with strict validation
+      // 2. Extract Blueprints from all pages/PDFs (Flash)
       setExtractingStep(`Analizando ${workshopPdfs.length} planos de taller...`);
-      const workshopFailures: string[] = [];
-      const groupedBlueprintEntries = await Promise.all(
-        workshopPdfs.map(async (pdf, idx): Promise<BlueprintSpecWithImage[]> => {
-          const entries: BlueprintSpecWithImage[] = [];
-          try {
-            const workshopImages = await convertPdfToImages(pdf);
-
-            for (let pageIndex = 0; pageIndex < workshopImages.length; pageIndex += 1) {
-              setExtractingStep(`Plano ${idx + 1}/${workshopPdfs.length} - página ${pageIndex + 1}/${workshopImages.length}`);
-              const normalized = await normalizeImage(workshopImages[pageIndex], true);
-
-              const response = await ai.models.generateContent({
-                model: "gemini-flash-latest",
-                contents: [{
-                  role: 'user',
-                  parts: [
-                    { text: `Analiza este plano de taller. Busca las vistas isométricas de las piezas.
-                    REGLA CRÍTICA: Debes identificar el "isometricBoundingBox" [ymin, xmin, ymax, xmax] (0-1000) que encierra la vista 3D/isométrica de la pieza.
-                    También indica especificaciones visuales detalladas y parámetros 3D completos (shape, dimensions [números], color [HEX], metalness, roughness).` },
-                    prepareImagePart(normalized)
-                  ]
-                }],
-                config: {
-                  responseMimeType: "application/json",
-                  responseSchema: {
-                    type: Type.ARRAY,
-                    items: {
+      const blueprintResults = await Promise.all(workshopPdfs.map(async (pdf, idx) => {
+        try {
+          const workshopImage = await convertPdfToImage(pdf);
+          const normalized = await normalizeImage(workshopImage, true);
+          
+          const response = await ai.models.generateContent({
+            model: "gemini-flash-latest",
+            contents: [{
+              role: 'user',
+              parts: [
+                { text: `Analiza este plano de taller. Busca las vistas isométricas de las piezas.
+                REGLA CRÍTICA: Debes identificar el "isometricBoundingBox" [ymin, xmin, ymax, xmax] (0-1000) que encierra la vista 3D/isométrica de la pieza.
+                También indica especificaciones visuales detalladas y parámetros 3D completos (shape, dimensions [números], color [HEX], metalness, roughness).` },
+                prepareImagePart(normalized)
+              ]
+            }],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    pieza_detectada: { type: Type.STRING },
+                    descripcionVisual: { type: Type.STRING },
+                    isometricBoundingBox: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                    model3D: {
                       type: Type.OBJECT,
                       properties: {
-                        pieza_detectada: { type: Type.STRING },
-                        descripcionVisual: { type: Type.STRING },
-                        isometricBoundingBox: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-                        model3D: {
-                          type: Type.OBJECT,
-                          properties: {
-                            shape: { type: Type.STRING, enum: ["box", "cylinder", "sphere", "torus"] },
-                            dimensions: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-                            color: { type: Type.STRING },
-                            metalness: { type: Type.NUMBER },
-                            roughness: { type: Type.NUMBER }
-                          },
-                          required: ["shape", "dimensions", "color", "metalness", "roughness"]
-                        }
+                        shape: { type: Type.STRING, enum: ["box", "cylinder", "sphere", "torus"] },
+                        dimensions: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                        color: { type: Type.STRING },
+                        metalness: { type: Type.NUMBER },
+                        roughness: { type: Type.NUMBER }
                       },
-                      required: ["pieza_detectada", "descripcionVisual", "isometricBoundingBox", "model3D"]
+                      required: ["shape", "dimensions", "color", "metalness", "roughness"]
                     }
-                  }
+                  },
+                  required: ["pieza_detectada", "descripcionVisual", "isometricBoundingBox", "model3D"]
                 }
-              });
-
-              const pageSpecs = parseBlueprintSpecsResponse(parseJsonResponse(response.text));
-              pageSpecs.forEach((spec) => entries.push({ spec, image: normalized }));
+              }
             }
-
-            setWorkshopLoadingStates((prev) => ({ ...prev, [idx]: entries.length > 0 ? 'done' : 'error' }));
-            return entries;
-          } catch (workshopError) {
-            setWorkshopLoadingStates((prev) => ({ ...prev, [idx]: 'error' }));
-            console.error(`Error procesando plano ${idx + 1}`, workshopError);
-            workshopFailures.push(`Plano ${idx + 1}: ${toUserFriendlyErrorMessage(workshopError)}`);
-            return [];
-          }
-        }),
-      );
-
-      const blueprintEntries = groupedBlueprintEntries.flat();
-
-      if (workshopPdfs.length > 0 && blueprintEntries.length === 0) {
-        const firstFailure = workshopFailures[0];
-        if (firstFailure) {
-          throw new Error(`No se pudieron extraer piezas válidas de los planos de taller. ${firstFailure}`);
+          });
+          
+          setWorkshopLoadingStates(prev => ({ ...prev, [idx]: 'done' }));
+          return { 
+            specs: JSON.parse(response.text.trim()), 
+            image: normalized 
+          };
+        } catch (e) {
+          setWorkshopLoadingStates(prev => ({ ...prev, [idx]: 'error' }));
+          throw e;
         }
-        throw new Error('No se pudieron extraer piezas válidas de los planos de taller.');
-      }
+      }));
 
-      // 3. Merge and populate results using scored matching
+      // 3. Merge and Populate Results
       setExtractingStep('Generando reporte final...');
       let finalResults: Order[] = [];
 
       if (ordersList.length > 0) {
-        finalResults = await Promise.all(ordersList.map(async (order) => {
-          const bestMatch = findBestBlueprintMatch(order.pieza, blueprintEntries);
-          const sourceImg = bestMatch?.entry.image ?? null;
+        finalResults = await Promise.all(ordersList.map(async (order: any) => {
+          let bestMatch: any = null;
+          let sourceImg: string | null = null;
 
-          const resultOrder: Order = {
-            ...order,
-            haSidoAuditada: Boolean(bestMatch),
-            descripcionVisual: bestMatch?.entry.spec.descripcionVisual ?? "Detalles técnicos no encontrados en planos.",
-            model3D: bestMatch?.entry.spec.model3D,
-            isometricBoundingBox: bestMatch?.entry.spec.isometricBoundingBox
-          };
-
-          if (resultOrder.isometricBoundingBox && sourceImg) {
-            try {
-              resultOrder.isometricView = await cropIsometricView(sourceImg, resultOrder.isometricBoundingBox);
-            } catch (cropError) {
-              console.error("Auto-crop error", cropError);
+          for (const res of blueprintResults) {
+            const match = res.specs.find((s: any) => 
+              s.pieza_detectada.toLowerCase().includes(order.pieza.toLowerCase()) ||
+              order.pieza.toLowerCase().includes(s.pieza_detectada.toLowerCase())
+            );
+            if (match) {
+              bestMatch = match;
+              sourceImg = res.image;
+              break; 
             }
           }
 
-          return resultOrder;
+          const resObj: Order = {
+            ...order,
+            haSidoAuditada: !!bestMatch,
+            descripcionVisual: bestMatch?.descripcionVisual || "Detalles técnicos no encontrados en planos.",
+            model3D: bestMatch?.model3D,
+            isometricBoundingBox: bestMatch?.isometricBoundingBox
+          };
+
+          if (resObj.isometricBoundingBox && sourceImg) {
+            try {
+              resObj.isometricView = await cropIsometricView(sourceImg, resObj.isometricBoundingBox);
+            } catch (e) {
+              console.error("Auto-crop error", e);
+            }
+          }
+          return resObj;
         }));
-      } else if (blueprintEntries.length > 0) {
-        finalResults = await Promise.all(
-          blueprintEntries.map(async ({ spec, image }) => {
-            const resultOrder: Order = {
+      } else if (blueprintResults.length > 0) {
+        // If no orders but we have blueprints, show all pieces detected in blueprints
+        for (const res of blueprintResults) {
+          const pageResults = await Promise.all(res.specs.map(async (spec: any) => {
+            const resObj: Order = {
               pieza: spec.pieza_detectada,
               cantidad: "N/A",
               orden: "N/A",
@@ -691,16 +395,17 @@ export default function App() {
               isometricBoundingBox: spec.isometricBoundingBox
             };
 
-            if (resultOrder.isometricBoundingBox) {
+            if (resObj.isometricBoundingBox && res.image) {
               try {
-                resultOrder.isometricView = await cropIsometricView(image, resultOrder.isometricBoundingBox);
-              } catch (cropError) {
-                console.error("Auto-crop error", cropError);
+                resObj.isometricView = await cropIsometricView(res.image, resObj.isometricBoundingBox);
+              } catch (e) {
+                console.error("Auto-crop error", e);
               }
             }
-            return resultOrder;
-          }),
-        );
+            return resObj;
+          }));
+          finalResults = [...finalResults, ...pageResults];
+        }
       }
 
       if (finalResults.length === 0) {
@@ -708,10 +413,10 @@ export default function App() {
       }
 
       setResults(finalResults);
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error("PDF Analysis Error Object:", err);
-      const errorMessage = toUserFriendlyErrorMessage(err);
-      setError(`Error analizando PDFs: ${errorMessage}. Verifique su conexión, formato de archivos y permisos de API.`);
+      const errorMessage = err?.message || JSON.stringify(err);
+      setError(`Error analizando PDFs: ${errorMessage}. Verifique su conexión y permisos de API.`);
     } finally {
       setIsExtracting(false);
     }
@@ -735,7 +440,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-bg font-sans text-ink border-12 border-ink flex flex-col">
+    <div className="min-h-screen bg-bg font-sans text-ink border-[12px] border-ink flex flex-col">
       {/* Header */}
       <header className="bg-bg border-b-2 border-ink px-10 py-10">
         <div className="flex flex-col md:flex-row items-end justify-between gap-6">
@@ -758,7 +463,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="grow grid grid-cols-1 xl:grid-cols-12">
+      <main className="flex-grow grid grid-cols-1 xl:grid-cols-12">
         {/* Input & Vision Section */}
         <section className="xl:col-span-5 bg-[#E8E8E8] border-r-2 border-ink p-10 flex flex-col gap-6">
           
@@ -770,7 +475,7 @@ export default function App() {
             </div>
             
             <div 
-              className={`grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all ${orderPdf ? 'bg-white' : 'bg-white/30 hover:bg-white/50 cursor-pointer'}`}
+              className={`flex-grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all ${orderPdf ? 'bg-white' : 'bg-white/30 hover:bg-white/50 cursor-pointer'}`}
               onClick={() => !orderPdf && orderFileInputRef.current?.click()}
             >
               <input 
@@ -824,7 +529,7 @@ export default function App() {
             </div>
             
             <div 
-              className={`grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all bg-white/30 hover:bg-white/50 cursor-pointer`}
+              className={`flex-grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all bg-white/30 hover:bg-white/50 cursor-pointer`}
               onClick={() => workshopFileInputRef.current?.click()}
             >
               <input 
@@ -849,11 +554,11 @@ export default function App() {
                   <div key={idx} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)]">
                     <div className="flex items-center gap-2 overflow-hidden">
                       {workshopLoadingStates[idx] === 'loading' ? (
-                        <Loader2 size={14} className="text-accent animate-spin shrink-0" />
+                        <Loader2 size={14} className="text-accent animate-spin flex-shrink-0" />
                       ) : workshopLoadingStates[idx] === 'done' ? (
-                        <CheckCircle2 size={14} className="text-green-500 shrink-0" />
+                        <CheckCircle2 size={14} className="text-green-500 flex-shrink-0" />
                       ) : (
-                        <FileText size={14} className="text-accent shrink-0" />
+                        <FileText size={14} className="text-accent flex-shrink-0" />
                       )}
                       <span className={`text-[9px] font-mono truncate ${workshopLoadingStates[idx] === 'loading' ? 'text-accent font-bold' : ''}`}>
                         Plan_{idx + 1}.pdf
@@ -925,7 +630,7 @@ export default function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="grow border-4 border-ink border-dashed flex flex-col items-center justify-center text-center p-12 bg-white/30"
+                className="flex-grow border-4 border-ink border-dashed flex flex-col items-center justify-center text-center p-12 bg-white/30"
               >
                 <div className="relative mb-6">
                   <Maximize2 className="text-ink/10 w-24 h-24" />
@@ -945,10 +650,10 @@ export default function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="grow border-4 border-ink bg-ink flex flex-col items-center justify-center text-center p-12"
+                className="flex-grow border-4 border-ink bg-ink flex flex-col items-center justify-center text-center p-12"
               >
                 <div className="relative mb-10">
-                  <div className="w-32 h-32 border-8 border-white/10 border-t-accent rounded-full animate-spin"></div>
+                  <div className="w-32 h-32 border-[8px] border-white/10 border-t-accent rounded-full animate-spin"></div>
                   <Database className="absolute inset-0 m-auto text-accent w-8 h-8 animate-pulse" />
                 </div>
                 <div className="space-y-4">
@@ -975,7 +680,7 @@ export default function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="grow border-4 border-accent bg-accent/5 p-12 flex flex-col items-center justify-center text-center"
+                className="flex-grow border-4 border-accent bg-accent/5 p-12 flex flex-col items-center justify-center text-center"
               >
                 <AlertCircle className="text-accent w-20 h-20 mb-6" />
                 <h3 className="text-ink font-black text-2xl uppercase italic mb-4">Error Crítico Visión AI</h3>
@@ -987,9 +692,9 @@ export default function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="grow flex flex-col"
+                className="flex-grow flex flex-col"
               >
-                <div className="grow overflow-auto border-4 border-ink bg-white shadow-[12px_12px_0px_rgba(0,0,0,0.1)]">
+                <div className="flex-grow overflow-auto border-4 border-ink bg-white shadow-[12px_12px_0px_rgba(0,0,0,0.1)]">
                   {/* Styled Header matching PDF */}
                   <div className="bg-[#0D2B4D] text-white p-6 border-b-4 border-ink flex items-center justify-between">
                     <div>
@@ -1016,7 +721,7 @@ export default function App() {
                         <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
                           {/* Pieza / Descripción + Isometric */}
                           <td className="px-5 py-4 border-r-2 border-gray-100 flex items-start gap-4">
-                            <div className="grow">
+                            <div className="flex-grow">
                               <div className="flex items-center gap-2 mb-1">
                                 <h4 className="font-black text-lg uppercase tracking-tight text-[#0D2B4D]">
                                   {order.pieza}
@@ -1056,7 +761,7 @@ export default function App() {
 
                             {/* Isometric Extract Card */}
                             {order.isometricView && (
-                              <div className="w-32 h-32 border-2 border-ink bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] shrink-0 relative overflow-hidden flex items-center justify-center p-1">
+                              <div className="w-32 h-32 border-2 border-ink bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] flex-shrink-0 relative overflow-hidden flex items-center justify-center p-1">
                                 <img 
                                   src={order.isometricView} 
                                   alt="Iso Extract" 

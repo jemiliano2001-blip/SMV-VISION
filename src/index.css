@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "Courier New", Courier, monospace;
+  
+  --color-bg: #F0F0F0;
+  --color-ink: #111111;
+  --color-accent: #FF4E00;
+  --color-border-dark: #333333;
+}

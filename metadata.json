@@ -1,0 +1,6 @@
+{
+  "name": "SMV Order Extractor",
+  "description": "Herramienta especializada para Servicios y Maquinados Vázquez (SMV) encargada de extraer datos estructurados de órdenes de producción de Suprajit.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // SMV-VISION audit trail. Inmutable una vez creado. PR#2a: requiere Auth.
+    match /analysisRuns/{runId} {
+      // Un usuario solo puede leer sus propias corridas.
+      allow read: if request.auth != null &&
+                     resource.data.userUid == request.auth.uid;
+
+      // Crear solo si esta autenticado, userUid coincide con su uid,
+      // createdAt es serverTimestamp y el set de campos es exactamente el
+      // esperado. Esto materializa la trazabilidad inquebrantable.
+      allow create: if request.auth != null &&
+                       request.resource.data.userUid is string &&
+                       request.resource.data.userUid == request.auth.uid &&
+                       request.resource.data.createdAt == request.time &&
+                       (request.resource.data.status == 'success' ||
+                        request.resource.data.status == 'error') &&
+                       request.resource.data.keys().hasOnly([
+                         'userUid','createdAt','status','promptVersions',
+                         'documentHashes','summary','metrics','errorMessage','clientInfo'
+                       ]);
+
+      // Audit trail inmutable: nadie puede modificar ni borrar.
+      allow update, delete: if false;
+    }
+
+    // Tool Crib v1: catálogo de partes. Lectura autenticada; escritura
+    // gestionada por administradores fuera de la app (bootstrap/Console).
+    match /toolcribParts/{partId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Tool Crib v1: revisiones de plano. Lectura autenticada. Alta/cambios
+    // se realizan por bootstrap o consola; la app v1 no crea revisiones.
+    match /toolcribDrawings/{drawingId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Tool Crib v1: log de impresiones. Cada impresión crea un registro
+    // inmutable con trazabilidad (quién, cuándo UTC, qué dibujo).
+    match /toolcribPrintLogs/{logId} {
+      // Solo el autor del log puede releerlo (p.ej. para historial propio).
+      allow read: if request.auth != null &&
+                     resource.data.printedByUid == request.auth.uid;
+
+      // Crear solo si autenticado, printedByUid coincide con el uid del
+      // request, printedAtUTC es serverTimestamp y el set de campos es
+      // exactamente el esperado. Previene suplantación e inyección.
+      allow create: if request.auth != null &&
+                       request.resource.data.printedByUid is string &&
+                       request.resource.data.printedByUid == request.auth.uid &&
+                       request.resource.data.printedAtUTC == request.time &&
+                       request.resource.data.drawingId is string &&
+                       request.resource.data.partId is string &&
+                       request.resource.data.copies is int &&
+                       request.resource.data.copies >= 1 &&
+                       request.resource.data.copies <= 50 &&
+                       request.resource.data.origin == 'toolcrib-v1-ui' &&
+                       (request.resource.data.orderRef == null ||
+                        request.resource.data.orderRef is string) &&
+                       request.resource.data.keys().hasOnly([
+                         'drawingId','partId','copies','orderRef','origin',
+                         'printedByUid','printedAtUTC'
+                       ]);
+
+      // Print logs inmutables para garantizar auditoría no repudiable.
+      allow update, delete: if false;
+    }
+
+    // Todo lo demas esta cerrado por defecto.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

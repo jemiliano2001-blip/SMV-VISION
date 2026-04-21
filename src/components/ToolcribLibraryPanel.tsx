@@ -137,6 +137,10 @@ export function ToolcribLibraryPanel({
         setErrorMessage(
           'Firebase no está configurado. Completa las variables VITE_FIREBASE_* en .env.local para activar la biblioteca Tool Crib.',
         );
+      } else if (result.reason === 'not-authenticated') {
+        setErrorMessage(
+          'La biblioteca Tool Crib requiere sesión activa. Inicia sesión para consultar planos y registrar auditoría.',
+        );
       } else {
         setErrorMessage(
           'No fue posible cargar la biblioteca. Verifica tu conexión y permisos.',

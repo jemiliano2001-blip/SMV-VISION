@@ -73,6 +73,11 @@ export async function listActiveToolcribParts(options?: {
   customer?: string;
   max?: number;
 }): Promise<ToolcribResult<ToolcribPart[]>> {
+  const uid = getCurrentUserUid();
+  if (!uid) {
+    return { ok: false, reason: 'not-authenticated' };
+  }
+
   const db = resolveFirestoreOrFail();
   if (!db) {
     return { ok: false, reason: 'not-configured' };
@@ -112,6 +117,10 @@ export async function getActiveDrawingForPart(
 ): Promise<ToolcribResult<ToolcribDrawing>> {
   if (typeof partId !== 'string' || partId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
+  }
+  const uid = getCurrentUserUid();
+  if (!uid) {
+    return { ok: false, reason: 'not-authenticated' };
   }
   const db = resolveFirestoreOrFail();
   if (!db) {
@@ -160,6 +169,10 @@ export async function listDrawingsForPart(
   if (typeof partId !== 'string' || partId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }
+  const uid = getCurrentUserUid();
+  if (!uid) {
+    return { ok: false, reason: 'not-authenticated' };
+  }
   const db = resolveFirestoreOrFail();
   if (!db) {
     return { ok: false, reason: 'not-configured' };
@@ -196,6 +209,10 @@ export async function getDrawingById(
 ): Promise<ToolcribResult<ToolcribDrawing>> {
   if (typeof drawingId !== 'string' || drawingId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
+  }
+  const uid = getCurrentUserUid();
+  if (!uid) {
+    return { ok: false, reason: 'not-authenticated' };
   }
   const db = resolveFirestoreOrFail();
   if (!db) {

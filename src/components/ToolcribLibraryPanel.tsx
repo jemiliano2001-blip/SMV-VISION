@@ -18,11 +18,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   AlertCircle,
-  CheckCircle2,
   FileText,
   FolderOpen,
   Loader2,
-  Plus,
   Printer,
   RefreshCcw,
   Search,
@@ -34,28 +32,7 @@ import {
 } from '../lib/firebase/toolcrib';
 import type { ToolcribActiveDrawingView } from '../types';
 
-export interface ToolcribAttachment {
-  drawingId: string;
-  partId: string;
-  partNumber: string;
-  revision: string;
-  sourcePath: string;
-  displayName: string;
-  dataUrl: string;
-}
-
-export interface ToolcribLibraryPanelProps {
-  /**
-   * Callback usado para adjuntar un PDF resuelto (dataURL) al flujo de
-   * análisis existente. El panel garantiza que el dataURL ya esté listo.
-   */
-  onAttachDrawing?: (attachment: ToolcribAttachment) => void;
-  /**
-   * IDs de dibujos ya adjuntados al flujo de análisis, para evitar dobles
-   * inserciones y reflejar el estado en la UI.
-   */
-  attachedDrawingIds?: ReadonlySet<string>;
-}
+export interface ToolcribLibraryPanelProps {}
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -116,10 +93,7 @@ function buildDisplayName(view: ToolcribActiveDrawingView): string {
   return `${base} (Rev ${revision}).pdf`;
 }
 
-export function ToolcribLibraryPanel({
-  onAttachDrawing,
-  attachedDrawingIds,
-}: ToolcribLibraryPanelProps): ReactElement {
+export function ToolcribLibraryPanel(_props: ToolcribLibraryPanelProps): ReactElement {
   const [status, setStatus] = useState<LoadStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [views, setViews] = useState<ToolcribActiveDrawingView[]>([]);
@@ -214,58 +188,6 @@ export function ToolcribLibraryPanel({
     [],
   );
 
-  const handleAttach = useCallback(
-    async (view: ToolcribActiveDrawingView) => {
-      if (!onAttachDrawing) {
-        return;
-      }
-      if (!view.pdfUrl) {
-        setRowState((prev) => ({
-          ...prev,
-          [view.drawingId]: {
-            status: 'error',
-            message:
-              'Este plano no tiene URL HTTP accesible. Súbelo manualmente o configura pdfUrl.',
-          },
-        }));
-        return;
-      }
-
-      setRowState((prev) => ({
-        ...prev,
-        [view.drawingId]: { status: 'attaching' },
-      }));
-
-      try {
-        const dataUrl = await fetchPdfAsDataUrl(view.pdfUrl);
-        onAttachDrawing({
-          drawingId: view.drawingId,
-          partId: view.partId,
-          partNumber: view.partNumber,
-          revision: view.revision,
-          sourcePath: view.sourcePath,
-          displayName: buildDisplayName(view),
-          dataUrl,
-        });
-        setRowState((prev) => ({
-          ...prev,
-          [view.drawingId]: { status: 'idle' },
-        }));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Error desconocido';
-        console.warn('[smv-vision][toolcrib] handleAttach falló', error);
-        setRowState((prev) => ({
-          ...prev,
-          [view.drawingId]: {
-            status: 'error',
-            message: `No fue posible descargar el PDF (${message}).`,
-          },
-        }));
-      }
-    },
-    [onAttachDrawing],
-  );
-
   const totalCount = views.length;
   const visibleCount = filteredViews.length;
   const isEmpty = status === 'ready' && totalCount === 0;
@@ -352,7 +274,6 @@ export function ToolcribLibraryPanel({
               <div className="max-h-64 overflow-y-auto pr-1 space-y-2">
                 {filteredViews.map((view) => {
                   const rowActionState = rowState[view.drawingId] ?? { status: 'idle' };
-                  const isAttached = attachedDrawingIds?.has(view.drawingId) === true;
                   return (
                     <div
                       key={view.drawingId}
@@ -398,37 +319,6 @@ export function ToolcribLibraryPanel({
                           )}
                         </button>
 
-                        {onAttachDrawing && (
-                          <button
-                            type="button"
-                            onClick={() => void handleAttach(view)}
-                            disabled={
-                              rowActionState.status === 'attaching' || isAttached || !view.pdfUrl
-                            }
-                            className="border border-ink bg-accent text-bg px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink disabled:opacity-40 transition-colors flex items-center gap-1"
-                            title={
-                              !view.pdfUrl
-                                ? 'Falta pdfUrl accesible'
-                                : isAttached
-                                  ? 'Ya adjunto al análisis'
-                                  : 'Adjuntar al análisis'
-                            }
-                          >
-                            {isAttached ? (
-                              <>
-                                <CheckCircle2 size={10} /> Adjunto
-                              </>
-                            ) : rowActionState.status === 'attaching' ? (
-                              <>
-                                <Loader2 size={10} className="animate-spin" /> Adjuntando
-                              </>
-                            ) : (
-                              <>
-                                <Plus size={10} /> Análisis
-                              </>
-                            )}
-                          </button>
-                        )}
                       </div>
 
                       {rowActionState.status === 'error' && rowActionState.message && (

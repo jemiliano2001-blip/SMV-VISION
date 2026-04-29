@@ -8,19 +8,14 @@ import { GoogleGenAI, Type } from "@google/genai";
 import jsPDF from 'jspdf';
 import autoTable, { CellHookData, RowInput } from 'jspdf-autotable';
 import { motion, AnimatePresence } from "motion/react";
-import { 
-  Database, 
-  FileText, 
-  Loader2, 
-  CheckCircle2, 
+import {
+  Database,
+  FileText,
+  Loader2,
+  CheckCircle2,
   AlertCircle,
-  Calendar,
   X,
   Maximize2,
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  FolderOpen
 } from 'lucide-react';
 import {
   AnalysisMetrics,
@@ -32,11 +27,12 @@ import {
   WorkshopPdfUpload,
   ToolcribActiveDrawingView,
 } from './types';
+import { signInAnonymouslyIfNeeded } from './lib/firebase/auth';
 import { createDocumentHash, readCachedValue, writeCachedValue } from './lib/documentAnalysis/cache';
 import { runWithConcurrencyLimit } from './lib/documentAnalysis/concurrency';
 import { rasterizeAndNormalizePdf } from './lib/documentAnalysis/pdfWorkerClient';
 import { recordAnalysisRunFireAndForget } from './lib/firebase/analysisRuns';
-import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/ToolcribLibraryPanel';
+import { ToolcribLibraryPanel } from './components/ToolcribLibraryPanel';
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
 
 const ORDER_PROMPT_VERSION = 'orders-v4-precise';
@@ -80,9 +76,6 @@ function extractLibrarySignals(view: ToolcribActiveDrawingView): PieceMatchSigna
   return { identifiers: [...identifiers], descriptors: [...descriptors] };
 }
 
-const SUGGESTED_BLUEPRINTS_FOLDER = '\\\\smvmatamoros.ddns.net\\PRIVADO\\CLIENTES\\CLIENTES\\SUPRAJIT\\TOOL CRIB';
-const SUGGESTED_ORDER_REPORT_NAME = 'Suprajit reporte de tool crib - Google Sheets.pdf';
-const SUGGESTED_ORDER_REPORT_HINT = `Descargas \\ ${SUGGESTED_ORDER_REPORT_NAME}`;
 
 interface MetricsComparison {
   baseline: AnalysisMetrics;
@@ -111,33 +104,6 @@ interface BlueprintSpecMatch {
   score: number;
 }
 
-interface FilePickerWindow extends Window {
-  showDirectoryPicker?: () => Promise<DirectoryHandleLike>;
-}
-
-interface FileHandleLike {
-  kind: 'file';
-  name: string;
-  getFile: () => Promise<File>;
-}
-
-interface DirectoryHandleLike {
-  kind: 'directory';
-  name: string;
-  entries: () => AsyncIterableIterator<[string, DirectoryEntryLike]>;
-}
-
-type DirectoryEntryLike = FileHandleLike | DirectoryHandleLike;
-
-interface PickedWorkshopFile {
-  file: File;
-  relativePath: string;
-}
-
-interface DirectoryScanResult {
-  totalFiles: number;
-  pdfFiles: PickedWorkshopFile[];
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -160,12 +126,6 @@ function isOrderSummaryRow(pieceLabel: string): boolean {
   );
 }
 
-function validateOrderPdfName(fileName: string): string | null {
-  if (fileName.trim() === SUGGESTED_ORDER_REPORT_NAME) {
-    return null;
-  }
-  return `El archivo "${fileName}" no coincide con el nombre esperado del reporte de órdenes. Debe llamarse exactamente "${SUGGESTED_ORDER_REPORT_NAME}".`;
-}
 
 function parseOrdersResponse(text: string): ExtractedOrder[] {
   const parsed = JSON.parse(text) as unknown;
@@ -258,73 +218,6 @@ function calculateMetricsComparison(latest: AnalysisMetrics): MetricsComparison 
   };
 }
 
-function isPdfFile(file: File): boolean {
-  const mimeType = file.type.toLowerCase();
-  if (mimeType === 'application/pdf') {
-    return true;
-  }
-  return file.name.toLowerCase().endsWith('.pdf');
-}
-
-function getRelativePath(file: File): string {
-  if (file.webkitRelativePath.length > 0) {
-    return file.webkitRelativePath;
-  }
-  return file.name;
-}
-
-function buildWorkshopPdfUpload(file: File, dataUrl: string, relativePathOverride?: string): WorkshopPdfUpload {
-  return {
-    id: `${file.name}-${file.lastModified}-${file.size}-${crypto.randomUUID()}`,
-    name: file.name,
-    relativePath: relativePathOverride ?? getRelativePath(file),
-    dataUrl,
-  };
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error(`No fue posible leer ${file.name}.`));
-    };
-    reader.onerror = () => reject(new Error(`No fue posible leer ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function collectPdfFilesFromDirectory(
-  directoryHandle: DirectoryHandleLike,
-  currentPath: string,
-  result: DirectoryScanResult,
-): Promise<void> {
-  for await (const [entryName, entryHandle] of directoryHandle.entries()) {
-    const entryPath = `${currentPath}/${entryName}`;
-    if (entryHandle.kind === 'directory') {
-      await collectPdfFilesFromDirectory(entryHandle, entryPath, result);
-      continue;
-    }
-
-    const file = await entryHandle.getFile();
-    result.totalFiles += 1;
-    if (!isPdfFile(file)) {
-      continue;
-    }
-
-    result.pdfFiles.push({
-      file,
-      relativePath: entryPath,
-    });
-  }
-}
-
-function isDirectoryPickerAbort(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError';
-}
 
 function normalizePieceLabel(value: string): string {
   return value
@@ -612,7 +505,6 @@ function selectBestBlueprintMatch(orderPiece: string, candidate: BlueprintSource
 export default function App() {
   const [orderPdf, setOrderPdf] = useState<string | null>(null);
   const [orderPdfName, setOrderPdfName] = useState<string | null>(null);
-  const [orderPdfWarning, setOrderPdfWarning] = useState<string | null>(null);
   const [workshopPdfs, setWorkshopPdfs] = useState<WorkshopPdfUpload[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractingStep, setExtractingStep] = useState<string>('');
@@ -623,16 +515,8 @@ export default function App() {
   const [copying, setCopying] = useState(false);
   const [metricsComparison, setMetricsComparison] = useState<MetricsComparison | null>(null);
   const [analysisSummary, setAnalysisSummary] = useState<AnalysisRunSummary | null>(null);
-  const [isWorkshopDragActive, setIsWorkshopDragActive] = useState(false);
-  const [isSuggestedPathsOpen, setIsSuggestedPathsOpen] = useState(true);
-  const [copiedPathKey, setCopiedPathKey] = useState<string | null>(null);
-  // Mapa pdfId -> drawingId para dibujos adjuntados desde la biblioteca Tool Crib.
-  // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
-  const [toolcribPdfToDrawing, setToolcribPdfToDrawing] = useState<Record<string, string>>({});
-  
+
   const orderFileInputRef = useRef<HTMLInputElement>(null);
-  const workshopFileInputRef = useRef<HTMLInputElement>(null);
-  const workshopFolderInputRef = useRef<HTMLInputElement>(null);
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
   const workshopStatePatchTimerRef = useRef<number | null>(null);
 
@@ -661,190 +545,39 @@ export default function App() {
     workshopStatePatchTimerRef.current = window.setTimeout(flushWorkshopStatePatches, 100);
   }, [flushWorkshopStatePatches]);
 
-  useEffect(() => {
-    const folderInput = workshopFolderInputRef.current;
-    if (!folderInput) {
-      return;
-    }
-    folderInput.setAttribute('webkitdirectory', '');
-    folderInput.setAttribute('directory', '');
-  }, []);
+  useEffect(() => { void signInAnonymouslyIfNeeded(); }, []);
 
-  const ingestFiles = useCallback(async (files: FileList | File[], type: 'order' | 'workshop') => {
+  const ingestFiles = useCallback(async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
-    if (fileArray.length === 0) {
-      return;
-    }
-
-    const validFiles = fileArray.filter(isPdfFile);
-    const invalidCount = fileArray.length - validFiles.length;
-
-    if (invalidCount > 0) {
-      setError(`Se ignoraron ${invalidCount} archivo(s) porque no son PDF válidos.`);
-    }
-
-    if (validFiles.length === 0) {
-      return;
-    }
-
-    const payloads = await Promise.all(validFiles.map(async (file) => {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') {
-            resolve(reader.result);
-            return;
-          }
-          reject(new Error(`No fue posible leer ${file.name}.`));
-        };
-        reader.onerror = () => reject(new Error(`No fue posible leer ${file.name}.`));
-        reader.readAsDataURL(file);
-      });
-
-      if (type === 'order') {
-        return { dataUrl, fileName: file.name };
-      }
-      return buildWorkshopPdfUpload(file, dataUrl);
-    }));
-
-    if (type === 'order') {
-      const firstOrderPayload = payloads[0];
-      if (firstOrderPayload && typeof firstOrderPayload === 'object' && 'fileName' in firstOrderPayload) {
-        setOrderPdf(firstOrderPayload.dataUrl);
-        setOrderPdfName(firstOrderPayload.fileName);
-        setOrderPdfWarning(validateOrderPdfName(firstOrderPayload.fileName));
-      }
-      return;
-    }
-
-    const uploads = payloads.filter((payload): payload is WorkshopPdfUpload => {
-      return !!payload && typeof payload === 'object' && 'relativePath' in payload;
+    if (fileArray.length === 0) return;
+    const first = fileArray[0];
+    if (!first) return;
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') { resolve(reader.result); return; }
+        reject(new Error(`No fue posible leer ${first.name}.`));
+      };
+      reader.onerror = () => reject(new Error(`No fue posible leer ${first.name}.`));
+      reader.readAsDataURL(first);
     });
-    setWorkshopPdfs((prev) => [...prev, ...uploads]);
+    setOrderPdf(dataUrl);
+    setOrderPdfName(first.name);
   }, []);
 
   const handleInputUpload = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>, type: 'order' | 'workshop') => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
-      if (files) {
-        await ingestFiles(files, type);
-      }
+      if (files) await ingestFiles(files);
       e.target.value = '';
     },
     [ingestFiles],
   );
 
-  const handleWorkshopFolderUpload = useCallback(async () => {
-    const fallbackToFolderInput = () => {
-      workshopFolderInputRef.current?.click();
-    };
-
-    const pickerWindow = window as FilePickerWindow;
-    if (!pickerWindow.showDirectoryPicker) {
-      fallbackToFolderInput();
-      return;
-    }
-
-    try {
-      const directoryHandle = await pickerWindow.showDirectoryPicker();
-      const scanResult: DirectoryScanResult = {
-        totalFiles: 0,
-        pdfFiles: [],
-      };
-
-      await collectPdfFilesFromDirectory(directoryHandle, directoryHandle.name, scanResult);
-
-      if (scanResult.totalFiles === 0) {
-        setError('La carpeta seleccionada está vacía.');
-        return;
-      }
-
-      if (scanResult.pdfFiles.length === 0) {
-        setError('La carpeta no contiene PDFs válidos para análisis.');
-        return;
-      }
-
-      const uploads = await Promise.all(
-        scanResult.pdfFiles.map(async ({ file, relativePath }) => {
-          const dataUrl = await readFileAsDataUrl(file);
-          return buildWorkshopPdfUpload(file, dataUrl, relativePath);
-        }),
-      );
-
-      setWorkshopPdfs((prev) => [...prev, ...uploads]);
-      setError(null);
-    } catch (error: unknown) {
-      if (isDirectoryPickerAbort(error)) {
-        return;
-      }
-      fallbackToFolderInput();
-    }
-  }, []);
-
-  const handleWorkshopDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsWorkshopDragActive(false);
-    await ingestFiles(e.dataTransfer.files, 'workshop');
-  }, [ingestFiles]);
-
-  const removeFile = (type: 'order' | 'workshop', fileId?: string) => {
-    if (type === 'order') {
-      setOrderPdf(null);
-      setOrderPdfName(null);
-      setOrderPdfWarning(null);
-    } else {
-      setWorkshopPdfs((prev) => prev.filter((pdf) => pdf.id !== fileId));
-      if (fileId) {
-        setWorkshopLoadingStates((prev) => {
-          const next = { ...prev };
-          delete next[fileId];
-          return next;
-        });
-        setToolcribPdfToDrawing((prev) => {
-          if (!(fileId in prev)) {
-            return prev;
-          }
-          const next = { ...prev };
-          delete next[fileId];
-          return next;
-        });
-      }
-    }
+  const removeFile = () => {
+    setOrderPdf(null);
+    setOrderPdfName(null);
   };
-
-  const attachedToolcribDrawingIds = useMemo(
-    () => new Set(Object.values(toolcribPdfToDrawing)),
-    [toolcribPdfToDrawing],
-  );
-
-  const handleAttachToolcribDrawing = useCallback((attachment: ToolcribAttachment) => {
-    // Regla de preservación: si el mismo drawingId ya fue adjuntado, no
-    // añadimos un duplicado al estado de análisis.
-    setToolcribPdfToDrawing((prev) => {
-      const alreadyAttached = Object.values(prev).includes(attachment.drawingId);
-      if (alreadyAttached) {
-        return prev;
-      }
-
-      const pdfId = `toolcrib-${attachment.drawingId}-${crypto.randomUUID()}`;
-      const relativePath = attachment.sourcePath.length > 0
-        ? attachment.sourcePath
-        : attachment.displayName;
-
-      setWorkshopPdfs((prevPdfs) => [
-        ...prevPdfs,
-        {
-          id: pdfId,
-          name: attachment.displayName,
-          relativePath,
-          dataUrl: attachment.dataUrl,
-        },
-      ]);
-
-      return { ...prev, [pdfId]: attachment.drawingId };
-    });
-    setError(null);
-  }, []);
 
   const preparePdfPart = (dataUrl: string) => {
     const base64Data = dataUrl.split(';base64,')[1];
@@ -1006,7 +739,7 @@ Reglas de extracción:
       const libResult = await listActiveDrawingViews({ customer: 'SUPRAJIT' });
       if (libResult.ok) {
         const library = libResult.value;
-        const autoAttachedIds = new Set(Object.values(toolcribPdfToDrawing));
+        const autoAttachedIds = new Set<string>();
         
         for (const order of ordersList) {
           // Si ya tenemos un plano cargado manualmente que machea bien, saltamos
@@ -1043,10 +776,7 @@ Reglas de extracción:
                 
                 currentWorkshopPdfs.push(newUpload);
                 autoAttachedIds.add(bestView.drawingId);
-                
-                // Actualizar estado de UI para que el usuario vea qué se añadió
                 setWorkshopPdfs(prev => [...prev, newUpload]);
-                setToolcribPdfToDrawing(prev => ({ ...prev, [pdfId]: bestView!.drawingId }));
               } catch (fetchErr) {
                 console.warn(`Falló auto-attach de ${bestView.partNumber}`, fetchErr);
               }
@@ -1348,29 +1078,6 @@ Reglas de extracción:
     setTimeout(() => setCopying(false), 2000);
   };
 
-  const copySuggestedPath = useCallback(async (key: string, value: string) => {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-      } else {
-        const textarea = document.createElement('textarea');
-        textarea.value = value;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-      setCopiedPathKey(key);
-      window.setTimeout(() => {
-        setCopiedPathKey((current) => (current === key ? null : current));
-      }, 1800);
-    } catch (copyError) {
-      console.error('No fue posible copiar la ruta sugerida', copyError);
-    }
-  }, []);
-
   const downloadJson = () => {
     if (!results) return;
     const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
@@ -1517,86 +1224,8 @@ Reglas de extracción:
         {/* Input & Vision Section */}
         <section className="xl:col-span-5 bg-[#E8E8E8] border-r-2 border-ink p-10 flex flex-col gap-6">
 
-          {/* Rutas recomendadas Suprajit */}
-          <div className="border-2 border-ink bg-white shadow-[3px_3px_0px_rgba(0,0,0,1)]">
-            <button
-              type="button"
-              onClick={() => setIsSuggestedPathsOpen((prev) => !prev)}
-              className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors"
-              aria-expanded={isSuggestedPathsOpen}
-            >
-              <span className="flex items-center gap-2">
-                <FolderOpen size={14} />
-                Rutas recomendadas (Suprajit)
-              </span>
-              {isSuggestedPathsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-            {isSuggestedPathsOpen && (
-              <div className="border-t border-ink p-3 space-y-3">
-                <div className="space-y-1">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-ink/80">
-                    Carpeta de planos (tool crib)
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-[10px] font-mono bg-[#F4F4F4] border border-ink/30 px-2 py-1 truncate" title={SUGGESTED_BLUEPRINTS_FOLDER}>
-                      {SUGGESTED_BLUEPRINTS_FOLDER}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => void copySuggestedPath('blueprints', SUGGESTED_BLUEPRINTS_FOLDER)}
-                      className="shrink-0 border border-ink bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors flex items-center gap-1"
-                      aria-label="Copiar ruta de carpeta de planos"
-                    >
-                      {copiedPathKey === 'blueprints' ? (
-                        <>
-                          <CheckCircle2 size={11} /> Copiado
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={11} /> Copiar
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-ink/80">
-                    Reporte de órdenes (PDF)
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-[10px] font-mono bg-[#F4F4F4] border border-ink/30 px-2 py-1 truncate" title={SUGGESTED_ORDER_REPORT_HINT}>
-                      {SUGGESTED_ORDER_REPORT_NAME}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => void copySuggestedPath('order-report', SUGGESTED_ORDER_REPORT_NAME)}
-                      className="shrink-0 border border-ink bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors flex items-center gap-1"
-                      aria-label="Copiar nombre del reporte de órdenes"
-                    >
-                      {copiedPathKey === 'order-report' ? (
-                        <>
-                          <CheckCircle2 size={11} /> Copiado
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={11} /> Copiar
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-                <p className="text-[9px] font-mono text-ink/60 leading-snug">
-                  Nota: el navegador no permite abrir rutas de red automáticamente. Pega la ruta en el explorador de Windows para navegar rápido, y luego arrastra los archivos a los bloques de abajo.
-                </p>
-              </div>
-            )}
-          </div>
-
           {/* Tool Crib Library (Firestore) */}
-          <ToolcribLibraryPanel
-            onAttachDrawing={handleAttachToolcribDrawing}
-            attachedDrawingIds={attachedToolcribDrawingIds}
-          />
+          <ToolcribLibraryPanel />
 
           {/* Order Visual Input */}
           <div className="flex flex-col gap-4 flex-1">
@@ -1613,8 +1242,8 @@ Reglas de extracción:
                 type="file" 
                 ref={orderFileInputRef} 
                 className="hidden" 
-                accept="application/pdf" 
-                onChange={(e) => void handleInputUpload(e, 'order')} 
+                accept="application/pdf"
+                onChange={(e) => void handleInputUpload(e)}
               />
               
               {!orderPdf ? (
@@ -1649,17 +1278,8 @@ Reglas de extracción:
                       {orderPdfName}
                     </p>
                   )}
-                  {orderPdfWarning && (
-                    <div
-                      className="mt-2 flex items-start gap-1.5 border border-accent bg-accent/10 px-2 py-1.5 text-[9px] font-mono text-accent leading-snug max-w-full"
-                      role="alert"
-                    >
-                      <AlertCircle size={12} className="shrink-0 mt-0.5" />
-                      <span className="text-left">{orderPdfWarning}</span>
-                    </div>
-                  )}
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); removeFile('order'); }}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeFile(); }}
                     className="absolute top-0 right-0 p-1 bg-accent text-bg hover:bg-ink transition-colors"
                   >
                     <X size={16} />
@@ -1669,103 +1289,6 @@ Reglas de extracción:
             </div>
           </div>
 
-          {/* Workshop Sheet Visual Input */}
-          <div className="flex flex-col gap-4 flex-1">
-            <div className="flex items-center gap-2 text-[12px] font-extrabold uppercase tracking-wider">
-              <div className="w-2.5 h-2.5 bg-accent"></div>
-              2. Hoja de Taller (Planos PDF)
-            </div>
-            
-            <div 
-              className={`grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all cursor-pointer ${
-                isWorkshopDragActive ? 'bg-accent/20' : 'bg-white/30 hover:bg-white/50'
-              }`}
-              onClick={() => workshopFileInputRef.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsWorkshopDragActive(true);
-              }}
-              onDragLeave={() => setIsWorkshopDragActive(false)}
-              onDrop={(e) => void handleWorkshopDrop(e)}
-            >
-              <input 
-                type="file" 
-                ref={workshopFileInputRef} 
-                className="hidden" 
-                accept="application/pdf" 
-                multiple
-                onChange={(e) => void handleInputUpload(e, 'workshop')} 
-              />
-              <input
-                type="file"
-                ref={workshopFolderInputRef}
-                className="hidden"
-                multiple
-                accept="application/pdf"
-                onChange={(e) => void handleInputUpload(e, 'workshop')}
-              />
-              
-              <div className="text-center space-y-2">
-                <FileText className="mx-auto w-10 h-10 text-ink/30" />
-                <p className="font-black uppercase text-xs tracking-tighter">Subir carpeta o planos PDF</p>
-                <p className="text-[10px] text-gray-400 font-mono">Click, arrastra carpeta o arrastra múltiples PDFs</p>
-              </div>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  type="button"
-                  className="border border-ink bg-white px-3 py-1 text-[10px] font-black uppercase tracking-wider hover:bg-accent hover:text-bg transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleWorkshopFolderUpload();
-                  }}
-                >
-                  Subir carpeta
-                </button>
-                <button
-                  type="button"
-                  className="border border-ink bg-white px-3 py-1 text-[10px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    workshopFileInputRef.current?.click();
-                  }}
-                >
-                  Subir archivos
-                </button>
-              </div>
-            </div>
-
-            {workshopPdfs.length > 0 && (
-              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-2">
-                {workshopPdfs.map((pdf) => (
-                  <div key={pdf.id} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)]">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      {workshopLoadingStates[pdf.id] === 'loading' ? (
-                        <Loader2 size={14} className="text-accent animate-spin shrink-0" />
-                      ) : workshopLoadingStates[pdf.id] === 'done' ? (
-                        <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-                      ) : workshopLoadingStates[pdf.id] === 'error' ? (
-                        <AlertCircle size={14} className="text-accent shrink-0" />
-                      ) : (
-                        <FileText size={14} className="text-accent shrink-0" />
-                      )}
-                      <span className={`text-[9px] font-mono truncate ${workshopLoadingStates[pdf.id] === 'loading' ? 'text-accent font-bold' : ''}`}>
-                        {pdf.relativePath}
-                      </span>
-                    </div>
-                    {workshopLoadingStates[pdf.id] !== 'loading' && (
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
-                        className="text-accent hover:text-ink transition-colors"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          
           <div className="mt-auto">
             <button
               onClick={extractInfo}

@@ -20,6 +20,7 @@ import {
   getRedirectResult,
   onAuthStateChanged,
   setPersistence,
+  signInAnonymously,
   signInWithRedirect,
   signInWithPopup,
   signInWithEmailAndPassword,
@@ -231,6 +232,18 @@ export async function signInWithGoogle(): Promise<SignInResult> {
     const message = error instanceof Error ? error.message : 'Error desconocido';
     console.error('[smv-vision][auth] signInWithPopup falló', { code, message, error });
     return { ok: false, reason: 'error', message: code ? `${code}: ${message}` : message };
+  }
+}
+
+export async function signInAnonymouslyIfNeeded(): Promise<void> {
+  const auth = resolveAuth();
+  if (!auth || auth.currentUser) {
+    return;
+  }
+  try {
+    await signInAnonymously(auth);
+  } catch (e) {
+    console.warn('[smv-vision][auth] signInAnonymously failed', e);
   }
 }
 

@@ -1206,11 +1206,11 @@ Reglas de extracción:
         // largest valid bounding box within the matched file (most prominent view).
         let bestFaceSpec: BlueprintSpec | null = bestSpecMatch?.spec ?? null;
         if (!bestFaceSpec && bestFileMatch) {
+          const area = (b: number[]) => (b[2] - b[0]) * (b[3] - b[1]);
           bestFaceSpec = bestFileMatch.specs
             .filter((s) => isValidBoundingBox(s.isometricBoundingBox))
             .reduce<BlueprintSpec | null>((best, s) => {
               if (!best) return s;
-              const area = (b: [number, number, number, number]) => (b[2] - b[0]) * (b[3] - b[1]);
               return area(s.isometricBoundingBox) > area(best.isometricBoundingBox) ? s : best;
             }, null);
         }

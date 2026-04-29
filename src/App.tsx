@@ -574,12 +574,6 @@ function calculatePieceMatchScore(orderPiece: string, blueprintPiece: string): n
   return scorePieceMatch(orderSignals, blueprintSignals);
 }
 
-function selectBestBlueprintSpec(orderPiece: string, specs: BlueprintSpec[]): BlueprintSpec | null {
-  return selectBestBlueprintMatch(orderPiece, {
-    fileLabel: '',
-    specs,
-  }).spec;
-}
 
 function selectBestBlueprintMatch(orderPiece: string, candidate: BlueprintSourceCandidate): BlueprintSpecMatch {
   const normalizedOrder = normalizePieceLabel(orderPiece);
@@ -1183,49 +1177,66 @@ Reglas de extracción:
       const matchedBlueprintFileIds = new Set<string>();
 
       finalResults = await Promise.all(ordersList.map(async (order) => {
-        let bestMatch: BlueprintSpec | null = null;
-        let bestScore = 0;
-        let sourceImg: string | null = null;
-        let sourceFileId: string | null = null;
-        let sourceFileLabel: string | null = null;
+        // Best specific spec match (piece-level). Tracked independently so a high-scoring
+        // file-name-only match never overwrites a real spec found in a lower-scoring file.
+        let bestSpecMatch: { spec: BlueprintSpec; img: string; score: number } | null = null;
+        // Best file-level match (highest file-name score, regardless of spec presence).
+        let bestFileMatch: { specs: BlueprintSpec[]; img: string; fileId: string; fileLabel: string; score: number } | null = null;
 
         for (const res of blueprintResults) {
           const match = selectBestBlueprintMatch(order.pieza, {
             fileLabel: res.fileLabel,
             specs: res.specs,
           });
-          if (match.score >= MIN_BLUEPRINT_MATCH_SCORE && match.score > bestScore) {
-            bestMatch = match.spec;
-            bestScore = match.score;
-            sourceImg = res.image;
-            sourceFileId = res.fileId;
-            sourceFileLabel = res.fileLabel;
+          if (match.score < MIN_BLUEPRINT_MATCH_SCORE) continue;
+
+          if (!bestFileMatch || match.score > bestFileMatch.score) {
+            bestFileMatch = { specs: res.specs, img: res.image, fileId: res.fileId, fileLabel: res.fileLabel, score: match.score };
+          }
+          if (match.spec !== null && (!bestSpecMatch || match.score > bestSpecMatch.score)) {
+            bestSpecMatch = { spec: match.spec, img: res.image, score: match.score };
           }
         }
 
-        if (sourceFileId) {
-          matchedBlueprintFileIds.add(sourceFileId);
+        if (bestFileMatch?.fileId) {
+          matchedBlueprintFileIds.add(bestFileMatch.fileId);
         }
+
+        // "Mejor cara": prefer the matched spec's view; when absent, pick the
+        // largest valid bounding box within the matched file (most prominent view).
+        let bestFaceSpec: BlueprintSpec | null = bestSpecMatch?.spec ?? null;
+        if (!bestFaceSpec && bestFileMatch) {
+          bestFaceSpec = bestFileMatch.specs
+            .filter((s) => isValidBoundingBox(s.isometricBoundingBox))
+            .reduce<BlueprintSpec | null>((best, s) => {
+              if (!best) return s;
+              const area = (b: [number, number, number, number]) => (b[2] - b[0]) * (b[3] - b[1]);
+              return area(s.isometricBoundingBox) > area(best.isometricBoundingBox) ? s : best;
+            }, null);
+        }
+
+        // Image to crop: use the file the spec actually came from so coordinates match.
+        const faceImg = bestSpecMatch?.img ?? bestFileMatch?.img ?? null;
 
         const resObj: Order = {
           ...order,
-          haSidoAuditada: !!bestMatch || !!sourceFileLabel,
+          haSidoAuditada: !!bestFaceSpec || !!bestFileMatch,
           descripcionVisual:
-            bestMatch?.descripcionVisual
-            || (sourceFileLabel
+            bestFaceSpec?.descripcionVisual
+            ?? (bestFileMatch
               ? "Vista general del plano (sin vista principal detectada)."
               : "Detalles técnicos no encontrados en planos."),
-          isometricBoundingBox: bestMatch?.isometricBoundingBox,
-          sourcePdfName: sourceFileLabel ?? undefined,
-          sourcePdfPath: sourceFileLabel ?? undefined,
+          isometricBoundingBox: bestFaceSpec?.isometricBoundingBox,
+          sourcePdfName: bestFileMatch?.fileLabel ?? undefined,
+          sourcePdfPath: bestFileMatch?.fileLabel ?? undefined,
         };
 
-        if (sourceImg) {
+        if (faceImg) {
           try {
             const cropBox = isValidBoundingBox(resObj.isometricBoundingBox)
               ? resObj.isometricBoundingBox
               : FALLBACK_CENTER_BOX;
-            resObj.isometricView = await cropIsometricView(sourceImg, cropBox);
+            resObj.isometricView = await cropIsometricView(faceImg, cropBox);
           } catch (e) {
             console.error("Auto-crop error", e);
           }

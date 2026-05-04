@@ -13,7 +13,6 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 
-import { initAppCheckOnce } from './appCheck';
 import { getFirebaseConfig } from './env';
 
 const FIREBASE_APP_NAME = 'smv-vision';
@@ -42,16 +41,6 @@ function resolveApp(): FirebaseApp | null {
   } catch (error) {
     console.warn('[smv-vision][firebase] initializeApp falló, audit trail deshabilitado', error);
     cachedApp = null;
-  }
-
-  if (cachedApp) {
-    // App Check debe inicializarse inmediatamente tras initializeApp para
-    // que los servicios posteriores (Firestore, Auth) adjunten el token.
-    try {
-      initAppCheckOnce(cachedApp);
-    } catch (error) {
-      console.warn('[smv-vision][firebase] initAppCheckOnce falló', error);
-    }
   }
 
   return cachedApp;

@@ -169,7 +169,7 @@ export async function signInWithEmailPassword(
         ok: false,
         reason: 'error',
         message:
-          'App Check rechazó la sesión. En desarrollo, registra el token de depuración en Firebase Console → App Check, o revisa VITE_RECAPTCHA_SITE_KEY y el enforcement de Auth.',
+          'Sesión rechazada por políticas de seguridad. Contacta al administrador.',
       };
     }
 

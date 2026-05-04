@@ -3,24 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import jsPDF from 'jspdf';
 import autoTable, { CellHookData, RowInput } from 'jspdf-autotable';
 import { motion, AnimatePresence } from "motion/react";
-import { 
-  Database, 
-  FileText, 
-  Loader2, 
-  CheckCircle2, 
+import {
+  Database,
+  FileText,
+  Loader2,
+  CheckCircle2,
   AlertCircle,
-  Calendar,
   X,
   Maximize2,
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  FolderOpen
 } from 'lucide-react';
 import {
   AnalysisMetrics,
@@ -40,14 +35,14 @@ import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/Tool
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
 
 const ORDER_PROMPT_VERSION = 'orders-v4-precise';
-const BLUEPRINT_PROMPT_VERSION = 'blueprints-v6-pro-vision';
+const BLUEPRINT_PROMPT_VERSION = 'blueprints-v7-pro-vision';
 const SMV_VISION_APP_VERSION = 'smv-vision@0.0.0';
 const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
 const MAX_BLUEPRINT_CONCURRENCY = 3;
 const MIN_BLUEPRINT_MATCH_SCORE = 80;
 const BLUEPRINT_PATH_STOP_WORDS = ['TOOL', 'CRIB', 'PDF', 'REV'] as const;
-const GEMINI_ORDER_MODEL = 'gemini-1.5-pro';
-const GEMINI_BLUEPRINT_MODEL = 'gemini-1.5-pro';
+const GEMINI_ORDER_MODEL = 'gemini-3-flash-preview';
+const GEMINI_BLUEPRINT_MODEL = 'gemini-3-flash-preview';
 const FETCH_TIMEOUT_MS = 30_000;
 
 async function fetchPdfAsDataUrl(url: string): Promise<string> {
@@ -444,6 +439,11 @@ function hasStrongIdentifierMatch(orderIds: string[], blueprintIds: string[]): b
   return false;
 }
 
+const COMMON_STOP_WORDS = new Set([
+  'PART', 'NUMBER', 'DRAWING', 'REV', 'REVISION', 'SUPRAJIT', 'TOOL', 'CRIB', 'PIEZA', 'CODIGO',
+  'DETALLE', 'ENSAMBLE', 'ASSEMBLY', 'DETAIL', 'SCALE', 'ESCALA', 'SHEET', 'HOJA', 'CLIENTE', 'CUSTOMER'
+]);
+
 function descriptiveTokens(value: string): string[] {
   const normalized = normalizePieceLabel(value);
   if (!normalized) {
@@ -453,7 +453,12 @@ function descriptiveTokens(value: string): string[] {
   return normalized
     .split(/[^A-Z0-9]+/g)
     .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && /[A-Z]/.test(token) && !/\d{3,}/.test(token));
+    .filter((token) => (
+      token.length >= 3 && 
+      /[A-Z]/.test(token) && 
+      !/\d{3,}/.test(token) &&
+      !COMMON_STOP_WORDS.has(token)
+    ));
 }
 
 interface PieceMatchSignals {
@@ -487,14 +492,12 @@ function extractBlueprintSignals(fileLabel: string, specs: BlueprintSpec[]): Pie
   const identifiers = new Set<string>();
   const descriptors = new Set<string>();
 
-  const cleanedPath = stripBlueprintPathNoise(fileLabel);
-  extractPartIdentifiers(cleanedPath).forEach((entry) => identifiers.add(entry));
-  descriptiveTokens(cleanedPath).forEach((entry) => {
-    if (!isBlueprintPathStopWord(entry)) {
-      descriptors.add(entry);
-    }
-  });
+  // Extract from the filename/path
+  const withoutExtension = fileLabel.replace(/\.pdf$/i, ' ');
+  extractPartIdentifiers(withoutExtension).forEach((entry) => identifiers.add(entry));
+  descriptiveTokens(withoutExtension).forEach((entry) => descriptors.add(entry));
 
+  // Extract from AI analysis of the blueprint content
   specs.forEach((spec) => {
     extractPartIdentifiers(spec.pieza_detectada).forEach((entry) => identifiers.add(entry));
     descriptiveTokens(spec.pieza_detectada).forEach((entry) => descriptors.add(entry));
@@ -514,43 +517,37 @@ function extractOrderSignals(orderPiece: string): PieceMatchSignals {
 }
 
 function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignals: PieceMatchSignals): number {
-  const bothHaveIds = orderSignals.identifiers.length > 0 && candidateSignals.identifiers.length > 0;
-  if (bothHaveIds && !hasStrongIdentifierMatch(orderSignals.identifiers, candidateSignals.identifiers)) {
+  const orderIds = orderSignals.identifiers;
+  const candidateIds = candidateSignals.identifiers;
+
+  // RULE 1: Direct identifier match is KING.
+  if (orderIds.length > 0 && candidateIds.length > 0) {
+    if (hasStrongIdentifierMatch(orderIds, candidateIds)) {
+      // If we have a perfect ID match, we don't care much about the description
+      return 95;
+    }
+  }
+
+  // RULE 2: If we have IDs in both but they DON'T match, it's a hard NO.
+  // This prevents "90-1012-05" from matching "90-1012-06" just because they share "90-1012".
+  if (orderIds.length > 0 && candidateIds.length > 0) {
+    // We already checked for match above, so if we're here, they don't match.
     return 0;
   }
 
+  // RULE 3: Descriptive matching (Fuzzy)
   const orderSet = new Set(orderSignals.descriptors);
   const candidateSet = new Set(candidateSignals.descriptors);
   const sharedTokens = [...orderSet].filter((token) => candidateSet.has(token));
-  const overlapRatio = orderSet.size > 0 && candidateSet.size > 0
-    ? sharedTokens.length / Math.max(orderSet.size, candidateSet.size)
-    : 0;
+  
+  if (sharedTokens.length === 0) return 0;
+
+  const overlapRatio = sharedTokens.length / Math.max(orderSet.size, candidateSet.size);
   const hasStrongSharedToken = sharedTokens.some(isStrongToken);
 
-  if (bothHaveIds) {
-    if (orderSet.size === 0 || candidateSet.size === 0) {
-      return 92;
-    }
-    if (sharedTokens.length >= 1) {
-      return overlapRatio >= 0.6 ? 98 : 94;
-    }
-    return 88;
-  }
-
-  if (sharedTokens.length === 0) {
-    return 0;
-  }
-
-  if (hasStrongSharedToken && overlapRatio >= 0.5) {
-    return 85;
-  }
-  if (sharedTokens.length >= 2 && overlapRatio >= 0.5) {
-    return 82;
-  }
-  if (overlapRatio >= 0.75 && sharedTokens.length >= 1 && hasStrongSharedToken) {
-    return 80;
-  }
-
+  if (hasStrongSharedToken && overlapRatio >= 0.6) return 85;
+  if (sharedTokens.length >= 2 && overlapRatio >= 0.5) return 82;
+  
   return 0;
 }
 
@@ -629,16 +626,11 @@ export default function App() {
   const [copying, setCopying] = useState(false);
   const [metricsComparison, setMetricsComparison] = useState<MetricsComparison | null>(null);
   const [analysisSummary, setAnalysisSummary] = useState<AnalysisRunSummary | null>(null);
-  const [isWorkshopDragActive, setIsWorkshopDragActive] = useState(false);
-  const [isSuggestedPathsOpen, setIsSuggestedPathsOpen] = useState(true);
-  const [copiedPathKey, setCopiedPathKey] = useState<string | null>(null);
   // Mapa pdfId -> drawingId para dibujos adjuntados desde la biblioteca Tool Crib.
   // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
   const [toolcribPdfToDrawing, setToolcribPdfToDrawing] = useState<Record<string, string>>({});
   
   const orderFileInputRef = useRef<HTMLInputElement>(null);
-  const workshopFileInputRef = useRef<HTMLInputElement>(null);
-  const workshopFolderInputRef = useRef<HTMLInputElement>(null);
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
   const workshopStatePatchTimerRef = useRef<number | null>(null);
 
@@ -667,131 +659,39 @@ export default function App() {
     workshopStatePatchTimerRef.current = window.setTimeout(flushWorkshopStatePatches, 100);
   }, [flushWorkshopStatePatches]);
 
-  useEffect(() => {
-    const folderInput = workshopFolderInputRef.current;
-    if (!folderInput) {
-      return;
-    }
-    folderInput.setAttribute('webkitdirectory', '');
-    folderInput.setAttribute('directory', '');
-  }, []);
-
-  const ingestFiles = useCallback(async (files: FileList | File[], type: 'order' | 'workshop') => {
+  const ingestOrderFile = useCallback(async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
     if (fileArray.length === 0) {
       return;
     }
 
     const validFiles = fileArray.filter(isPdfFile);
-    const invalidCount = fileArray.length - validFiles.length;
-
-    if (invalidCount > 0) {
-      setError(`Se ignoraron ${invalidCount} archivo(s) porque no son PDF válidos.`);
-    }
-
     if (validFiles.length === 0) {
+      setError("El archivo seleccionado no es un PDF válido.");
       return;
     }
 
-    const payloads = await Promise.all(validFiles.map(async (file) => {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') {
-            resolve(reader.result);
-            return;
-          }
-          reject(new Error(`No fue posible leer ${file.name}.`));
-        };
-        reader.onerror = () => reject(new Error(`No fue posible leer ${file.name}.`));
-        reader.readAsDataURL(file);
-      });
-
-      if (type === 'order') {
-        return { dataUrl, fileName: file.name };
-      }
-      return buildWorkshopPdfUpload(file, dataUrl);
-    }));
-
-    if (type === 'order') {
-      const firstOrderPayload = payloads[0];
-      if (firstOrderPayload && typeof firstOrderPayload === 'object' && 'fileName' in firstOrderPayload) {
-        setOrderPdf(firstOrderPayload.dataUrl);
-        setOrderPdfName(firstOrderPayload.fileName);
-        setOrderPdfWarning(validateOrderPdfName(firstOrderPayload.fileName));
-      }
-      return;
+    const file = validFiles[0];
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setOrderPdf(dataUrl);
+      setOrderPdfName(file.name);
+      setOrderPdfWarning(validateOrderPdfName(file.name));
+    } catch (err) {
+      setError(`No fue posible leer ${file.name}.`);
     }
-
-    const uploads = payloads.filter((payload): payload is WorkshopPdfUpload => {
-      return !!payload && typeof payload === 'object' && 'relativePath' in payload;
-    });
-    setWorkshopPdfs((prev) => [...prev, ...uploads]);
   }, []);
 
-  const handleInputUpload = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>, type: 'order' | 'workshop') => {
+  const handleOrderInputUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
       if (files) {
-        await ingestFiles(files, type);
+        await ingestOrderFile(files);
       }
       e.target.value = '';
     },
-    [ingestFiles],
+    [ingestOrderFile],
   );
-
-  const handleWorkshopFolderUpload = useCallback(async () => {
-    const fallbackToFolderInput = () => {
-      workshopFolderInputRef.current?.click();
-    };
-
-    const pickerWindow = window as FilePickerWindow;
-    if (!pickerWindow.showDirectoryPicker) {
-      fallbackToFolderInput();
-      return;
-    }
-
-    try {
-      const directoryHandle = await pickerWindow.showDirectoryPicker();
-      const scanResult: DirectoryScanResult = {
-        totalFiles: 0,
-        pdfFiles: [],
-      };
-
-      await collectPdfFilesFromDirectory(directoryHandle, directoryHandle.name, scanResult);
-
-      if (scanResult.totalFiles === 0) {
-        setError('La carpeta seleccionada está vacía.');
-        return;
-      }
-
-      if (scanResult.pdfFiles.length === 0) {
-        setError('La carpeta no contiene PDFs válidos para análisis.');
-        return;
-      }
-
-      const uploads = await Promise.all(
-        scanResult.pdfFiles.map(async ({ file, relativePath }) => {
-          const dataUrl = await readFileAsDataUrl(file);
-          return buildWorkshopPdfUpload(file, dataUrl, relativePath);
-        }),
-      );
-
-      setWorkshopPdfs((prev) => [...prev, ...uploads]);
-      setError(null);
-    } catch (error: unknown) {
-      if (isDirectoryPickerAbort(error)) {
-        return;
-      }
-      fallbackToFolderInput();
-    }
-  }, []);
-
-  const handleWorkshopDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsWorkshopDragActive(false);
-    await ingestFiles(e.dataTransfer.files, 'workshop');
-  }, [ingestFiles]);
 
   const removeFile = (type: 'order' | 'workshop', fileId?: string) => {
     if (type === 'order') {
@@ -826,31 +726,28 @@ export default function App() {
   const handleAttachToolcribDrawing = useCallback((attachment: ToolcribAttachment) => {
     // Regla de preservación: si el mismo drawingId ya fue adjuntado, no
     // añadimos un duplicado al estado de análisis.
-    setToolcribPdfToDrawing((prev) => {
-      const alreadyAttached = Object.values(prev).includes(attachment.drawingId);
-      if (alreadyAttached) {
-        return prev;
-      }
+    if (attachedToolcribDrawingIds.has(attachment.drawingId)) {
+      return;
+    }
 
-      const pdfId = `toolcrib-${attachment.drawingId}-${crypto.randomUUID()}`;
-      const relativePath = attachment.sourcePath.length > 0
-        ? attachment.sourcePath
-        : attachment.displayName;
+    const pdfId = `toolcrib-${attachment.drawingId}-${crypto.randomUUID()}`;
+    const relativePath = attachment.sourcePath.length > 0
+      ? attachment.sourcePath
+      : attachment.displayName;
 
-      setWorkshopPdfs((prevPdfs) => [
-        ...prevPdfs,
-        {
-          id: pdfId,
-          name: attachment.displayName,
-          relativePath,
-          dataUrl: attachment.dataUrl,
-        },
-      ]);
+    setWorkshopPdfs((prevPdfs) => [
+      ...prevPdfs,
+      {
+        id: pdfId,
+        name: attachment.displayName,
+        relativePath,
+        dataUrl: attachment.dataUrl,
+      },
+    ]);
 
-      return { ...prev, [pdfId]: attachment.drawingId };
-    });
+    setToolcribPdfToDrawing((prev) => ({ ...prev, [pdfId]: attachment.drawingId }));
     setError(null);
-  }, []);
+  }, [attachedToolcribDrawingIds]);
 
   const preparePdfPart = (dataUrl: string) => {
     const base64Data = dataUrl.split(';base64,')[1];
@@ -882,13 +779,14 @@ export default function App() {
     const width = xmax - xmin;
     const height = ymax - ymin;
     if (width <= 50 || height <= 50) return false; // < 5% of the 0-1000 grid
-    if (width * height > 800 * 800) return false; // > 64% area => plano completo
+    if (width * height > 940 * 940) return false; // > 88% area => plano completo
     return true;
   };
 
-  // Central fallback crop (60% of the plano) used when the AI did not return a usable view.
-  // Ensures the PDF never shows the full plano with cajetín, logos or page marks.
-  const FALLBACK_CENTER_BOX: number[] = [200, 200, 800, 800];
+  // Fallback crop when the AI did not return a usable view.
+  // Covers the upper ~70% of the sheet at near-full width: where the main views live
+  // on standard ISO tool-crib drawings (title block occupies the bottom-right corner).
+  const FALLBACK_CENTER_BOX: number[] = [30, 30, 720, 970];
 
   // Helper to crop image based on AI bounding box
   const cropIsometricView = (base64: string, box: number[]): Promise<string> => {
@@ -920,9 +818,9 @@ export default function App() {
       return;
     }
 
-    const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY?.trim();
+    const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? '').trim();
     if (!geminiApiKey) {
-      setError('Falta configurar VITE_GEMINI_API_KEY.');
+      setError('Falta configurar VITE_GEMINI_API_KEY (local) o GEMINI_API_KEY (AI Studio).');
       return;
     }
     
@@ -1111,9 +1009,9 @@ Reglas de extracción:
 Campos: pieza_detectada, descripcionVisual, isometricBoundingBox [ymin, xmin, ymax, xmax] (0 a 1000).
 
 Reglas de extracción:
-1) Identifica el "Código de Parte" o "Número de Dibujo" (Drawing Number). Busca en el Cajetín (Title Block) si no está cerca de la pieza. Úsalo en pieza_detectada.
-2) Devuelve SIEMPRE un isometricBoundingBox que encuadre la vista principal (Isométrica) o la vista más clara.
-3) El isometricBoundingBox debe ser MUY AJUSTADO a la geometría de la pieza. Excluye cotas, líneas de dimensión, cajetín, notas y logos.
+1) Identifica el "Código de Parte" o "Número de Dibujo" (Drawing Number). Búscalo en el Cajetín (Title Block), que normalmente está en la esquina INFERIOR DERECHA del plano. Úsalo en pieza_detectada.
+2) Devuelve SIEMPRE un isometricBoundingBox que encuadre la vista principal (Isométrica) o la vista más clara. Las vistas principales ocupan la mitad superior o centro del plano; el Cajetín está abajo a la derecha.
+3) El isometricBoundingBox debe encuadrar MUY AJUSTADO solo la geometría de la pieza. Excluye el Cajetín, cotas, líneas de dimensión, notas, bordes del plano y logos.
 4) Si hay múltiples piezas diferentes en el mismo plano, devuelve una entrada para cada una.
 5) Prioriza la vista Isométrica. Si no hay, usa la Frontal o Superior más detallada.
 6) Si no hay vistas útiles, devuelve [].
@@ -1159,7 +1057,14 @@ Reglas de extracción:
             };
           } catch (e) {
             enqueueWorkshopStatusPatch({ fileId: task.workshopPdf.id, status: 'error' });
-            throw e;
+            console.error('[smv-vision] blueprint analysis failed for', task.workshopPdf.name, e);
+            return {
+              index: task.index,
+              fileId: task.workshopPdf.id,
+              fileLabel: task.workshopPdf.relativePath,
+              analysis: { specs: [], image: '' },
+              metrics: { pdfRasterMs: 0, aiBlueprintMs: 0 },
+            };
           }
         },
       );
@@ -1330,35 +1235,16 @@ Reglas de extracción:
     }
   };
 
-  const copyResults = () => {
+  const copyResults = async () => {
     if (!results) return;
-    navigator.clipboard.writeText(JSON.stringify(results, null, 2));
-    setCopying(true);
-    setTimeout(() => setCopying(false), 2000);
-  };
-
-  const copySuggestedPath = useCallback(async (key: string, value: string) => {
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-      } else {
-        const textarea = document.createElement('textarea');
-        textarea.value = value;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-      setCopiedPathKey(key);
-      window.setTimeout(() => {
-        setCopiedPathKey((current) => (current === key ? null : current));
-      }, 1800);
-    } catch (copyError) {
-      console.error('No fue posible copiar la ruta sugerida', copyError);
+      await navigator.clipboard.writeText(JSON.stringify(results, null, 2));
+      setCopying(true);
+      setTimeout(() => setCopying(false), 2000);
+    } catch {
+      // clipboard access denied — silent no-op
     }
-  }, []);
+  };
 
   const downloadJson = () => {
     if (!results) return;
@@ -1471,6 +1357,14 @@ Reglas de extracción:
     }
 
     doc.save(`reporte_smv_${generatedAt.toISOString().split('T')[0]}.pdf`);
+    
+    // Abrir en nueva pestaña como preview (opcional pero solicitado)
+    try {
+      const blobUrl = doc.output('bloburl');
+      window.open(blobUrl, '_blank');
+    } catch (e) {
+      console.warn('No fue posible abrir el preview del PDF', e);
+    }
   };
 
   const auditedCount = useMemo(
@@ -1479,123 +1373,43 @@ Reglas de extracción:
   );
 
   return (
-    <div className="min-h-screen bg-bg font-sans text-ink border-12 border-ink flex flex-col">
-      {/* Header */}
-      <header className="bg-bg border-b-2 border-ink px-10 py-10">
-        <div className="flex flex-col md:flex-row items-end justify-between gap-6">
-          <div className="space-y-4">
-            <span className="text-[14px] font-bold uppercase tracking-[2px] bg-ink text-bg px-2 py-1 inline-block">
+    <div className="min-h-screen bg-bg font-sans text-ink border-12 border-ink flex flex-col h-screen">
+      {/* Header - Compacted */}
+      <header className="bg-bg border-b-2 border-ink px-10 py-6">
+        <div className="flex flex-col md:flex-row items-end justify-between gap-4">
+          <div className="space-y-2">
+            <span className="text-[11px] font-black uppercase tracking-[2px] bg-ink text-bg px-2 py-0.5 inline-block">
               Servicios y Maquinados Vázquez
             </span>
-            <h1 className="text-[60px] lg:text-[82px] font-black leading-[0.85] tracking-[-4px] uppercase">
+            <h1 className="text-[48px] lg:text-[64px] font-black leading-none tracking-[-3px] uppercase italic">
               SMV // VISION
             </h1>
           </div>
-          <div className="text-right space-y-2">
-            <span className="text-[14px] font-bold uppercase tracking-[2px] bg-accent text-bg px-2 py-1 inline-block">
+          <div className="text-right space-y-1">
+            <span className="text-[11px] font-black uppercase tracking-[2px] bg-accent text-bg px-2 py-0.5 inline-block">
               Intelligent Workshop Analyzer
             </span>
-            <h1 className="text-[32px] font-black tracking-[-1px] uppercase">
-              EXTRACTOR
-            </h1>
+            <p className="text-[20px] font-black tracking-[-0.5px] uppercase opacity-40">
+              AUDIT CORE V3.1
+            </p>
           </div>
         </div>
       </header>
 
-      <main className="grow grid grid-cols-1 xl:grid-cols-12">
-        {/* Input & Vision Section */}
-        <section className="xl:col-span-5 bg-[#E8E8E8] border-r-2 border-ink p-10 flex flex-col gap-6">
-
-          {/* Rutas recomendadas Suprajit */}
-          <div className="border-2 border-ink bg-white shadow-[3px_3px_0px_rgba(0,0,0,1)]">
-            <button
-              type="button"
-              onClick={() => setIsSuggestedPathsOpen((prev) => !prev)}
-              className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors"
-              aria-expanded={isSuggestedPathsOpen}
-            >
-              <span className="flex items-center gap-2">
-                <FolderOpen size={14} />
-                Rutas recomendadas (Suprajit)
-              </span>
-              {isSuggestedPathsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-            {isSuggestedPathsOpen && (
-              <div className="border-t border-ink p-3 space-y-3">
-                <div className="space-y-1">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-ink/80">
-                    Carpeta de planos (tool crib)
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-[10px] font-mono bg-[#F4F4F4] border border-ink/30 px-2 py-1 truncate" title={SUGGESTED_BLUEPRINTS_FOLDER}>
-                      {SUGGESTED_BLUEPRINTS_FOLDER}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => void copySuggestedPath('blueprints', SUGGESTED_BLUEPRINTS_FOLDER)}
-                      className="shrink-0 border border-ink bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors flex items-center gap-1"
-                      aria-label="Copiar ruta de carpeta de planos"
-                    >
-                      {copiedPathKey === 'blueprints' ? (
-                        <>
-                          <CheckCircle2 size={11} /> Copiado
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={11} /> Copiar
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-ink/80">
-                    Reporte de órdenes (PDF)
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-[10px] font-mono bg-[#F4F4F4] border border-ink/30 px-2 py-1 truncate" title={SUGGESTED_ORDER_REPORT_HINT}>
-                      {SUGGESTED_ORDER_REPORT_NAME}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => void copySuggestedPath('order-report', SUGGESTED_ORDER_REPORT_NAME)}
-                      className="shrink-0 border border-ink bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors flex items-center gap-1"
-                      aria-label="Copiar nombre del reporte de órdenes"
-                    >
-                      {copiedPathKey === 'order-report' ? (
-                        <>
-                          <CheckCircle2 size={11} /> Copiado
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={11} /> Copiar
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-                <p className="text-[9px] font-mono text-ink/60 leading-snug">
-                  Nota: el navegador no permite abrir rutas de red automáticamente. Pega la ruta en el explorador de Windows para navegar rápido, y luego arrastra los archivos a los bloques de abajo.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Tool Crib Library (Firestore) */}
-          <ToolcribLibraryPanel
-            onAttachDrawing={handleAttachToolcribDrawing}
-            attachedDrawingIds={attachedToolcribDrawingIds}
-          />
-
-          {/* Order Visual Input */}
-          <div className="flex flex-col gap-4 flex-1">
-            <div className="flex items-center gap-2 text-[12px] font-extrabold uppercase tracking-wider">
-              <div className="w-2.5 h-2.5 bg-ink"></div>
-              1. Tabla de Órdenes (PDF)
+      <main className="grow grid grid-cols-1 xl:grid-cols-12 overflow-hidden">
+        {/* Input & Vision Sidebar */}
+        <section className="xl:col-span-4 bg-[#E8E8E8] border-r-2 border-ink p-8 flex flex-col gap-8 overflow-y-auto">
+          
+          {/* Header Module: Config & Orders */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-widest text-ink/40">
+              <div className="w-4 h-1 bg-ink"></div>
+              01. Pedidos
             </div>
-            
+
+            {/* Order Visual Input */}
             <div 
-              className={`grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all ${orderPdf ? 'bg-white' : 'bg-white/30 hover:bg-white/50 cursor-pointer'}`}
+              className={`min-h-[160px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all group ${orderPdf ? 'bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)]' : 'bg-white/30 hover:bg-white hover:border-accent cursor-pointer'}`}
               onClick={() => !orderPdf && orderFileInputRef.current?.click()}
             >
               <input 
@@ -1603,53 +1417,31 @@ Reglas de extracción:
                 ref={orderFileInputRef} 
                 className="hidden" 
                 accept="application/pdf" 
-                onChange={(e) => void handleInputUpload(e, 'order')} 
+                onChange={(e) => void handleOrderInputUpload(e)} 
               />
               
               {!orderPdf ? (
-                <div className="text-center space-y-2">
-                  <Database className="mx-auto w-10 h-10 text-ink/30" />
-                  <p className="font-black uppercase text-xs tracking-tighter">Subir archivo PDF pedidos</p>
-                  <p className="text-[10px] text-gray-400 font-mono">Tabla de Suprajit (PDF)</p>
+                <div className="text-center space-y-2 group-hover:scale-105 transition-transform">
+                  <Database className="mx-auto w-10 h-10 text-ink/20 group-hover:text-accent" />
+                  <p className="font-black uppercase text-xs tracking-tighter">Subir Reporte de Pedidos</p>
+                  <p className="text-[9px] text-gray-400 font-mono uppercase">PDF de Google Sheets (Suprajit)</p>
                 </div>
               ) : (
-                <div className="relative w-full h-full flex flex-col items-center justify-center px-4">
+                <div className="relative w-full h-full flex flex-col items-center justify-center">
                   <div className="relative">
-                    <FileText className={`w-16 h-16 ${orderLoadingState === 'loading' ? 'text-accent animate-pulse' : 'text-ink'}`} />
-                    {orderLoadingState === 'loading' && (
-                      <div className="absolute -bottom-2 -right-2 bg-accent p-1 rounded-full border-2 border-bg animate-spin">
-                        <Loader2 size={12} className="text-bg" />
-                      </div>
-                    )}
+                    <FileText className={`w-14 h-14 ${orderLoadingState === 'loading' ? 'text-accent animate-pulse' : 'text-ink'}`} />
                     {orderLoadingState === 'done' && (
-                      <div className="absolute -bottom-2 -right-2 bg-green-500 p-1 rounded-full border-2 border-bg">
-                        <CheckCircle2 size={12} className="text-bg" />
+                      <div className="absolute -bottom-1 -right-1 bg-green-500 p-1 rounded-full border-2 border-white">
+                        <CheckCircle2 size={12} className="text-white" />
                       </div>
                     )}
                   </div>
-                  <p className="mt-4 font-black text-[10px] uppercase">
-                    {orderLoadingState === 'loading' ? 'Analizando Pedidos...' : 'Pedidos Listos'}
+                  <p className="mt-4 font-black text-[11px] uppercase tracking-widest truncate max-w-full px-4">
+                    {orderPdfName}
                   </p>
-                  {orderPdfName && (
-                    <p
-                      className="mt-1 text-[10px] font-mono text-ink/70 truncate max-w-full text-center"
-                      title={orderPdfName}
-                    >
-                      {orderPdfName}
-                    </p>
-                  )}
-                  {orderPdfWarning && (
-                    <div
-                      className="mt-2 flex items-start gap-1.5 border border-accent bg-accent/10 px-2 py-1.5 text-[9px] font-mono text-accent leading-snug max-w-full"
-                      role="alert"
-                    >
-                      <AlertCircle size={12} className="shrink-0 mt-0.5" />
-                      <span className="text-left">{orderPdfWarning}</span>
-                    </div>
-                  )}
                   <button 
                     onClick={(e) => { e.stopPropagation(); removeFile('order'); }}
-                    className="absolute top-0 right-0 p-1 bg-accent text-bg hover:bg-ink transition-colors"
+                    className="absolute -top-4 -right-4 p-2 bg-accent text-bg hover:bg-ink transition-colors border-2 border-ink shadow-[2px_2px_0px_rgba(0,0,0,1)]"
                   >
                     <X size={16} />
                   </button>
@@ -1658,118 +1450,66 @@ Reglas de extracción:
             </div>
           </div>
 
-          {/* Workshop Sheet Visual Input */}
-          <div className="flex flex-col gap-4 flex-1">
-            <div className="flex items-center gap-2 text-[12px] font-extrabold uppercase tracking-wider">
-              <div className="w-2.5 h-2.5 bg-accent"></div>
-              2. Hoja de Taller (Planos PDF)
+          {/* Module 2: Tool Crib Library */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-widest text-ink/40">
+              <div className="w-4 h-1 bg-ink"></div>
+              02. Biblioteca de Planos
             </div>
-            
-            <div 
-              className={`grow min-h-[180px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all cursor-pointer ${
-                isWorkshopDragActive ? 'bg-accent/20' : 'bg-white/30 hover:bg-white/50'
-              }`}
-              onClick={() => workshopFileInputRef.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsWorkshopDragActive(true);
-              }}
-              onDragLeave={() => setIsWorkshopDragActive(false)}
-              onDrop={(e) => void handleWorkshopDrop(e)}
-            >
-              <input 
-                type="file" 
-                ref={workshopFileInputRef} 
-                className="hidden" 
-                accept="application/pdf" 
-                multiple
-                onChange={(e) => void handleInputUpload(e, 'workshop')} 
-              />
-              <input
-                type="file"
-                ref={workshopFolderInputRef}
-                className="hidden"
-                multiple
-                accept="application/pdf"
-                onChange={(e) => void handleInputUpload(e, 'workshop')}
-              />
-              
-              <div className="text-center space-y-2">
-                <FileText className="mx-auto w-10 h-10 text-ink/30" />
-                <p className="font-black uppercase text-xs tracking-tighter">Subir carpeta o planos PDF</p>
-                <p className="text-[10px] text-gray-400 font-mono">Click, arrastra carpeta o arrastra múltiples PDFs</p>
+            <ToolcribLibraryPanel
+              onAttachDrawing={handleAttachToolcribDrawing}
+              attachedDrawingIds={attachedToolcribDrawingIds}
+            />
+          </div>
+
+          {/* Module 3: Active Workspace & Actions */}
+          <div className="mt-auto pt-6 space-y-4 border-t-4 border-ink/5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-widest text-ink/40">
+                <div className="w-4 h-1 bg-accent"></div>
+                03. Workspace
               </div>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  type="button"
-                  className="border border-ink bg-white px-3 py-1 text-[10px] font-black uppercase tracking-wider hover:bg-accent hover:text-bg transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleWorkshopFolderUpload();
-                  }}
-                >
-                  Subir carpeta
-                </button>
-                <button
-                  type="button"
-                  className="border border-ink bg-white px-3 py-1 text-[10px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    workshopFileInputRef.current?.click();
-                  }}
-                >
-                  Subir archivos
-                </button>
-              </div>
+              <span className="bg-ink text-bg px-2 py-0.5 text-[10px] font-black">{workshopPdfs.length} PLANOS</span>
             </div>
 
             {workshopPdfs.length > 0 && (
               <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-2">
                 {workshopPdfs.map((pdf) => (
-                  <div key={pdf.id} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)]">
+                  <div key={pdf.id} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)] hover:translate-y-[-1px] transition-transform">
                     <div className="flex items-center gap-2 overflow-hidden">
                       {workshopLoadingStates[pdf.id] === 'loading' ? (
-                        <Loader2 size={14} className="text-accent animate-spin shrink-0" />
-                      ) : workshopLoadingStates[pdf.id] === 'done' ? (
-                        <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-                      ) : workshopLoadingStates[pdf.id] === 'error' ? (
-                        <AlertCircle size={14} className="text-accent shrink-0" />
+                        <Loader2 size={12} className="text-accent animate-spin shrink-0" />
                       ) : (
-                        <FileText size={14} className="text-accent shrink-0" />
+                        <CheckCircle2 size={12} className="text-green-500 shrink-0" />
                       )}
-                      <span className={`text-[9px] font-mono truncate ${workshopLoadingStates[pdf.id] === 'loading' ? 'text-accent font-bold' : ''}`}>
-                        {pdf.relativePath}
+                      <span className="text-[9px] font-mono truncate uppercase font-bold">
+                        {pdf.relativePath.split('/').pop()}
                       </span>
                     </div>
-                    {workshopLoadingStates[pdf.id] !== 'loading' && (
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
-                        className="text-accent hover:text-ink transition-colors"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
+                      className="text-ink/30 hover:text-accent transition-colors"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-          
-          <div className="mt-auto">
+            
             <button
               onClick={extractInfo}
               disabled={isExtracting || !orderPdf}
-              className="w-full bg-ink hover:bg-accent disabled:bg-gray-400 text-bg font-black py-4 px-8 text-xl uppercase tracking-widest transition-all shadow-[8px_8px_0px_rgba(0,0,0,0.2)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 active:bg-ink active:shadow-none"
+              className="w-full bg-accent hover:bg-ink disabled:bg-gray-300 text-bg font-black py-5 px-8 text-xl uppercase tracking-[4px] transition-all shadow-[6px_6px_0px_rgba(0,0,0,0.2)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 active:scale-[0.98]"
             >
               {isExtracting ? (
                 <span className="flex items-center justify-center gap-3 italic">
                   <Loader2 className="w-6 h-6 animate-spin" />
-                  Analizando {workshopPdfs.length} planos...
+                  Analizando...
                 </span>
               ) : (
                 <span className="flex items-center justify-center gap-3">
-                  <CheckCircle2 className="w-6 h-6" />
-                  Procesar Todo
+                  Ejecutar Auditoría
                 </span>
               )}
             </button>
@@ -1777,32 +1517,26 @@ Reglas de extracción:
         </section>
 
         {/* Results Section */}
-        <section className="xl:col-span-7 p-10 flex flex-col bg-bg overflow-hidden min-h-[600px]">
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-2 text-[12px] font-extrabold uppercase tracking-wider">
-              <div className="w-2.5 h-2.5 bg-ink"></div>
-              Audit Table: Pieces & Isometric Details
+        <section className="xl:col-span-8 p-10 flex flex-col bg-bg overflow-hidden relative">
+          <div className="flex items-center justify-between mb-10">
+            <div className="flex items-center gap-3">
+              <div className="w-4 h-4 bg-ink"></div>
+              <h2 className="text-2xl font-black uppercase tracking-tighter italic">Audit Dashboard</h2>
             </div>
             
             {results && (
-              <div className="flex gap-3">
+              <div className="flex gap-2">
                 <button
                   onClick={copyResults}
-                  className="bg-ink text-bg px-4 py-1.5 text-[11px] font-black uppercase tracking-wider hover:bg-accent transition-colors border border-ink"
+                  className="bg-white border-2 border-ink text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink hover:text-bg transition-all"
                 >
-                  {copying ? 'Copiado' : 'Link JSON'}
-                </button>
-                <button
-                  onClick={downloadJson}
-                  className="bg-accent text-bg px-4 py-1.5 text-[11px] font-black uppercase tracking-wider hover:bg-ink transition-colors border border-ink"
-                >
-                  JSON
+                  {copying ? 'Copiado' : 'Copiar JSON'}
                 </button>
                 <button
                   onClick={downloadPdf}
-                  className="bg-[#0D2B4D] text-bg px-4 py-1.5 text-[11px] font-black uppercase tracking-wider hover:bg-accent transition-colors border border-ink"
+                  className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink transition-all shadow-[4px_4px_0px_rgba(0,0,0,1)] hover:shadow-none active:translate-x-0.5 active:translate-y-0.5"
                 >
-                  Descargar PDF
+                  Exportar Reporte (PDF)
                 </button>
               </div>
             )}
@@ -1811,20 +1545,29 @@ Reglas de extracción:
           <AnimatePresence mode="wait">
             {!results && !isExtracting && !error && (
               <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="grow border-4 border-ink border-dashed flex flex-col items-center justify-center text-center p-12 bg-white/30"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="grow border-4 border-ink border-dashed flex flex-col items-center justify-center text-center p-16 bg-white shadow-inner"
               >
-                <div className="relative mb-6">
-                  <Maximize2 className="text-ink/10 w-24 h-24" />
-                  <FileText className="absolute inset-0 m-auto text-ink/20 w-10 h-10" />
+                <div className="relative mb-8">
+                  <Maximize2 className="text-ink/5 w-32 h-32" />
+                  <FileText className="absolute inset-0 m-auto text-ink/20 w-12 h-12" />
                 </div>
-                <h3 className="font-black text-3xl uppercase tracking-tighter text-ink/20 italic">Dashboard de Auditoría Vacío</h3>
-                <p className="text-[11px] font-mono text-ink/30 uppercase mt-2 tracking-widest">Sube una tabla de órdenes y/o hojas de taller para analizar</p>
-                <div className="mt-6 p-4 border border-ink/10 bg-white/50 text-[10px] font-mono text-left space-y-1">
-                  <p>• Recomendado: PDF de alta resolución</p>
-                  <p>• Soporta: Múltiples planos de taller</p>
-                  <p>• Extracción: Vistas Isométricas automáticas</p>
+                <h3 className="font-black text-4xl uppercase tracking-tighter text-ink/20 italic mb-4">Esperando Instrucciones</h3>
+                <p className="text-[11px] font-mono text-ink/40 uppercase tracking-[4px]">Carga el reporte de pedidos y selecciona planos para iniciar</p>
+                <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-2xl w-full">
+                  <div className="p-4 border-2 border-ink/10 bg-bg/50 text-left">
+                    <p className="font-black text-[10px] uppercase mb-1">Paso 01</p>
+                    <p className="text-[9px] font-mono opacity-60 leading-tight">Carga el PDF de órdenes generado por Google Sheets.</p>
+                  </div>
+                  <div className="p-4 border-2 border-ink/10 bg-bg/50 text-left">
+                    <p className="font-black text-[10px] uppercase mb-1">Paso 02</p>
+                    <p className="text-[9px] font-mono opacity-60 leading-tight">Usa el Auto-Matching o la Biblioteca para buscar planos.</p>
+                  </div>
+                  <div className="p-4 border-2 border-ink/10 bg-bg/50 text-left">
+                    <p className="font-black text-[10px] uppercase mb-1">Paso 03</p>
+                    <p className="text-[9px] font-mono opacity-60 leading-tight">Presiona "Ejecutar" para que Vision AI audite las piezas.</p>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -1833,27 +1576,30 @@ Reglas de extracción:
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="grow border-4 border-ink bg-ink flex flex-col items-center justify-center text-center p-12"
+                className="grow border-4 border-ink bg-ink flex flex-col items-center justify-center text-center p-12 relative overflow-hidden"
               >
-                <div className="relative mb-10">
-                  <div className="w-32 h-32 border-8 border-white/10 border-t-accent rounded-full animate-spin"></div>
-                  <Database className="absolute inset-0 m-auto text-accent w-8 h-8 animate-pulse" />
-                </div>
-                <div className="space-y-4">
-                  <h3 className="text-bg font-black text-4xl uppercase tracking-widest leading-none">Analizando Planos</h3>
-                  <div className="flex flex-col items-center gap-2">
-                    <p className="text-accent font-mono text-xs uppercase tracking-[4px] animate-pulse">{extractingStep}</p>
-                    <div className="flex gap-1">
-                      {workshopPdfs.map((pdf) => (
-                        <div 
-                          key={pdf.id} 
-                          className={`w-2.5 h-1 transition-all ${
-                            workshopLoadingStates[pdf.id] === 'done' ? 'bg-green-500 w-4' : 
-                            workshopLoadingStates[pdf.id] === 'loading' ? 'bg-accent animate-pulse' : 'bg-white/20'
-                          }`}
-                        />
-                      ))}
-                    </div>
+                {/* Background Pattern */}
+                <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#FF4E00 1px, transparent 0)', backgroundSize: '24px 24px' }}></div>
+                
+                <div className="relative z-10 space-y-8">
+                  <div className="relative">
+                    <div className="w-40 h-40 border-8 border-white/5 border-t-accent rounded-full animate-spin"></div>
+                    <Database className="absolute inset-0 m-auto text-accent w-10 h-10 animate-pulse" />
+                  </div>
+                  <div className="space-y-2">
+                    <h3 className="text-bg font-black text-5xl uppercase tracking-tighter italic">Procesando...</h3>
+                    <p className="text-accent font-mono text-sm uppercase tracking-[8px] animate-pulse">{extractingStep}</p>
+                  </div>
+                  <div className="flex justify-center gap-1 max-w-xs mx-auto flex-wrap">
+                    {workshopPdfs.map((pdf) => (
+                      <div 
+                        key={pdf.id} 
+                        className={`h-2 transition-all duration-500 ${
+                          workshopLoadingStates[pdf.id] === 'done' ? 'bg-green-500 w-8' : 
+                          workshopLoadingStates[pdf.id] === 'loading' ? 'bg-accent w-4 animate-pulse' : 'bg-white/10 w-2'
+                        }`}
+                      />
+                    ))}
                   </div>
                 </div>
               </motion.div>

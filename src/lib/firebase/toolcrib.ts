@@ -30,6 +30,7 @@ import {
 import type { ToolcribActiveDrawingView } from '../../types';
 import { getCurrentUserUid } from './auth';
 import { getFirestoreClient } from './client';
+import { isToolcribDebugUnauthAllowed } from './env';
 import {
   normalizeToolcribDrawing,
   normalizeToolcribPart,
@@ -73,21 +74,19 @@ export async function listActiveToolcribParts(options?: {
   customer?: string;
   max?: number;
 }): Promise<ToolcribResult<ToolcribPart[]>> {
-  const uid = getCurrentUserUid();
-  if (!uid) {
-    return { ok: false, reason: 'not-authenticated' };
-  }
-
   const db = resolveFirestoreOrFail();
   if (!db) {
     return { ok: false, reason: 'not-configured' };
   }
 
-  const constraints: QueryConstraint[] = [where('status', '==', 'active')];
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) {
+    return { ok: false, reason: 'not-authenticated' };
+  }
+
+  const constraints: QueryConstraint[] = [];
   if (options?.customer && options.customer.trim().length > 0) {
     constraints.push(where('customer', '==', options.customer.trim()));
   }
-  constraints.push(orderBy('partNumber', 'asc'));
   constraints.push(limit(Math.min(options?.max ?? DEFAULT_PARTS_LIMIT, DEFAULT_PARTS_LIMIT)));
 
   try {
@@ -118,13 +117,13 @@ export async function getActiveDrawingForPart(
   if (typeof partId !== 'string' || partId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }
-  const uid = getCurrentUserUid();
-  if (!uid) {
-    return { ok: false, reason: 'not-authenticated' };
-  }
   const db = resolveFirestoreOrFail();
   if (!db) {
     return { ok: false, reason: 'not-configured' };
+  }
+
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) {
+    return { ok: false, reason: 'not-authenticated' };
   }
 
   try {
@@ -169,13 +168,13 @@ export async function listDrawingsForPart(
   if (typeof partId !== 'string' || partId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }
-  const uid = getCurrentUserUid();
-  if (!uid) {
-    return { ok: false, reason: 'not-authenticated' };
-  }
   const db = resolveFirestoreOrFail();
   if (!db) {
     return { ok: false, reason: 'not-configured' };
+  }
+
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) {
+    return { ok: false, reason: 'not-authenticated' };
   }
 
   try {
@@ -210,13 +209,13 @@ export async function getDrawingById(
   if (typeof drawingId !== 'string' || drawingId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }
-  const uid = getCurrentUserUid();
-  if (!uid) {
-    return { ok: false, reason: 'not-authenticated' };
-  }
   const db = resolveFirestoreOrFail();
   if (!db) {
     return { ok: false, reason: 'not-configured' };
+  }
+
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) {
+    return { ok: false, reason: 'not-authenticated' };
   }
 
   try {

@@ -50,6 +50,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { resolve as resolvePath, join as joinPath } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -109,6 +110,11 @@ interface ParsedPart {
   customer: string;
   description: string;
   revisions: ParsedRevision[];
+}
+
+interface ParsedInventory {
+  customer: string;
+  parts: ParsedPart[];
 }
 
 interface CliOptions {
@@ -399,11 +405,9 @@ function initAdmin(credentialsPath: string | null): void {
   }
 
   if (credentialsPath) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const serviceAccount = JSON.parse(
-      // Import dinámico evita cargar el JSON si no se necesita.
-      // Nota: en Node/tsx, require global de ESM no existe, usamos readFileSync síncrono.
-      require('node:fs').readFileSync(credentialsPath, 'utf8'),
+      // Lee el JSON de credenciales en runtime sin usar require (ESM-safe).
+      readFileSync(credentialsPath, 'utf8'),
     ) as ServiceAccount;
     initializeApp({ credential: cert(serviceAccount) });
     return;

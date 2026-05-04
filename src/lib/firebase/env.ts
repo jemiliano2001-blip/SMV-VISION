@@ -95,3 +95,22 @@ export function getFirebaseConfig(): FirebaseClientConfig | null {
 export function isFirebaseConfigured(): boolean {
   return getFirebaseConfig() !== null;
 }
+
+function parseBooleanEnv(value: string | undefined): boolean {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+/**
+ * Bypass local para depurar Tool Crib sin sesión activa.
+ * Solo se habilita en DEV aunque la variable exista en otros entornos.
+ */
+export function isToolcribDebugUnauthAllowed(): boolean {
+  if (!import.meta.env.DEV) {
+    return false;
+  }
+  return parseBooleanEnv(import.meta.env.VITE_TOOLCRIB_DEBUG_ALLOW_UNAUTH);
+}

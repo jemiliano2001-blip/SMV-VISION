@@ -1,0 +1,44 @@
+{
+  "customer": "SUPRAJIT",
+  "parts": [
+    {
+      "partNumber": "D7PT-19E525-AA",
+      "description": "Soporte superior bracket ejemplo",
+      "revisions": [
+        {
+          "revision": "A",
+          "isActive": true,
+          "sourceType": "network",
+          "sourcePath": "\\\\smvmatamoros.ddns.net\\PRIVADO\\CLIENTES\\CLIENTES\\SUPRAJIT\\TOOL CRIB\\D7PT-19E525-AA_RevA.pdf",
+          "pdfUrl": null,
+          "checksumSha256": null,
+          "effectiveFromUTC": "2026-01-01T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "partNumber": "D7PT-19E600-BB",
+      "description": "Pieza ejemplo con pdfUrl en Storage",
+      "revisions": [
+        {
+          "revision": "01",
+          "isActive": false,
+          "sourceType": "storage",
+          "sourcePath": "toolcrib/suprajit/D7PT-19E600-BB_Rev01.pdf",
+          "pdfUrl": null,
+          "checksumSha256": null,
+          "effectiveFromUTC": "2025-11-01T00:00:00.000Z"
+        },
+        {
+          "revision": "02",
+          "isActive": true,
+          "sourceType": "storage",
+          "sourcePath": "toolcrib/suprajit/D7PT-19E600-BB_Rev02.pdf",
+          "pdfUrl": "https://firebasestorage.googleapis.com/v0/b/smv-brain.appspot.com/o/toolcrib%2Fsuprajit%2FD7PT-19E600-BB_Rev02.pdf?alt=media",
+          "checksumSha256": null,
+          "effectiveFromUTC": "2026-02-15T00:00:00.000Z"
+        }
+      ]
+    }
+  ]
+}

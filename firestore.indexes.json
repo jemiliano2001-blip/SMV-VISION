@@ -1,0 +1,71 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "analysisRuns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userUid", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "analysisRuns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolcribParts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "customer", "order": "ASCENDING" },
+        { "fieldPath": "partNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolcribParts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "partNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolcribDrawings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "partId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "createdAtUTC", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolcribDrawings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "partId", "order": "ASCENDING" },
+        { "fieldPath": "createdAtUTC", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolcribPrintLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "partId", "order": "ASCENDING" },
+        { "fieldPath": "printedAtUTC", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolcribPrintLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "printedByUid", "order": "ASCENDING" },
+        { "fieldPath": "printedAtUTC", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

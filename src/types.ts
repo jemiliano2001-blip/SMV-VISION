@@ -53,3 +53,22 @@ export interface AnalysisRunSummary {
   totalNonMatching: number;
   totalOrders: number;
 }
+
+/**
+ * Resumen agregado de una revisión activa para mostrar en el selector
+ * de Tool Crib. Se construye en la capa de datos combinando parte +
+ * dibujo activo. Mantenerlo en `types.ts` evita que la UI dependa
+ * directamente de los validadores de Firebase.
+ */
+export interface ToolcribActiveDrawingView {
+  partId: string;
+  partNumber: string;
+  customer: string;
+  description: string;
+  drawingId: string;
+  revision: string;
+  sourceType: 'network' | 'storage';
+  sourcePath: string;
+  pdfUrl: string | null;
+  effectiveFromUTC: string | null;
+}

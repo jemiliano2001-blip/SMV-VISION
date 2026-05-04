@@ -50,8 +50,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { resolve as resolvePath } from 'node:path';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { resolve as resolvePath, join as joinPath } from 'node:path';
 import { argv, exit } from 'node:process';
 import {
   applicationDefault,
@@ -112,19 +112,27 @@ interface ParsedPart {
 }
 
 interface CliOptions {
-  inventoryPath: string;
+  inventoryPath: string | null;
+  scanPath: string | null;
+  customer: string;
   credentialsPath: string | null;
   dryRun: boolean;
 }
 
 function parseCliOptions(args: readonly string[]): CliOptions {
   let inventoryPath: string | null = null;
+  let scanPath: string | null = null;
+  let customer = 'SUPRAJIT';
   let credentialsPath: string | null = null;
   let dryRun = false;
 
   for (const arg of args) {
     if (arg.startsWith('--inventory=')) {
       inventoryPath = arg.slice('--inventory='.length);
+    } else if (arg.startsWith('--scan=')) {
+      scanPath = arg.slice('--scan='.length);
+    } else if (arg.startsWith('--customer=')) {
+      customer = arg.slice('--customer='.length);
     } else if (arg.startsWith('--credentials=')) {
       credentialsPath = arg.slice('--credentials='.length);
     } else if (arg === '--dryRun' || arg === '--dry-run') {
@@ -132,15 +140,17 @@ function parseCliOptions(args: readonly string[]): CliOptions {
     }
   }
 
-  if (!inventoryPath) {
+  if (!inventoryPath && !scanPath) {
     console.error(
-      'Falta argumento obligatorio: --inventory=./ruta/inventory.json',
+      'Falta argumento obligatorio: --inventory=./ruta/inventory.json o --scan=./ruta/directorio',
     );
     exit(1);
   }
 
   return {
-    inventoryPath: resolvePath(inventoryPath),
+    inventoryPath: inventoryPath ? resolvePath(inventoryPath) : null,
+    scanPath: scanPath ? resolvePath(scanPath) : null,
+    customer,
     credentialsPath: credentialsPath ? resolvePath(credentialsPath) : null,
     dryRun,
   };
@@ -305,6 +315,84 @@ function buildDrawingDocId(partId: string, revision: string): string {
   return `drw_${digest}`;
 }
 
+async function calculateFileHash(filePath: string): Promise<string> {
+  const content = await readFile(filePath);
+  return createHash('sha256').update(content).digest('hex');
+}
+
+async function scanDirectory(dir: string, customer: string): Promise<ParsedInventory> {
+  const partsMap = new Map<string, ParsedPart>();
+
+  async function walk(currentDir: string) {
+    const entries = await readdir(currentDir);
+    for (const entry of entries) {
+      const fullPath = resolvePath(currentDir, entry);
+      const s = await stat(fullPath);
+      if (s.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+
+      if (!entry.toLowerCase().endsWith('.pdf')) continue;
+
+      // Regex para extraer partNumber y revisión del nombre del archivo
+      // Formatos soportados:
+      // - PARTNUMBER.pdf (Revision "1")
+      // - PARTNUMBER_REVA.pdf (Revision "A")
+      // - PARTNUMBER-REV1.pdf (Revision "1")
+      const match = entry.match(/^(.+?)(?:[-_]REV([A-Z0-9]+))?\.pdf$/i);
+      if (!match) continue;
+
+      const partNumber = match[1].trim().toUpperCase();
+      const revision = (match[2] ?? '1').toUpperCase();
+
+      let part = partsMap.get(partNumber);
+      if (!part) {
+        part = {
+          partNumber,
+          description: `Importado de ${entry}`,
+          customer,
+          revisions: [],
+        };
+        partsMap.set(partNumber, part);
+      }
+
+      // Evitar duplicados en el mismo scan
+      if (part.revisions.some((r) => r.revision === revision)) continue;
+
+      const checksum = await calculateFileHash(fullPath);
+
+      part.revisions.push({
+        revision,
+        isActive: true, // Por defecto la última encontrada queda activa
+        sourceType: 'network',
+        sourcePath: fullPath,
+        pdfUrl: null,
+        checksumSha256: checksum,
+        effectiveFromUTC: new Date(),
+      });
+    }
+  }
+
+  await walk(dir);
+
+  // Regla: Si hay múltiples revisiones para una parte en el scan,
+  // solo la última (por orden alfabético de revisión) queda activa.
+  for (const part of partsMap.values()) {
+    if (part.revisions.length > 1) {
+      part.revisions.sort((a, b) => b.revision.localeCompare(a.revision));
+      part.revisions.forEach((r, idx) => {
+        r.isActive = idx === 0;
+      });
+    }
+  }
+
+  return {
+    customer,
+    parts: Array.from(partsMap.values()),
+  };
+}
+
 function initAdmin(credentialsPath: string | null): void {
   if (getApps().length > 0) {
     return;
@@ -423,20 +511,28 @@ async function upsertDrawings(
 
 async function run(): Promise<void> {
   const options = parseCliOptions(argv.slice(2));
-  console.info('[toolcribBootstrap] leyendo inventario', options.inventoryPath);
+  let inventory: ParsedInventory;
 
-  const rawJson = await readFile(options.inventoryPath, 'utf8');
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(rawJson) as unknown;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Inventario JSON inválido: ${message}`);
+  if (options.scanPath) {
+    console.info('[toolcribBootstrap] escaneando directorio', options.scanPath);
+    inventory = await scanDirectory(options.scanPath, options.customer);
+  } else if (options.inventoryPath) {
+    console.info('[toolcribBootstrap] leyendo inventario', options.inventoryPath);
+    const rawJson = await readFile(options.inventoryPath, 'utf8');
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(rawJson) as unknown;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Inventario JSON inválido: ${message}`);
+    }
+    inventory = parseInventory(parsedJson);
+  } else {
+    throw new Error('No se especificó --inventory ni --scan');
   }
 
-  const inventory = parseInventory(parsedJson);
   console.info(
-    `[toolcribBootstrap] inventario válido: ${inventory.parts.length} partes para cliente "${inventory.customer}"`,
+    `[toolcribBootstrap] inventario listo: ${inventory.parts.length} partes para cliente "${inventory.customer}"`,
   );
 
   initAdmin(options.credentialsPath);

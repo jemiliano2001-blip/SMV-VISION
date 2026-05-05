@@ -35,10 +35,10 @@ import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/Tool
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
 
 const ORDER_PROMPT_VERSION = 'orders-v4-precise';
-const BLUEPRINT_PROMPT_VERSION = 'blueprints-v7-pro-vision';
+const BLUEPRINT_PROMPT_VERSION = 'blueprints-v12-ut2033-standard';
 const SMV_VISION_APP_VERSION = 'smv-vision@0.0.0';
 const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
-const MAX_BLUEPRINT_CONCURRENCY = 3;
+const MAX_BLUEPRINT_CONCURRENCY = 5;
 const MIN_BLUEPRINT_MATCH_SCORE = 80;
 const BLUEPRINT_PATH_STOP_WORDS = ['TOOL', 'CRIB', 'PDF', 'REV'] as const;
 const GEMINI_ORDER_MODEL = 'gemini-3-flash-preview';
@@ -779,7 +779,9 @@ export default function App() {
     const width = xmax - xmin;
     const height = ymax - ymin;
     if (width <= 50 || height <= 50) return false; // < 5% of the 0-1000 grid
-    if (width * height > 940 * 940) return false; // > 88% area => plano completo
+    if (width * height > 750 * 750) return false; // > ~56% area => cubre múltiples vistas
+    // Franja/sliver: si el lado corto es < 25% del lado largo, es un strip incorrecto
+    if (Math.min(width, height) / Math.max(width, height) < 0.25) return false;
     return true;
   };
 
@@ -793,7 +795,7 @@ export default function App() {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
-        const padding = 20;
+        const padding = 12;
         const [ymin, xmin, ymax, xmax] = box;
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d')!;
@@ -993,9 +995,9 @@ Reglas de extracción:
             }
 
             const workerResult = await rasterizeAndNormalizePdf(task.workshopPdf.dataUrl, {
-              maxDim: 1300,
-              renderScale: 2,
-              jpegQuality: 0.8,
+              maxDim: 1024,
+              renderScale: 1.5,
+              jpegQuality: 0.85,
               normalizeQuality: 0.68,
             });
 
@@ -1008,14 +1010,16 @@ Reglas de extracción:
                   { text: `Analiza este plano de taller y devuelve EXCLUSIVAMENTE un JSON array.
 Campos: pieza_detectada, descripcionVisual, isometricBoundingBox [ymin, xmin, ymax, xmax] (0 a 1000).
 
-Reglas de extracción:
-1) Identifica el "Código de Parte" o "Número de Dibujo" (Drawing Number). Búscalo en el Cajetín (Title Block), que normalmente está en la esquina INFERIOR DERECHA del plano. Úsalo en pieza_detectada.
-2) Devuelve SIEMPRE un isometricBoundingBox que encuadre la vista principal (Isométrica) o la vista más clara. Las vistas principales ocupan la mitad superior o centro del plano; el Cajetín está abajo a la derecha.
-3) El isometricBoundingBox debe encuadrar MUY AJUSTADO solo la geometría de la pieza. Excluye el Cajetín, cotas, líneas de dimensión, notas, bordes del plano y logos.
-4) Si hay múltiples piezas diferentes en el mismo plano, devuelve una entrada para cada una.
-5) Prioriza la vista Isométrica. Si no hay, usa la Frontal o Superior más detallada.
-6) Si no hay vistas útiles, devuelve [].
-7) No inventes información.` },
+Reglas de extracción (ESTILO UT2033):
+1) Identifica el "Código de Parte" o "Número de Dibujo". Búscalo en el Cajetín (Title Block), esquina INFERIOR DERECHA.
+2) PRIORIDAD ABSOLUTA: Elige la Vista Isométrica 3D (el dibujo que muestra la pieza con volumen). Si existe, el bounding box DEBE ser sobre esta vista. Usa una vista 2D solo si no hay isométrica.
+3) GEOMETRÍA LIMPIA: El bounding box debe contener ÚNICAMENTE la geometría sólida de la pieza.
+4) REGLA CRÍTICA: Excluye ABSOLUTAMENTE todas las líneas de dimensión (cotas), flechas, números de medidas, líneas de extensión y notas de texto que rodeen la pieza. El recorte debe verse "limpio" como una foto de catálogo.
+5) Excluye el marco del plano, marcas de coordenadas en los bordes, cajetines y logos.
+6) El bounding box debe estar bien centrado sobre la masa física de la pieza.
+7) Si hay múltiples piezas diferentes en el mismo plano, devuelve una entrada por pieza.
+8) Si no hay vistas útiles, devuelve [].
+9) No inventes información.` },
                   prepareImagePart(workerResult.imageDataUrl)
                 ]
               }],
@@ -1314,8 +1318,8 @@ Reglas de extracción:
         lineColor: [0, 0, 0]
       },
       columnStyles: {
-        0: { cellWidth: 80,  halign: 'center' },
-        1: { cellWidth: 240, fontStyle: 'bold', fontSize: 9 },
+        0: { cellWidth: 95,  halign: 'center' },
+        1: { cellWidth: 225, fontStyle: 'bold', fontSize: 9 },
         2: { cellWidth: 45,  halign: 'center', fontStyle: 'bold', fontSize: 11 },
         3: { cellWidth: 70,  halign: 'center', fontStyle: 'bold' },
         4: { cellWidth: 80,  halign: 'center' },
@@ -1324,7 +1328,7 @@ Reglas de extracción:
         if (hookData.section === 'body' && hookData.column.index === 0) {
           const order = sortedResults[hookData.row.index];
           if (order?.isometricView) {
-            hookData.cell.styles.minCellHeight = 65; // Altura reducida para Portrait
+            hookData.cell.styles.minCellHeight = 82;
           }
         }
       },
@@ -1336,7 +1340,7 @@ Reglas de extracción:
         if (!order?.isometricView) {
           return;
         }
-        const imageSize = 55; // Imagen ligeramente más pequeña
+        const imageSize = 72;
         const imageX = hookData.cell.x + (hookData.cell.width - imageSize) / 2;
         const imageY = hookData.cell.y + (hookData.cell.height - imageSize) / 2;
         try {

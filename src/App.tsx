@@ -35,14 +35,14 @@ import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/Tool
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
 
 const ORDER_PROMPT_VERSION = 'orders-v4-precise';
-const BLUEPRINT_PROMPT_VERSION = 'blueprints-v12-ut2033-standard';
+const BLUEPRINT_PROMPT_VERSION = 'blueprints-v14-twopass-refine';
 const SMV_VISION_APP_VERSION = 'smv-vision@0.0.0';
 const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
 const MAX_BLUEPRINT_CONCURRENCY = 5;
 const MIN_BLUEPRINT_MATCH_SCORE = 80;
 const BLUEPRINT_PATH_STOP_WORDS = ['TOOL', 'CRIB', 'PDF', 'REV'] as const;
-const GEMINI_ORDER_MODEL = 'gemini-3-flash-preview';
-const GEMINI_BLUEPRINT_MODEL = 'gemini-3-flash-preview';
+const GEMINI_ORDER_MODEL = 'gemini-3.5-flash';
+const GEMINI_BLUEPRINT_MODEL = 'gemini-3.5-flash';
 const FETCH_TIMEOUT_MS = 30_000;
 
 async function fetchPdfAsDataUrl(url: string): Promise<string> {
@@ -210,7 +210,6 @@ function parseBlueprintResponse(text: string): BlueprintSpec[] {
 
       return {
         pieza_detectada: piece,
-        descripcionVisual: asString(item.descripcionVisual) || 'Sin descripción visual',
         isometricBoundingBox: box,
       } satisfies BlueprintSpec;
     })
@@ -612,6 +611,49 @@ function selectBestBlueprintMatch(orderPiece: string, candidate: BlueprintSource
   };
 }
 
+// Parses common date string formats used in workshop orders and returns the age
+// in calendar days from today, or null if the string cannot be parsed.
+function getOrderAgeDays(fecha: string): number | null {
+  let d: number, m: number, y: number;
+
+  // DD/MM/YYYY or D/M/YYYY
+  let match = fecha.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    [, d, m, y] = match.map(Number) as [string, number, number, number];
+    const date = new Date(y, m - 1, d);
+    if (!isNaN(date.getTime())) {
+      return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
+    }
+  }
+  // DD-MM-YYYY
+  match = fecha.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (match) {
+    [, d, m, y] = match.map(Number) as [string, number, number, number];
+    const date = new Date(y, m - 1, d);
+    if (!isNaN(date.getTime())) {
+      return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
+    }
+  }
+  // YYYY-MM-DD (ISO)
+  match = fecha.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    [, y, m, d] = match.map(Number) as [string, number, number, number];
+    const date = new Date(y, m - 1, d);
+    if (!isNaN(date.getTime())) {
+      return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
+    }
+  }
+  return null;
+}
+
+function formatAgeDays(days: number): string {
+  if (days === 0) return 'Hoy';
+  if (days === 1) return '1 día';
+  if (days < 14) return `${days} días`;
+  if (days < 60) return `${Math.floor(days / 7)} sem`;
+  return `${Math.floor(days / 30)} meses`;
+}
+
 export default function App() {
   const [orderPdf, setOrderPdf] = useState<string | null>(null);
   const [orderPdfName, setOrderPdfName] = useState<string | null>(null);
@@ -790,28 +832,134 @@ export default function App() {
   // on standard ISO tool-crib drawings (title block occupies the bottom-right corner).
   const FALLBACK_CENTER_BOX: number[] = [30, 30, 720, 970];
 
-  // Helper to crop image based on AI bounding box
+  // Helper to crop image based on AI bounding box.
+  // Produces a square JPEG with white padding so the isometric fits proportionally
+  // in the fixed 72×72pt cell in the PDF without distortion.
   const cropIsometricView = (base64: string, box: number[]): Promise<string> => {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const padding = 12;
         const [ymin, xmin, ymax, xmax] = box;
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d')!;
         const x = Math.max(0, (xmin / 1000) * img.width - padding);
         const y = Math.max(0, (ymin / 1000) * img.height - padding);
         const width = Math.min(img.width - x, ((xmax - xmin) / 1000) * img.width + padding * 2);
         const height = Math.min(img.height - y, ((ymax - ymin) / 1000) * img.height + padding * 2);
-        canvas.width = width;
-        canvas.height = height;
+
+        // Phase 1: crop the rectangular region
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = width;
+        cropCanvas.height = height;
+        const cropCtx = cropCanvas.getContext('2d')!;
+        cropCtx.fillStyle = '#FFFFFF';
+        cropCtx.fillRect(0, 0, width, height);
+        cropCtx.drawImage(img, x, y, width, height, 0, 0, width, height);
+
+        // Phase 2: center the crop on a white square canvas so the aspect ratio
+        // is preserved when the PDF embeds it as a fixed-size square cell.
+        const side = Math.ceil(Math.max(width, height));
+        const squareCanvas = document.createElement('canvas');
+        squareCanvas.width = side;
+        squareCanvas.height = side;
+        const squareCtx = squareCanvas.getContext('2d')!;
+        squareCtx.fillStyle = '#FFFFFF';
+        squareCtx.fillRect(0, 0, side, side);
+        squareCtx.drawImage(
+          cropCanvas,
+          0, 0, width, height,
+          Math.floor((side - width) / 2), Math.floor((side - height) / 2), width, height,
+        );
+
+        resolve(squareCanvas.toDataURL('image/jpeg', 0.9));
+      };
+      img.src = base64;
+    });
+  };
+
+  // Crops the image to the bounding box without any padding or square-padding.
+  // Used as the intermediate input for the two-pass box refinement.
+  const cropToBoxRaw = (base64: string, box: number[]): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const [ymin, xmin, ymax, xmax] = box;
+        const x = Math.max(0, (xmin / 1000) * img.width);
+        const y = Math.max(0, (ymin / 1000) * img.height);
+        const width = Math.min(img.width - x, ((xmax - xmin) / 1000) * img.width);
+        const height = Math.min(img.height - y, ((ymax - ymin) / 1000) * img.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.floor(width));
+        canvas.height = Math.max(1, Math.floor(height));
+        const ctx = canvas.getContext('2d')!;
         ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, x, y, width, height, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL('image/jpeg', 0.9));
       };
       img.src = base64;
     });
+  };
+
+  // Second-pass refinement: re-asks Gemini to tighten the bounding box on the
+  // already-cropped region of the blueprint. Returns the refined box in the
+  // original image's 0–1000 coordinate space, or the original box if the second
+  // pass fails or returns an unusable result.
+  const refineSpecBox = async (
+    ai: GoogleGenAI,
+    imageDataUrl: string,
+    spec: BlueprintSpec,
+  ): Promise<BlueprintSpec> => {
+    if (!isValidBoundingBox(spec.isometricBoundingBox)) return spec;
+    try {
+      const croppedImageUrl = await cropToBoxRaw(imageDataUrl, spec.isometricBoundingBox);
+      const response = await ai.models.generateContent({
+        model: GEMINI_BLUEPRINT_MODEL,
+        contents: [{
+          role: 'user',
+          parts: [
+            { text: `Esta imagen es un recorte de un plano que contiene la vista de una pieza mecánica.
+Devuelve EXCLUSIVAMENTE un JSON con un campo "box" = [ymin, xmin, ymax, xmax] en escala 0-1000 sobre ESTA imagen.
+El box debe centrar la geometría sólida de la pieza eliminando espacio en blanco, cotas y notas a su alrededor.
+Si la pieza ya ocupa toda la imagen y no hay margen recortable, devuelve [0, 0, 1000, 1000].
+No inventes información.` },
+            prepareImagePart(croppedImageUrl),
+          ],
+        }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              box: {
+                type: Type.ARRAY,
+                items: { type: Type.NUMBER },
+              },
+            },
+            required: ["box"],
+          },
+        },
+      });
+      const parsed = JSON.parse(response.text.trim()) as { box?: unknown };
+      const refinedRelative = parseBoundingBox(parsed.box);
+      if (!refinedRelative) return spec;
+
+      // Map refined box from cropped-image 0-1000 space back to original-image 0-1000 space.
+      const [oYmin, oXmin, oYmax, oXmax] = spec.isometricBoundingBox;
+      const origW = oXmax - oXmin;
+      const origH = oYmax - oYmin;
+      const [rYmin, rXmin, rYmax, rXmax] = refinedRelative;
+      const mapped: [number, number, number, number] = [
+        oYmin + (rYmin / 1000) * origH,
+        oXmin + (rXmin / 1000) * origW,
+        oYmin + (rYmax / 1000) * origH,
+        oXmin + (rXmax / 1000) * origW,
+      ];
+      if (!isValidBoundingBox(mapped)) return spec;
+      return { ...spec, isometricBoundingBox: mapped };
+    } catch (e) {
+      console.warn('[smv-vision] box refinement failed, keeping initial box', e);
+      return spec;
+    }
   };
 
   const extractInfo = async () => {
@@ -844,22 +992,24 @@ export default function App() {
     let mergeMs = 0;
     
     try {
-      // 1. Extract Orders (Pro)
-      let ordersList: ExtractedOrder[] = [];
-      setExtractingStep('Leyendo tabla de pedidos...');
-      try {
-        const orderHash = await createDocumentHash(orderPdf);
-        const cachedOrders = await readCachedValue<ExtractedOrder[]>('orders', orderHash, ORDER_PROMPT_VERSION);
-        if (cachedOrders) {
-          ordersList = cachedOrders;
-        } else {
-          const orderAiStart = performance.now();
-          const response = await ai.models.generateContent({
-            model: GEMINI_ORDER_MODEL,
-            contents: [{
-              role: 'user',
-              parts: [
-                { text: `Analiza esta tabla PDF de órdenes de taller tipo tool crib.
+      // 1 + 1.5: Extract orders and fetch Tool Crib library concurrently — they are independent.
+      setExtractingStep('Leyendo pedidos y biblioteca...');
+      const [ordersList, libResult] = await Promise.all([
+        (async (): Promise<ExtractedOrder[]> => {
+          try {
+            const orderHash = await createDocumentHash(orderPdf);
+            const cachedOrders = await readCachedValue<ExtractedOrder[]>('orders', orderHash, ORDER_PROMPT_VERSION);
+            if (cachedOrders) {
+              setOrderLoadingState('done');
+              return cachedOrders;
+            }
+            const orderAiStart = performance.now();
+            const response = await ai.models.generateContent({
+              model: GEMINI_ORDER_MODEL,
+              contents: [{
+                role: 'user',
+                parts: [
+                  { text: `Analiza esta tabla PDF de órdenes de taller tipo tool crib.
 Devuelve EXCLUSIVAMENTE un JSON array con objetos que tengan los campos exactos:
 - pieza
 - cantidad
@@ -876,87 +1026,124 @@ Reglas de extracción:
 6) Excluye filas de totales (ej: "Piezas Requeridas", "Piezas Terminadas", "Restantes a Crear").
 7) Si no hay urgencia explícita, usa "Normal".
 8) No inventes campos ni texto fuera del JSON.` },
-                preparePdfPart(orderPdf)
-              ]
-            }],
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    pieza: { type: Type.STRING },
-                    cantidad: { type: Type.STRING },
-                    orden: { type: Type.STRING },
-                    fecha: { type: Type.STRING },
-                    prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] }
-                  },
-                  required: ["pieza", "cantidad", "orden", "fecha", "prioridad"]
+                  preparePdfPart(orderPdf)
+                ]
+              }],
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      pieza: { type: Type.STRING },
+                      cantidad: { type: Type.STRING },
+                      orden: { type: Type.STRING },
+                      fecha: { type: Type.STRING },
+                      prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] }
+                    },
+                    required: ["pieza", "cantidad", "orden", "fecha", "prioridad"]
+                  }
                 }
               }
-            }
-          });
-          aiOrderMs += performance.now() - orderAiStart;
-          ordersList = parseOrdersResponse(response.text.trim());
-          await writeCachedValue('orders', orderHash, ORDER_PROMPT_VERSION, ordersList);
-        }
-        setOrderLoadingState('done');
-      } catch (e) {
-        setOrderLoadingState('error');
-        throw e;
-      }
+            });
+            aiOrderMs += performance.now() - orderAiStart;
+            const parsed = parseOrdersResponse(response.text.trim());
+            await writeCachedValue('orders', orderHash, ORDER_PROMPT_VERSION, parsed);
+            setOrderLoadingState('done');
+            return parsed;
+          } catch (e) {
+            setOrderLoadingState('error');
+            throw e;
+          }
+        })(),
+        listActiveDrawingViews({ customer: 'SUPRAJIT' }),
+      ]);
 
-      // 1.5 Auto-Matching: Buscar en biblioteca Tool Crib
+      // Auto-Matching: attach blueprints from library that match the extracted orders
       setExtractingStep('Buscando planos en biblioteca...');
-      const libResult = await listActiveDrawingViews({ customer: 'SUPRAJIT' });
       if (libResult.ok) {
         const library = libResult.value;
         const autoAttachedIds = new Set(Object.values(toolcribPdfToDrawing));
-        
+
+        // Pre-compute signals once per library entry and per manual PDF (#3, #5)
+        const librarySignals = new Map(
+          library.map((view) => [view.drawingId, extractLibrarySignals(view)])
+        );
+        const manualPdfSignals = currentWorkshopPdfs.map((pdf) => ({
+          pdf,
+          signals: extractBlueprintSignals(pdf.relativePath, []),
+        }));
+
+        // Score all orders synchronously, collect unique library matches to fetch (#3, #5)
+        const toFetchMap = new Map<string, { bestView: ToolcribActiveDrawingView; pdfId: string }>();
+
         for (const order of ordersList) {
-          // Si ya tenemos un plano cargado manualmente que machea bien, saltamos
-          const hasManualMatch = currentWorkshopPdfs.some(pdf => 
-            calculatePieceMatchScore(order.pieza, pdf.relativePath) >= MIN_BLUEPRINT_MATCH_SCORE
+          const orderSignals = extractOrderSignals(order.pieza);
+
+          const hasManualMatch = manualPdfSignals.some(
+            ({ signals }) => scorePieceMatch(orderSignals, signals) >= MIN_BLUEPRINT_MATCH_SCORE
           );
           if (hasManualMatch) continue;
 
-          // Buscar mejor candidato en biblioteca
           let bestView: ToolcribActiveDrawingView | null = null;
           let bestScore = 0;
 
           for (const view of library) {
-            const signals = extractLibrarySignals(view);
-            const score = scorePieceMatch(extractOrderSignals(order.pieza), signals);
+            const score = scorePieceMatch(orderSignals, librarySignals.get(view.drawingId)!);
             if (score > bestScore) {
               bestScore = score;
               bestView = view;
             }
           }
 
-          if (bestView && bestScore >= MIN_BLUEPRINT_MATCH_SCORE && bestView.pdfUrl) {
-            if (!autoAttachedIds.has(bestView.drawingId)) {
-              setExtractingStep(`Auto-adjuntando: ${bestView.partNumber}...`);
-              try {
-                const dataUrl = await fetchPdfAsDataUrl(bestView.pdfUrl);
-                const pdfId = `toolcrib-${bestView.drawingId}-${crypto.randomUUID()}`;
-                const newUpload: WorkshopPdfUpload = {
-                  id: pdfId,
-                  name: `${bestView.partNumber} (Rev ${bestView.revision}).pdf`,
-                  relativePath: bestView.sourcePath || bestView.partNumber,
-                  dataUrl,
-                };
-                
-                currentWorkshopPdfs.push(newUpload);
-                autoAttachedIds.add(bestView.drawingId);
-                
-                // Actualizar estado de UI para que el usuario vea qué se añadió
-                setWorkshopPdfs(prev => [...prev, newUpload]);
-                setToolcribPdfToDrawing(prev => ({ ...prev, [pdfId]: bestView!.drawingId }));
-              } catch (fetchErr) {
-                console.warn(`Falló auto-attach de ${bestView.partNumber}`, fetchErr);
-              }
+          if (
+            bestView &&
+            bestScore >= MIN_BLUEPRINT_MATCH_SCORE &&
+            bestView.pdfUrl &&
+            !autoAttachedIds.has(bestView.drawingId) &&
+            !toFetchMap.has(bestView.drawingId)
+          ) {
+            toFetchMap.set(bestView.drawingId, {
+              bestView,
+              pdfId: `toolcrib-${bestView.drawingId}-${crypto.randomUUID()}`,
+            });
+          }
+        }
+
+        // Fetch all matched blueprints in parallel (#1)
+        if (toFetchMap.size > 0) {
+          setExtractingStep(`Auto-adjuntando ${toFetchMap.size} plano(s)...`);
+          const fetchResults = await Promise.allSettled(
+            [...toFetchMap.values()].map(async ({ bestView, pdfId }) => {
+              const dataUrl = await fetchPdfAsDataUrl(bestView.pdfUrl!);
+              return { bestView, pdfId, dataUrl };
+            })
+          );
+
+          const newUploads: WorkshopPdfUpload[] = [];
+          const newDrawingMap: Record<string, string> = {};
+
+          for (const result of fetchResults) {
+            if (result.status === 'rejected') {
+              console.warn('[smv-vision] auto-attach fetch failed', result.reason);
+              continue;
             }
+            const { bestView, pdfId, dataUrl } = result.value;
+            const newUpload: WorkshopPdfUpload = {
+              id: pdfId,
+              name: `${bestView.partNumber} (Rev ${bestView.revision}).pdf`,
+              relativePath: bestView.sourcePath || bestView.partNumber,
+              dataUrl,
+            };
+            newUploads.push(newUpload);
+            newDrawingMap[pdfId] = bestView.drawingId;
+            currentWorkshopPdfs.push(newUpload);
+          }
+
+          if (newUploads.length > 0) {
+            setWorkshopPdfs((prev) => [...prev, ...newUploads]);
+            setToolcribPdfToDrawing((prev) => ({ ...prev, ...newDrawingMap }));
           }
         }
       }
@@ -967,38 +1154,130 @@ Reglas de extracción:
         return;
       }
 
-      // 2. Extract Blueprints from all pages/PDFs (Pro Vision)
-      setExtractingStep(`Analizando ${currentWorkshopPdfs.length} planos...`);
+      // 2. Render initial results immediately (progressive render) — orders only,
+      // blueprints will fill in their isometric views as they finish analyzing.
+      const initialResults: Order[] = ordersList.map((order) => ({
+        ...order,
+        haSidoAuditada: false,
+      }));
+      setResults(initialResults);
+
+      // Best-match tracking per order index, mutated as blueprints complete.
+      const bestMatchByOrder = new Map<number, { score: number; fileId: string }>();
+      const matchedBlueprintFileIds = new Set<string>();
+      let completedBlueprints = 0;
+      const totalBlueprints = currentWorkshopPdfs.length;
+      // Deduplicates identical crop operations within a single run (#6)
+      const cropCache = new Map<string, string>();
+
+      // Progressive merge: applies one blueprint result against the current state of
+      // orders, updating any order whose best match this blueprint improves on.
+      const applyBlueprintToResults = async (result: BlueprintTaskResult): Promise<void> => {
+        type Update = { orderIdx: number; partial: Partial<Order> };
+        const updates: Update[] = [];
+
+        for (let i = 0; i < ordersList.length; i++) {
+          const order = ordersList[i];
+          const match = selectBestBlueprintMatch(order.pieza, {
+            fileLabel: result.fileLabel,
+            specs: result.analysis.specs,
+          });
+          if (match.score < MIN_BLUEPRINT_MATCH_SCORE) continue;
+          const current = bestMatchByOrder.get(i);
+          if (current && current.score >= match.score) continue;
+
+          bestMatchByOrder.set(i, { score: match.score, fileId: result.fileId });
+          matchedBlueprintFileIds.add(result.fileId);
+
+          const cropBox = isValidBoundingBox(match.spec?.isometricBoundingBox)
+            ? match.spec!.isometricBoundingBox
+            : FALLBACK_CENTER_BOX;
+          let isometricView: string | undefined;
+          if (result.analysis.image) {
+            try {
+              const cropKey = `${result.fileId}:${cropBox.join(',')}`;
+              const cached = cropCache.get(cropKey);
+              if (cached !== undefined) {
+                isometricView = cached;
+              } else {
+                isometricView = await cropIsometricView(result.analysis.image, cropBox);
+                cropCache.set(cropKey, isometricView);
+              }
+            } catch (e) {
+              console.error('Auto-crop error', e);
+            }
+          }
+
+          updates.push({
+            orderIdx: i,
+            partial: {
+              haSidoAuditada: true,
+              isometricBoundingBox: match.spec?.isometricBoundingBox,
+              sourcePdfName: result.fileLabel,
+              sourcePdfPath: result.fileLabel,
+              isometricView,
+            },
+          });
+        }
+
+        if (updates.length === 0) return;
+        setResults((prev) => {
+          if (!prev) return prev;
+          const next = [...prev];
+          for (const u of updates) {
+            next[u.orderIdx] = { ...next[u.orderIdx], ...u.partial };
+          }
+          return next;
+        });
+      };
+
+      // 3. Extract Blueprints (Vision) with two-pass refinement and progressive merge.
+      setExtractingStep(`Analizando planos: 0/${totalBlueprints}`);
       const initialWorkshopStates: Record<string, 'loading'> = {};
       currentWorkshopPdfs.forEach((pdf) => { initialWorkshopStates[pdf.id] = 'loading'; });
       setWorkshopLoadingStates(initialWorkshopStates);
 
-      const blueprintTaskResults = await runWithConcurrencyLimit(
-        currentWorkshopPdfs.map((workshopPdf, index) => ({ workshopPdf, index })),
-        MAX_BLUEPRINT_CONCURRENCY,
-        async (task): Promise<BlueprintTaskResult> => {
-          try {
-            const blueprintHash = await createDocumentHash(task.workshopPdf.dataUrl);
-            const cached = await readCachedValue<BlueprintAnalysis>('blueprint', blueprintHash, BLUEPRINT_PROMPT_VERSION);
-            if (cached) {
-              enqueueWorkshopStatusPatch({ fileId: task.workshopPdf.id, status: 'done' });
-              return {
-                index: task.index,
-                fileId: task.workshopPdf.id,
-                fileLabel: task.workshopPdf.relativePath,
-                analysis: cached,
-                metrics: {
-                  pdfRasterMs: 0,
-                  aiBlueprintMs: 0,
-                },
-              };
-            }
+      // Phase A: parallel cache lookup — cache hits never enter the concurrency pool (#4)
+      const cacheCheckResults = await Promise.all(
+        currentWorkshopPdfs.map(async (pdf, index) => {
+          const hash = await createDocumentHash(pdf.dataUrl);
+          const cached = await readCachedValue<BlueprintAnalysis>('blueprint', hash, BLUEPRINT_PROMPT_VERSION);
+          return { pdf, hash, index, cached };
+        })
+      );
 
-            const workerResult = await rasterizeAndNormalizePdf(task.workshopPdf.dataUrl, {
-              maxDim: 1024,
-              renderScale: 1.5,
+      const blueprintTaskResults: BlueprintTaskResult[] = new Array(currentWorkshopPdfs.length);
+
+      // Apply cache hits immediately — no AI calls, no concurrency slot consumed
+      for (const { pdf, index, cached } of cacheCheckResults) {
+        if (!cached) continue;
+        enqueueWorkshopStatusPatch({ fileId: pdf.id, status: 'done' });
+        const taskResult: BlueprintTaskResult = {
+          index,
+          fileId: pdf.id,
+          fileLabel: pdf.relativePath,
+          analysis: cached,
+          metrics: { pdfRasterMs: 0, aiBlueprintMs: 0 },
+        };
+        blueprintTaskResults[index] = taskResult;
+        await applyBlueprintToResults(taskResult);
+        completedBlueprints += 1;
+        setExtractingStep(`Analizando planos: ${completedBlueprints}/${totalBlueprints}`);
+      }
+
+      // Phase B: only cache misses go through the rate-limited concurrency pool
+      const cacheMisses = cacheCheckResults.filter(({ cached }) => cached === null);
+      const missResults = await runWithConcurrencyLimit(
+        cacheMisses,
+        MAX_BLUEPRINT_CONCURRENCY,
+        async ({ pdf, hash, index }): Promise<BlueprintTaskResult> => {
+          let taskResult: BlueprintTaskResult;
+          try {
+            const workerResult = await rasterizeAndNormalizePdf(pdf.dataUrl, {
+              maxDim: 1536,
+              renderScale: 2.0,
               jpegQuality: 0.85,
-              normalizeQuality: 0.68,
+              normalizeQuality: 0.82,
             });
 
             const blueprintAiStart = performance.now();
@@ -1008,7 +1287,7 @@ Reglas de extracción:
                 role: 'user',
                 parts: [
                   { text: `Analiza este plano de taller y devuelve EXCLUSIVAMENTE un JSON array.
-Campos: pieza_detectada, descripcionVisual, isometricBoundingBox [ymin, xmin, ymax, xmax] (0 a 1000).
+Campos: pieza_detectada, isometricBoundingBox [ymin, xmin, ymax, xmax] (0 a 1000).
 
 Reglas de extracción (ESTILO UT2033):
 1) Identifica el "Código de Parte" o "Número de Dibujo". Búscalo en el Cajetín (Title Block), esquina INFERIOR DERECHA.
@@ -1031,28 +1310,34 @@ Reglas de extracción (ESTILO UT2033):
                     type: Type.OBJECT,
                     properties: {
                       pieza_detectada: { type: Type.STRING },
-                      descripcionVisual: { type: Type.STRING },
                       isometricBoundingBox: {
                         type: Type.ARRAY,
                         items: { type: Type.NUMBER },
                       },
                     },
-                    required: ["pieza_detectada", "descripcionVisual", "isometricBoundingBox"]
+                    required: ["pieza_detectada", "isometricBoundingBox"]
                   }
                 }
               }
             });
             const aiElapsed = performance.now() - blueprintAiStart;
+            const initialSpecs = parseBlueprintResponse(response.text.trim());
+
+            // Two-pass box refinement in parallel across all specs (#2)
+            const refinedSpecs = await Promise.all(
+              initialSpecs.map((spec) => refineSpecBox(ai, workerResult.imageDataUrl, spec))
+            );
+
             const analysis: BlueprintAnalysis = {
-              specs: parseBlueprintResponse(response.text.trim()),
+              specs: refinedSpecs,
               image: workerResult.imageDataUrl,
             };
-            await writeCachedValue('blueprint', blueprintHash, BLUEPRINT_PROMPT_VERSION, analysis);
-            enqueueWorkshopStatusPatch({ fileId: task.workshopPdf.id, status: 'done' });
-            return {
-              index: task.index,
-              fileId: task.workshopPdf.id,
-              fileLabel: task.workshopPdf.relativePath,
+            await writeCachedValue('blueprint', hash, BLUEPRINT_PROMPT_VERSION, analysis);
+            enqueueWorkshopStatusPatch({ fileId: pdf.id, status: 'done' });
+            taskResult = {
+              index,
+              fileId: pdf.id,
+              fileLabel: pdf.relativePath,
               analysis,
               metrics: {
                 pdfRasterMs: workerResult.metrics.pdfRasterMs + workerResult.metrics.normalizeMs,
@@ -1060,101 +1345,49 @@ Reglas de extracción (ESTILO UT2033):
               },
             };
           } catch (e) {
-            enqueueWorkshopStatusPatch({ fileId: task.workshopPdf.id, status: 'error' });
-            console.error('[smv-vision] blueprint analysis failed for', task.workshopPdf.name, e);
-            return {
-              index: task.index,
-              fileId: task.workshopPdf.id,
-              fileLabel: task.workshopPdf.relativePath,
+            enqueueWorkshopStatusPatch({ fileId: pdf.id, status: 'error' });
+            console.error('[smv-vision] blueprint analysis failed for', pdf.name, e);
+            taskResult = {
+              index,
+              fileId: pdf.id,
+              fileLabel: pdf.relativePath,
               analysis: { specs: [], image: '' },
               metrics: { pdfRasterMs: 0, aiBlueprintMs: 0 },
             };
           }
+
+          // Progressive merge + counter update
+          await applyBlueprintToResults(taskResult);
+          completedBlueprints += 1;
+          setExtractingStep(`Analizando planos: ${completedBlueprints}/${totalBlueprints}`);
+          return taskResult;
         },
       );
+
+      for (const result of missResults) {
+        blueprintTaskResults[result.index] = result;
+      }
+
       flushWorkshopStatePatches();
-      const blueprintResults = blueprintTaskResults
-        .sort((a, b) => a.index - b.index)
-        .map((entry) => ({
-          fileId: entry.fileId,
-          fileLabel: entry.fileLabel,
-          ...entry.analysis,
-        }));
       blueprintTaskResults.forEach((entry) => {
         pdfRasterMs += entry.metrics.pdfRasterMs;
         aiBlueprintMs += entry.metrics.aiBlueprintMs;
       });
 
-      // 3. Merge and Populate Results
+      // 4. Final summary
       setExtractingStep('Generando reporte final...');
       const mergeStart = performance.now();
-      let finalResults: Order[] = [];
-      const matchedBlueprintFileIds = new Set<string>();
-
-      finalResults = await Promise.all(ordersList.map(async (order) => {
-        let bestMatch: BlueprintSpec | null = null;
-        let bestScore = 0;
-        let sourceImg: string | null = null;
-        let sourceFileId: string | null = null;
-        let sourceFileLabel: string | null = null;
-
-        for (const res of blueprintResults) {
-          const match = selectBestBlueprintMatch(order.pieza, {
-            fileLabel: res.fileLabel,
-            specs: res.specs,
-          });
-          if (match.score >= MIN_BLUEPRINT_MATCH_SCORE && match.score > bestScore) {
-            bestMatch = match.spec;
-            bestScore = match.score;
-            sourceImg = res.image;
-            sourceFileId = res.fileId;
-            sourceFileLabel = res.fileLabel;
-          }
-        }
-
-        if (sourceFileId) {
-          matchedBlueprintFileIds.add(sourceFileId);
-        }
-
-        const resObj: Order = {
-          ...order,
-          haSidoAuditada: !!bestMatch || !!sourceFileLabel,
-          descripcionVisual:
-            bestMatch?.descripcionVisual
-            || (sourceFileLabel
-              ? "Vista general del plano (sin vista principal detectada)."
-              : "Detalles técnicos no encontrados en planos."),
-          isometricBoundingBox: bestMatch?.isometricBoundingBox,
-          sourcePdfName: sourceFileLabel ?? undefined,
-          sourcePdfPath: sourceFileLabel ?? undefined,
-        };
-
-        if (sourceImg) {
-          try {
-            const cropBox = isValidBoundingBox(resObj.isometricBoundingBox)
-              ? resObj.isometricBoundingBox
-              : FALLBACK_CENTER_BOX;
-            resObj.isometricView = await cropIsometricView(sourceImg, cropBox);
-          } catch (e) {
-            console.error("Auto-crop error", e);
-          }
-        }
-        return resObj;
-      }));
-
-      if (finalResults.length === 0) {
+      if (ordersList.length === 0) {
         throw new Error("No fue posible extraer órdenes desde la tabla de entrada.");
       }
-
       mergeMs = performance.now() - mergeStart;
-      const totalAudited = finalResults.filter((result) => result.haSidoAuditada).length;
-      setResults(finalResults);
+      const totalAudited = bestMatchByOrder.size;
       setAnalysisSummary({
         totalLoaded: currentWorkshopPdfs.length,
-        totalAnalyzed: blueprintResults.length,
+        totalAnalyzed: blueprintTaskResults.length,
         totalAudited,
-        totalNonMatching: Math.max(0, blueprintResults.length - matchedBlueprintFileIds.size),
-        totalOrders: finalResults.length,
+        totalNonMatching: Math.max(0, blueprintTaskResults.length - matchedBlueprintFileIds.size),
+        totalOrders: ordersList.length,
       });
       const latestMetrics: AnalysisMetrics = {
         totalMs: performance.now() - runStart,
@@ -1167,10 +1400,10 @@ Reglas de extracción (ESTILO UT2033):
 
       const auditSummary = {
         totalLoaded: currentWorkshopPdfs.length,
-        totalAnalyzed: blueprintResults.length,
+        totalAnalyzed: blueprintTaskResults.length,
         totalAudited,
-        totalNonMatching: Math.max(0, blueprintResults.length - matchedBlueprintFileIds.size),
-        totalOrders: finalResults.length,
+        totalNonMatching: Math.max(0, blueprintTaskResults.length - matchedBlueprintFileIds.size),
+        totalOrders: ordersList.length,
       };
       void (async () => {
         try {
@@ -1284,72 +1517,130 @@ Reglas de extracción (ESTILO UT2033):
       headerY + 12,
     );
 
-    const sortedResults: Order[] = [
-      ...results.filter((order) => !!order.isometricView),
-      ...results.filter((order) => !order.isometricView),
+    // Sort URGENTE first (oldest first within each group), then Normal (oldest first).
+    const sortByAgeDesc = (a: Order, b: Order): number => {
+      const ageA = getOrderAgeDays(a.fecha) ?? -1;
+      const ageB = getOrderAgeDays(b.fecha) ?? -1;
+      return ageB - ageA;
+    };
+    const withBlueprint = results.filter((o) => !!o.isometricView);
+    const pendientes = results.filter((o) => !o.isometricView);
+    const sortGroup = (group: Order[]): Order[] => [
+      ...group.filter((o) => o.prioridad === 'URGENTE').sort(sortByAgeDesc),
+      ...group.filter((o) => o.prioridad !== 'URGENTE').sort(sortByAgeDesc),
     ];
+    const sortedWithBlueprint = sortGroup(withBlueprint);
+    const sortedPendientes = sortGroup(pendientes);
 
-    const bodyRows: RowInput[] = sortedResults.map((order) => [
-      '', // Espacio para el dibujo
-      order.pieza,
-      order.cantidad,
-      order.orden,
-      order.fecha,
-    ]);
-
-    autoTable(doc, {
-      startY: headerY + 20,
-      head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
-      body: bodyRows,
-      theme: 'grid',
-      headStyles: { 
-        fillColor: [0, 0, 0], 
-        textColor: [255, 255, 255], 
-        fontStyle: 'bold', 
-        fontSize: 9,
-        halign: 'center'
-      },
-      styles: { 
-        fontSize: 8, 
-        cellPadding: 4, 
-        overflow: 'linebreak', 
-        valign: 'middle',
-        lineWidth: 1,
-        lineColor: [0, 0, 0]
-      },
-      columnStyles: {
-        0: { cellWidth: 95,  halign: 'center' },
-        1: { cellWidth: 225, fontStyle: 'bold', fontSize: 9 },
-        2: { cellWidth: 45,  halign: 'center', fontStyle: 'bold', fontSize: 11 },
-        3: { cellWidth: 70,  halign: 'center', fontStyle: 'bold' },
-        4: { cellWidth: 80,  halign: 'center' },
-      },
-      didParseCell: (hookData: CellHookData) => {
-        if (hookData.section === 'body' && hookData.column.index === 0) {
-          const order = sortedResults[hookData.row.index];
-          if (order?.isometricView) {
-            hookData.cell.styles.minCellHeight = 82;
-          }
-        }
-      },
-      didDrawCell: (hookData: CellHookData) => {
-        if (hookData.section !== 'body' || hookData.column.index !== 0) {
-          return;
-        }
-        const order = sortedResults[hookData.row.index];
-        if (!order?.isometricView) {
-          return;
-        }
-        const imageSize = 72;
-        const imageX = hookData.cell.x + (hookData.cell.width - imageSize) / 2;
-        const imageY = hookData.cell.y + (hookData.cell.height - imageSize) / 2;
-        try {
-          doc.addImage(order.isometricView, 'JPEG', imageX, imageY, imageSize, imageSize);
-        } catch (error) {
-          console.error('PDF image embedding error', error);
-        }
-      },
+    const buildRows = (orders: Order[]): RowInput[] => orders.map((order) => {
+      const days = getOrderAgeDays(order.fecha);
+      const fechaCell = days !== null
+        ? `${order.fecha}\n(${formatAgeDays(days)})`
+        : order.fecha;
+      return ['', order.pieza, order.cantidad, order.orden, fechaCell];
     });
+
+    const sharedColumnStyles = {
+      0: { cellWidth: 95,  halign: 'center' as const },
+      1: { cellWidth: 225, fontStyle: 'bold' as const, fontSize: 9 },
+      2: { cellWidth: 45,  halign: 'center' as const, fontStyle: 'bold' as const, fontSize: 11 },
+      3: { cellWidth: 70,  halign: 'center' as const, fontStyle: 'bold' as const },
+      4: { cellWidth: 80,  halign: 'center' as const },
+    };
+    const sharedStyles = {
+      fontSize: 8,
+      cellPadding: 4,
+      overflow: 'linebreak' as const,
+      valign: 'middle' as const,
+      lineWidth: 1,
+      lineColor: [0, 0, 0] as [number, number, number],
+    };
+    const sharedHeadStyles = {
+      fillColor: [0, 0, 0] as [number, number, number],
+      textColor: [255, 255, 255] as [number, number, number],
+      fontStyle: 'bold' as const,
+      fontSize: 9,
+      halign: 'center' as const,
+    };
+
+    // Draws a 4pt-wide black bar on the left edge of the DIBUJO cell for URGENTE
+    // orders. B&W-friendly visual marker that survives photocopying.
+    const drawUrgenteIndicator = (
+      order: Order | undefined,
+      hookData: CellHookData,
+    ): void => {
+      if (!order || order.prioridad !== 'URGENTE' || hookData.column.index !== 0) return;
+      doc.setFillColor(0, 0, 0);
+      doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
+    };
+
+    // Render main table: orders with blueprints
+    if (sortedWithBlueprint.length > 0) {
+      autoTable(doc, {
+        startY: headerY + 20,
+        head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
+        body: buildRows(sortedWithBlueprint),
+        theme: 'grid',
+        headStyles: sharedHeadStyles,
+        styles: sharedStyles,
+        columnStyles: sharedColumnStyles,
+        didParseCell: (hookData: CellHookData) => {
+          if (hookData.section === 'body' && hookData.column.index === 0) {
+            const order = sortedWithBlueprint[hookData.row.index];
+            if (order?.isometricView) {
+              hookData.cell.styles.minCellHeight = 82;
+            }
+          }
+        },
+        didDrawCell: (hookData: CellHookData) => {
+          if (hookData.section !== 'body') return;
+          const order = sortedWithBlueprint[hookData.row.index];
+          drawUrgenteIndicator(order, hookData);
+          if (hookData.column.index !== 0 || !order?.isometricView) return;
+          const imageSize = 72;
+          const imageX = hookData.cell.x + (hookData.cell.width - imageSize) / 2;
+          const imageY = hookData.cell.y + (hookData.cell.height - imageSize) / 2;
+          try {
+            doc.addImage(order.isometricView, 'JPEG', imageX, imageY, imageSize, imageSize);
+          } catch (error) {
+            console.error('PDF image embedding error', error);
+          }
+        },
+      });
+    }
+
+    // Render PENDIENTES section: orders without a matched blueprint
+    if (sortedPendientes.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lastY = (doc as any).lastAutoTable?.finalY ?? headerY + 20;
+      const sectionHeaderY = lastY + 28;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(0, 0, 0);
+      doc.text('PENDIENTES — SIN PLANO ENCONTRADO', 40, sectionHeaderY);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(
+        `${sortedPendientes.length} órden${sortedPendientes.length === 1 ? '' : 'es'} sin plano adjunto.`,
+        40,
+        sectionHeaderY + 12,
+      );
+
+      autoTable(doc, {
+        startY: sectionHeaderY + 20,
+        head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
+        body: buildRows(sortedPendientes),
+        theme: 'grid',
+        headStyles: sharedHeadStyles,
+        styles: sharedStyles,
+        columnStyles: sharedColumnStyles,
+        didDrawCell: (hookData: CellHookData) => {
+          if (hookData.section !== 'body') return;
+          const order = sortedPendientes[hookData.row.index];
+          drawUrgenteIndicator(order, hookData);
+        },
+      });
+    }
 
     const pageCount = doc.getNumberOfPages();
     for (let page = 1; page <= pageCount; page += 1) {
@@ -1690,6 +1981,14 @@ Reglas de extracción (ESTILO UT2033):
                             <span className="font-black text-xs uppercase text-black">
                               {order.fecha}
                             </span>
+                            {(() => {
+                              const days = getOrderAgeDays(order.fecha);
+                              return days !== null ? (
+                                <span className="block text-[10px] text-gray-400 font-normal normal-case">
+                                  {formatAgeDays(days)}
+                                </span>
+                              ) : null;
+                            })()}
                           </td>
                         </tr>
                       ))}

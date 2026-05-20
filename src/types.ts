@@ -4,7 +4,6 @@ export interface Order {
   orden: string;
   fecha: string;
   prioridad: 'URGENTE' | 'Normal';
-  descripcionVisual?: string;
   haSidoAuditada?: boolean;
   isometricView?: string;
   isometricBoundingBox?: [number, number, number, number];
@@ -22,7 +21,6 @@ export interface ExtractedOrder {
 
 export interface BlueprintSpec {
   pieza_detectada: string;
-  descripcionVisual: string;
   isometricBoundingBox: [number, number, number, number];
 }
 

@@ -46,6 +46,7 @@ import {
 import { mergeGroupedOrders, parseOrdersResponse, validateOrderPdfName } from './lib/orderMerge';
 import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/ToolcribLibraryPanel';
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
+import { upsertWorkOrders, type IncomingWorkOrder } from './lib/firebase/workOrders';
 import { fetchPdfAsDataUrl } from './lib/fetchPdf';
 
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -713,6 +714,10 @@ Reglas de extracción:
       // Merge rows with identical piece descriptions: sum quantities, join SO numbers and dates
       const ordersList = mergeGroupedOrders(rawOrders);
 
+      // Captura el dibujo de catálogo emparejado por orden, para la capa de control.
+      // Declarado aquí (no dentro de `if (libResult.ok)`) para seguir en alcance en el upsert.
+      const matchByOrder = new Map<ExtractedOrder, { drawingId: string; partId: string; score: number }>();
+
       // Auto-Matching: attach blueprints from library that match the extracted orders
       setExtractingStep('Buscando planos en biblioteca...');
       log.debug('[smv-vision][library] resultado:', libResult.ok ? `${libResult.value.length} entradas` : `FALLO: ${(libResult as { ok: false; reason: string }).reason}`);
@@ -775,6 +780,14 @@ Reglas de extracción:
               });
             }
           }
+
+          if (bestView && bestScore >= MIN_BLUEPRINT_MATCH_SCORE) {
+            matchByOrder.set(order, {
+              drawingId: bestView.drawingId,
+              partId: bestView.partId,
+              score: bestScore,
+            });
+          }
         }
 
         if (noUrlMatches.length > 0) {
@@ -819,6 +832,38 @@ Reglas de extracción:
             setToolcribPdfToDrawing((prev) => ({ ...prev, ...newDrawingMap }));
           }
         }
+      }
+
+      // Persistir TODAS las órdenes en la capa de control (incluso sin plano):
+      // una orden "Pendiente sin plano" también se debe rastrear.
+      try {
+        const incoming: IncomingWorkOrder[] = ordersList.map((order) => {
+          const m = matchByOrder.get(order);
+          return {
+            pieza: order.pieza,
+            numeroParte: order.numero_parte,
+            cantidad: order.cantidad,
+            prioridad: order.prioridad,
+            soNumber: order.orden,
+            poNumber: order.poNumber ?? '',
+            otDate: order.fecha,
+            customer: 'SUPRAJIT',
+            matchedDrawingId: m?.drawingId ?? null,
+            matchedPartId: m?.partId ?? null,
+            matchScore: m?.score ?? null,
+            sourcePdfName: orderPdfName ?? '',
+          };
+        });
+        const upsertResult = await upsertWorkOrders(incoming);
+        if (upsertResult.ok) {
+          log.debug('[smv-vision][work-orders] upsert', upsertResult.value);
+        } else {
+          // upsertResult.ok === false branch — reason is always present here
+          const failedResult = upsertResult as { ok: false; reason: string };
+          console.warn('[smv-vision][work-orders] upsert no aplicado:', failedResult.reason);
+        }
+      } catch (woErr) {
+        console.warn('[smv-vision][work-orders] upsert lanzó (inesperado)', woErr);
       }
 
       if (currentWorkshopPdfs.length === 0) {

@@ -24,15 +24,21 @@ export interface Order {
    * miniatura. Opcional porque las órdenes sin match no lo tienen.
    */
   sourceImageDataUrl?: string;
+  /** PO (orden de compra del cliente). Distinta del SO (`orden`). */
+  poNumber?: string;
+  /** Dibujo del catálogo Tool Crib emparejado con esta orden (si hubo match). */
+  matchedDrawingId?: string;
+  matchedPartId?: string;
 }
 
 export interface ExtractedOrder {
   pieza: string;
   numero_parte: string;
   cantidad: string;
-  orden: string;
-  fecha: string;
+  orden: string;       // SO (sales order)
+  fecha: string;       // OT date
   prioridad: 'URGENTE' | 'Normal';
+  poNumber: string;    // PO (purchase order) — distinct from SO, trazabilidad interna
 }
 
 export interface BlueprintSpec {
@@ -85,4 +91,43 @@ export interface ToolcribActiveDrawingView {
   sourcePath: string;
   pdfUrl: string | null;
   effectiveFromUTC: string | null;
+}
+
+/** Estado de una orden de trabajo en la capa de control. */
+export type WorkOrderStatus = 'pendiente' | 'entregada';
+
+/**
+ * Forma canónica de una orden de trabajo (una pieza de una PO) lista para
+ * la UI. Se construye normalizando el documento de Firestore. Las fechas
+ * llegan como ISO-8601 UTC (string) o null — el formateo local es del componente.
+ */
+export interface WorkOrder {
+  id: string;
+  poNumber: string;
+  soNumber: string;
+  otDate: string;
+  customer: string;
+  pieza: string;
+  numeroParte: string;
+  cantidad: string;
+  prioridad: 'URGENTE' | 'Normal';
+  status: WorkOrderStatus;
+  matchedPartId: string | null;
+  matchedDrawingId: string | null;
+  matchScore: number | null;
+  deliveredToTornero: string | null;
+  deliveredAtUTC: string | null;
+  deliveredByUid: string | null;
+  sourcePdfName: string;
+  archived: boolean;
+  createdAtUTC: string | null;
+  updatedAtUTC: string | null;
+}
+
+/** Tornero al que se le entregan planos. */
+export interface Tornero {
+  id: string;
+  name: string;
+  active: boolean;
+  createdAtUTC: string | null;
 }

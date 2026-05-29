@@ -236,8 +236,8 @@ export async function getDrawingById(
 
 /**
  * Lista las revisiones activas emparejadas con su parte, listo para usar
- * en la UI sin joins manuales. Si una parte no tiene revisión activa,
- * simplemente no aparece. Límite defensivo heredado del listado de partes.
+ * en la UI sin joins manuales. Usa 2 queries en lugar de N+1: una para partes
+ * y una para todos los planos activos; el join se hace en memoria.
  */
 export async function listActiveDrawingViews(options?: {
   customer?: string;
@@ -248,27 +248,64 @@ export async function listActiveDrawingViews(options?: {
     return { ok: false, reason: partsResult.reason, issues: partsResult.issues };
   }
 
-  const views: ToolcribActiveDrawingView[] = [];
-  for (const part of partsResult.value) {
-    const drawingResult = await getActiveDrawingForPart(part.id);
-    if (!drawingResult.ok) {
-      continue;
-    }
-    const drawing = drawingResult.value;
-    views.push({
-      partId: part.id,
-      partNumber: part.partNumber,
-      customer: part.customer,
-      description: part.description,
-      drawingId: drawing.id,
-      revision: drawing.revision,
-      sourceType: drawing.sourceType,
-      sourcePath: drawing.sourcePath,
-      pdfUrl: drawing.pdfUrl,
-      effectiveFromUTC: drawing.effectiveFromUTC,
-    });
+  const parts = partsResult.value;
+  if (parts.length === 0) {
+    return { ok: true, value: [] };
   }
-  return { ok: true, value: views };
+
+  const db = resolveFirestoreOrFail();
+  if (!db) {
+    return { ok: false, reason: 'not-configured' };
+  }
+
+  try {
+    const q = query(
+      collection(db, TOOLCRIB_DRAWINGS_COLLECTION),
+      where('isActive', '==', true),
+      limit(DEFAULT_DRAWINGS_LIMIT),
+    );
+    const snapshot = await getDocs(q);
+
+    // Build partId → most-recent active drawing map (in-memory de-dup)
+    const drawingByPartId = new Map<string, ToolcribDrawing>();
+    snapshot.forEach((docSnap) => {
+      const normalized = normalizeToolcribDrawing(docSnap.id, docSnap.data());
+      if (!normalized) return;
+      const existing = drawingByPartId.get(normalized.partId);
+      // Keep the most recently created drawing when multiple actives exist (inconsistent state)
+      if (!existing || (normalized.createdAtUTC ?? '') > (existing.createdAtUTC ?? '')) {
+        if (!existing && drawingByPartId.has(normalized.partId)) {
+          console.warn(
+            '[smv-vision][toolcrib] múltiples revisiones activas detectadas para partId',
+            normalized.partId,
+          );
+        }
+        drawingByPartId.set(normalized.partId, normalized);
+      }
+    });
+
+    const views: ToolcribActiveDrawingView[] = [];
+    for (const part of parts) {
+      const drawing = drawingByPartId.get(part.id);
+      if (!drawing) continue;
+      views.push({
+        partId: part.id,
+        partNumber: part.partNumber,
+        customer: part.customer,
+        description: part.description,
+        drawingId: drawing.id,
+        revision: drawing.revision,
+        sourceType: drawing.sourceType,
+        sourcePath: drawing.sourcePath,
+        pdfUrl: drawing.pdfUrl,
+        effectiveFromUTC: drawing.effectiveFromUTC,
+      });
+    }
+    return { ok: true, value: views };
+  } catch (error) {
+    console.warn('[smv-vision][toolcrib] listActiveDrawingViews falló', error);
+    return { ok: false, reason: 'read-failed' };
+  }
 }
 
 /**

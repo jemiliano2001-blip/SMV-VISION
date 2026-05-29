@@ -1,8 +1,10 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
+
+const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')) as { version: string };
 
 // pdf.js v5 needs the JBig2/OpenJPEG/QCMS wasm assets available at a stable,
 // unhashed URL prefix (`wasmUrl`). Copying them into `public/pdfjs-wasm/`
@@ -34,6 +36,7 @@ export default defineConfig(({mode}) => {
     plugins: [react(), tailwindcss()],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      __APP_VERSION__: JSON.stringify(pkg.version),
     },
     resolve: {
       alias: {

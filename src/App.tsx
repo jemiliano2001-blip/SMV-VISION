@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import jsPDF from 'jspdf';
 import autoTable, { CellHookData, RowInput } from 'jspdf-autotable';
@@ -16,12 +16,14 @@ import {
   AlertCircle,
   X,
   Maximize2,
+  Printer,
 } from 'lucide-react';
 import {
   AnalysisMetrics,
   AnalysisRunSummary,
   BlueprintAnalysis,
   BlueprintSpec,
+  BoundingBox,
   ExtractedOrder,
   Order,
   WorkshopPdfUpload,
@@ -31,53 +33,47 @@ import { createDocumentHash, readCachedValue, writeCachedValue } from './lib/doc
 import { runWithConcurrencyLimit } from './lib/documentAnalysis/concurrency';
 import { rasterizeAndNormalizePdf } from './lib/documentAnalysis/pdfWorkerClient';
 import { recordAnalysisRunFireAndForget } from './lib/firebase/analysisRuns';
+import { log } from './lib/log';
+import { formatAgeDays, getOrderAgeDays } from './lib/age';
+import {
+  MIN_BLUEPRINT_MATCH_SCORE,
+  extractBlueprintSignals,
+  extractLibrarySignals,
+  extractOrderSignals,
+  scorePieceMatch,
+  selectBestBlueprintMatch,
+} from './lib/matching';
+import { mergeGroupedOrders, parseOrdersResponse, validateOrderPdfName } from './lib/orderMerge';
 import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/ToolcribLibraryPanel';
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
+import { fetchPdfAsDataUrl } from './lib/fetchPdf';
 
-const ORDER_PROMPT_VERSION = 'orders-v4-precise';
-const BLUEPRINT_PROMPT_VERSION = 'blueprints-v14-twopass-refine';
-const SMV_VISION_APP_VERSION = 'smv-vision@0.0.0';
+const ORDER_PROMPT_VERSION = 'orders-v6-sublineas-dedupe';
+const BLUEPRINT_PROMPT_VERSION = 'blueprints-v15-multi-piece-variants';
+const SMV_VISION_APP_VERSION = `smv-vision@${__APP_VERSION__}`;
 const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
-const MAX_BLUEPRINT_CONCURRENCY = 5;
-const MIN_BLUEPRINT_MATCH_SCORE = 80;
-const BLUEPRINT_PATH_STOP_WORDS = ['TOOL', 'CRIB', 'PDF', 'REV'] as const;
+const MAX_BLUEPRINT_CONCURRENCY = 8;
+// Skip refinement pass for boxes that are already tight (area < 20% of the 0-1000 grid).
+// Only large/loose boxes — likely containing extra dimension lines — are worth the extra Gemini call.
+const REFINEMENT_SKIP_AREA_THRESHOLD = 200_000;
 const GEMINI_ORDER_MODEL = 'gemini-3.5-flash';
 const GEMINI_BLUEPRINT_MODEL = 'gemini-3.5-flash';
-const FETCH_TIMEOUT_MS = 30_000;
 
-async function fetchPdfAsDataUrl(url: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') resolve(reader.result);
-        else reject(new Error('Lectura de PDF no devolvió un dataURL.'));
-      };
-      reader.onerror = () => reject(new Error('No fue posible leer el PDF.'));
-      reader.readAsDataURL(blob);
-    });
-  } finally {
-    window.clearTimeout(timer);
+async function callWithRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (attempt < maxAttempts - 1) {
+        await new Promise<void>((r) => setTimeout(r, 1000 * 2 ** attempt));
+      }
+    }
   }
+  throw lastError;
 }
 
-function extractLibrarySignals(view: ToolcribActiveDrawingView): PieceMatchSignals {
-  const identifiers = new Set<string>();
-  const descriptors = new Set<string>();
-  extractPartIdentifiers(view.partNumber).forEach((id) => identifiers.add(id));
-  descriptiveTokens(view.partNumber).forEach((d) => descriptors.add(d));
-  descriptiveTokens(view.description).forEach((d) => descriptors.add(d));
-  return { identifiers: [...identifiers], descriptors: [...descriptors] };
-}
-
-const SUGGESTED_BLUEPRINTS_FOLDER = '\\\\smvmatamoros.ddns.net\\PRIVADO\\CLIENTES\\CLIENTES\\SUPRAJIT\\TOOL CRIB';
-const SUGGESTED_ORDER_REPORT_NAME = 'Suprajit reporte de tool crib - Google Sheets.pdf';
-const SUGGESTED_ORDER_REPORT_HINT = `Descargas \\ ${SUGGESTED_ORDER_REPORT_NAME}`;
 
 interface MetricsComparison {
   baseline: AnalysisMetrics;
@@ -101,39 +97,6 @@ interface BlueprintStatusPatch {
   status: 'done' | 'error';
 }
 
-interface BlueprintSpecMatch {
-  spec: BlueprintSpec | null;
-  score: number;
-}
-
-interface FilePickerWindow extends Window {
-  showDirectoryPicker?: () => Promise<DirectoryHandleLike>;
-}
-
-interface FileHandleLike {
-  kind: 'file';
-  name: string;
-  getFile: () => Promise<File>;
-}
-
-interface DirectoryHandleLike {
-  kind: 'directory';
-  name: string;
-  entries: () => AsyncIterableIterator<[string, DirectoryEntryLike]>;
-}
-
-type DirectoryEntryLike = FileHandleLike | DirectoryHandleLike;
-
-interface PickedWorkshopFile {
-  file: File;
-  relativePath: string;
-}
-
-interface DirectoryScanResult {
-  totalFiles: number;
-  pdfFiles: PickedWorkshopFile[];
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -142,45 +105,7 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function parsePriority(value: unknown): 'URGENTE' | 'Normal' {
-  return value === 'URGENTE' ? 'URGENTE' : 'Normal';
-}
-
-function isOrderSummaryRow(pieceLabel: string): boolean {
-  const normalized = normalizePieceLabel(pieceLabel);
-  return (
-    normalized.includes('PIEZAS REQUERIDAS')
-    || normalized.includes('PIEZAS TERMINADAS')
-    || normalized.includes('RESTANTES A CREAR')
-  );
-}
-
-function validateOrderPdfName(fileName: string): string | null {
-  if (fileName.trim() === SUGGESTED_ORDER_REPORT_NAME) {
-    return null;
-  }
-  return `El archivo "${fileName}" no coincide con el nombre esperado del reporte de órdenes. Debe llamarse exactamente "${SUGGESTED_ORDER_REPORT_NAME}".`;
-}
-
-function parseOrdersResponse(text: string): ExtractedOrder[] {
-  const parsed = JSON.parse(text) as unknown;
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-
-  return parsed
-    .filter(isRecord)
-    .map((item) => ({
-      pieza: asString(item.pieza),
-      cantidad: asString(item.cantidad) || 'N/A',
-      orden: asString(item.orden) || 'N/A',
-      fecha: asString(item.fecha) || 'N/A',
-      prioridad: parsePriority(item.prioridad),
-    }))
-    .filter((item) => item.pieza.length > 0 && !isOrderSummaryRow(item.pieza));
-}
-
-function parseBoundingBox(value: unknown): [number, number, number, number] | null {
+function parseBoundingBox(value: unknown): BoundingBox | null {
   if (!Array.isArray(value) || value.length !== 4) {
     return null;
   }
@@ -260,22 +185,6 @@ function isPdfFile(file: File): boolean {
   return file.name.toLowerCase().endsWith('.pdf');
 }
 
-function getRelativePath(file: File): string {
-  if (file.webkitRelativePath.length > 0) {
-    return file.webkitRelativePath;
-  }
-  return file.name;
-}
-
-function buildWorkshopPdfUpload(file: File, dataUrl: string, relativePathOverride?: string): WorkshopPdfUpload {
-  return {
-    id: `${file.name}-${file.lastModified}-${file.size}-${crypto.randomUUID()}`,
-    name: file.name,
-    relativePath: relativePathOverride ?? getRelativePath(file),
-    dataUrl,
-  };
-}
-
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -291,368 +200,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-async function collectPdfFilesFromDirectory(
-  directoryHandle: DirectoryHandleLike,
-  currentPath: string,
-  result: DirectoryScanResult,
-): Promise<void> {
-  for await (const [entryName, entryHandle] of directoryHandle.entries()) {
-    const entryPath = `${currentPath}/${entryName}`;
-    if (entryHandle.kind === 'directory') {
-      await collectPdfFilesFromDirectory(entryHandle, entryPath, result);
-      continue;
-    }
-
-    const file = await entryHandle.getFile();
-    result.totalFiles += 1;
-    if (!isPdfFile(file)) {
-      continue;
-    }
-
-    result.pdfFiles.push({
-      file,
-      relativePath: entryPath,
-    });
-  }
-}
-
-function isDirectoryPickerAbort(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError';
-}
-
-function normalizePieceLabel(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9\-/. ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function normalizedPieceVariants(value: string): string[] {
-  const normalized = normalizePieceLabel(value);
-  if (!normalized) {
-    return [];
-  }
-
-  const variants = new Set<string>();
-  variants.add(normalized);
-  variants.add(normalized.replace(/[^A-Z0-9]/g, ''));
-
-  normalized.split(' ').forEach((chunk) => {
-    const compactChunk = chunk.replace(/[^A-Z0-9]/g, '');
-    if (compactChunk.length >= 4) {
-      variants.add(compactChunk);
-    }
-  });
-
-  return [...variants].filter((entry) => entry.length > 0);
-}
-
-function pieceTokens(value: string): string[] {
-  const normalized = normalizePieceLabel(value);
-  if (!normalized) {
-    return [];
-  }
-
-  const tokenSet = new Set<string>();
-  normalized
-    .split(/[^A-Z0-9]+/g)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2)
-    .forEach((token) => {
-      tokenSet.add(token);
-    });
-
-  normalized
-    .split(' ')
-    .map((chunk) => chunk.replace(/[^A-Z0-9]/g, ''))
-    .filter((token) => token.length >= 4)
-    .forEach((token) => {
-      tokenSet.add(token);
-    });
-
-  const fullyCompacted = normalized.replace(/[^A-Z0-9]/g, '');
-  if (fullyCompacted.length >= 4) {
-    tokenSet.add(fullyCompacted);
-  }
-
-  return [...tokenSet];
-}
-
-function isStrongToken(token: string): boolean {
-  const hasLetter = /[A-Z]/.test(token);
-  const hasDigit = /\d/.test(token);
-  const hasLongDigitChain = /\d{4,}/.test(token);
-  return hasLongDigitChain || (hasLetter && hasDigit && token.length >= 4) || token.length >= 7;
-}
-
-function compactPartIdentifier(value: string): string {
-  return value
-    .replace(/[^A-Z0-9]/g, '')
-    .replace(/REV\d*$/g, '');
-}
-
-function extractPartIdentifiers(value: string): string[] {
-  const normalized = normalizePieceLabel(value);
-  if (!normalized) {
-    return [];
-  }
-
-  const ids = new Set<string>();
-  const segmentedMatches = normalized.match(/[A-Z0-9]+(?:[-/.][A-Z0-9]+)+/g) ?? [];
-  segmentedMatches.forEach((match) => {
-    const compact = compactPartIdentifier(match);
-    if (compact.length >= 5 && /\d/.test(compact)) {
-      ids.add(compact);
-    }
-  });
-
-  const compactCandidates = normalized.match(/[A-Z0-9]{5,}/g) ?? [];
-  compactCandidates.forEach((candidate) => {
-    const compact = compactPartIdentifier(candidate);
-    if (compact.length >= 5 && /\d/.test(compact)) {
-      ids.add(compact);
-    }
-  });
-
-  return [...ids];
-}
-
-function hasStrongIdentifierMatch(orderIds: string[], blueprintIds: string[]): boolean {
-  for (const orderId of orderIds) {
-    for (const blueprintId of blueprintIds) {
-      if (orderId === blueprintId) {
-        return true;
-      }
-      const shortest = Math.min(orderId.length, blueprintId.length);
-      if (
-        shortest >= 6
-        && (orderId.includes(blueprintId) || blueprintId.includes(orderId))
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-const COMMON_STOP_WORDS = new Set([
-  'PART', 'NUMBER', 'DRAWING', 'REV', 'REVISION', 'SUPRAJIT', 'TOOL', 'CRIB', 'PIEZA', 'CODIGO',
-  'DETALLE', 'ENSAMBLE', 'ASSEMBLY', 'DETAIL', 'SCALE', 'ESCALA', 'SHEET', 'HOJA', 'CLIENTE', 'CUSTOMER'
-]);
-
-function descriptiveTokens(value: string): string[] {
-  const normalized = normalizePieceLabel(value);
-  if (!normalized) {
-    return [];
-  }
-
-  return normalized
-    .split(/[^A-Z0-9]+/g)
-    .map((token) => token.trim())
-    .filter((token) => (
-      token.length >= 3 && 
-      /[A-Z]/.test(token) && 
-      !/\d{3,}/.test(token) &&
-      !COMMON_STOP_WORDS.has(token)
-    ));
-}
-
-interface PieceMatchSignals {
-  identifiers: string[];
-  descriptors: string[];
-}
-
-interface BlueprintSourceCandidate {
-  fileLabel: string;
-  specs: BlueprintSpec[];
-}
-
-function isBlueprintPathStopWord(token: string): boolean {
-  if (BLUEPRINT_PATH_STOP_WORDS.includes(token as (typeof BLUEPRINT_PATH_STOP_WORDS)[number])) {
-    return true;
-  }
-  return /^REV\d*$/.test(token);
-}
-
-function stripBlueprintPathNoise(fileLabel: string): string {
-  const withoutExtension = fileLabel.replace(/\.pdf$/i, ' ');
-  const normalizedPath = normalizePieceLabel(withoutExtension).replace(/[\\/]/g, ' ');
-  const tokens = normalizedPath
-    .split(' ')
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0 && !isBlueprintPathStopWord(token));
-  return tokens.join(' ');
-}
-
-function extractBlueprintSignals(fileLabel: string, specs: BlueprintSpec[]): PieceMatchSignals {
-  const identifiers = new Set<string>();
-  const descriptors = new Set<string>();
-
-  // Extract from the filename/path
-  const withoutExtension = fileLabel.replace(/\.pdf$/i, ' ');
-  extractPartIdentifiers(withoutExtension).forEach((entry) => identifiers.add(entry));
-  descriptiveTokens(withoutExtension).forEach((entry) => descriptors.add(entry));
-
-  // Extract from AI analysis of the blueprint content
-  specs.forEach((spec) => {
-    extractPartIdentifiers(spec.pieza_detectada).forEach((entry) => identifiers.add(entry));
-    descriptiveTokens(spec.pieza_detectada).forEach((entry) => descriptors.add(entry));
-  });
-
-  return {
-    identifiers: [...identifiers],
-    descriptors: [...descriptors],
-  };
-}
-
-function extractOrderSignals(orderPiece: string): PieceMatchSignals {
-  return {
-    identifiers: extractPartIdentifiers(orderPiece),
-    descriptors: descriptiveTokens(orderPiece),
-  };
-}
-
-function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignals: PieceMatchSignals): number {
-  const orderIds = orderSignals.identifiers;
-  const candidateIds = candidateSignals.identifiers;
-
-  // RULE 1: Direct identifier match is KING.
-  if (orderIds.length > 0 && candidateIds.length > 0) {
-    if (hasStrongIdentifierMatch(orderIds, candidateIds)) {
-      // If we have a perfect ID match, we don't care much about the description
-      return 95;
-    }
-  }
-
-  // RULE 2: If we have IDs in both but they DON'T match, it's a hard NO.
-  // This prevents "90-1012-05" from matching "90-1012-06" just because they share "90-1012".
-  if (orderIds.length > 0 && candidateIds.length > 0) {
-    // We already checked for match above, so if we're here, they don't match.
-    return 0;
-  }
-
-  // RULE 3: Descriptive matching (Fuzzy)
-  const orderSet = new Set(orderSignals.descriptors);
-  const candidateSet = new Set(candidateSignals.descriptors);
-  const sharedTokens = [...orderSet].filter((token) => candidateSet.has(token));
-  
-  if (sharedTokens.length === 0) return 0;
-
-  const overlapRatio = sharedTokens.length / Math.max(orderSet.size, candidateSet.size);
-  const hasStrongSharedToken = sharedTokens.some(isStrongToken);
-
-  if (hasStrongSharedToken && overlapRatio >= 0.6) return 85;
-  if (sharedTokens.length >= 2 && overlapRatio >= 0.5) return 82;
-  
-  return 0;
-}
-
-function calculatePieceMatchScore(orderPiece: string, blueprintPiece: string): number {
-  const normalizedOrder = normalizePieceLabel(orderPiece);
-  const normalizedBlueprint = normalizePieceLabel(blueprintPiece);
-
-  if (!normalizedOrder || !normalizedBlueprint) {
-    return 0;
-  }
-
-  if (normalizedOrder === normalizedBlueprint) {
-    return 100;
-  }
-
-  const orderSignals = extractOrderSignals(orderPiece);
-  const blueprintSignals: PieceMatchSignals = {
-    identifiers: extractPartIdentifiers(blueprintPiece),
-    descriptors: descriptiveTokens(blueprintPiece),
-  };
-  return scorePieceMatch(orderSignals, blueprintSignals);
-}
-
-function selectBestBlueprintSpec(orderPiece: string, specs: BlueprintSpec[]): BlueprintSpec | null {
-  return selectBestBlueprintMatch(orderPiece, {
-    fileLabel: '',
-    specs,
-  }).spec;
-}
-
-function selectBestBlueprintMatch(orderPiece: string, candidate: BlueprintSourceCandidate): BlueprintSpecMatch {
-  const normalizedOrder = normalizePieceLabel(orderPiece);
-  if (!normalizedOrder) {
-    return { spec: null, score: 0 };
-  }
-
-  const orderSignals = extractOrderSignals(orderPiece);
-  const fileSignals = extractBlueprintSignals(candidate.fileLabel, candidate.specs);
-  const fileScore = scorePieceMatch(orderSignals, fileSignals);
-
-  let bestSpec: BlueprintSpec | null = null;
-  let bestSpecScore = 0;
-
-  for (const spec of candidate.specs) {
-    const score = calculatePieceMatchScore(orderPiece, spec.pieza_detectada);
-    if (score > bestSpecScore) {
-      bestSpecScore = score;
-      bestSpec = spec;
-    }
-  }
-
-  const hasStrongFileMatch = fileScore >= MIN_BLUEPRINT_MATCH_SCORE;
-  const matchedSpec = bestSpec && (
-    bestSpecScore >= MIN_BLUEPRINT_MATCH_SCORE
-    // Si el archivo ya es el correcto por nombre/ruta, usamos su mejor spec
-    // aunque la etiqueta de pieza_detectada del AI sea débil.
-    || hasStrongFileMatch
-  ) ? bestSpec : null;
-  return {
-    spec: matchedSpec,
-    score: fileScore,
-  };
-}
-
-// Parses common date string formats used in workshop orders and returns the age
-// in calendar days from today, or null if the string cannot be parsed.
-function getOrderAgeDays(fecha: string): number | null {
-  let d: number, m: number, y: number;
-
-  // DD/MM/YYYY or D/M/YYYY
-  let match = fecha.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (match) {
-    [, d, m, y] = match.map(Number) as [string, number, number, number];
-    const date = new Date(y, m - 1, d);
-    if (!isNaN(date.getTime())) {
-      return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
-    }
-  }
-  // DD-MM-YYYY
-  match = fecha.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (match) {
-    [, d, m, y] = match.map(Number) as [string, number, number, number];
-    const date = new Date(y, m - 1, d);
-    if (!isNaN(date.getTime())) {
-      return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
-    }
-  }
-  // YYYY-MM-DD (ISO)
-  match = fecha.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (match) {
-    [, y, m, d] = match.map(Number) as [string, number, number, number];
-    const date = new Date(y, m - 1, d);
-    if (!isNaN(date.getTime())) {
-      return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86_400_000));
-    }
-  }
-  return null;
-}
-
-function formatAgeDays(days: number): string {
-  if (days === 0) return 'Hoy';
-  if (days === 1) return '1 día';
-  if (days < 14) return `${days} días`;
-  if (days < 60) return `${Math.floor(days / 7)} sem`;
-  return `${Math.floor(days / 30)} meses`;
-}
 
 export default function App() {
   const [orderPdf, setOrderPdf] = useState<string | null>(null);
@@ -675,6 +222,21 @@ export default function App() {
   const orderFileInputRef = useRef<HTMLInputElement>(null);
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
   const workshopStatePatchTimerRef = useRef<number | null>(null);
+  const copyingResetTimerRef = useRef<number | null>(null);
+
+  // Cancela timers pendientes si el componente se desmonta mid-corrida (evita
+  // setState-after-unmount). Cubre el batcher de estados de plano y el reset
+  // del badge "Copiado".
+  useEffect(() => () => {
+    if (workshopStatePatchTimerRef.current !== null) {
+      window.clearTimeout(workshopStatePatchTimerRef.current);
+      workshopStatePatchTimerRef.current = null;
+    }
+    if (copyingResetTimerRef.current !== null) {
+      window.clearTimeout(copyingResetTimerRef.current);
+      copyingResetTimerRef.current = null;
+    }
+  }, []);
 
   const flushWorkshopStatePatches = useCallback(() => {
     const pendingPatches = workshopStatePatchQueueRef.current;
@@ -719,8 +281,14 @@ export default function App() {
       setOrderPdf(dataUrl);
       setOrderPdfName(file.name);
       setOrderPdfWarning(validateOrderPdfName(file.name));
-    } catch (err) {
+      // Reset el indicador visual del archivo: si el usuario cambia el PDF
+      // después de una corrida exitosa o fallida, el icono de check/error
+      // anterior quedaba mostrándose sobre el nuevo archivo.
+      setOrderLoadingState('idle');
+      setError(null);
+    } catch {
       setError(`No fue posible leer ${file.name}.`);
+      setOrderLoadingState('error');
     }
   }, []);
 
@@ -734,6 +302,73 @@ export default function App() {
     },
     [ingestOrderFile],
   );
+
+  // Procesa una lista de PDFs como planos de taller (manual upload). Cada archivo
+  // se lee a dataURL y se agrega a workshopPdfs. Útil cuando un plano todavía no
+  // está en el catálogo Tool Crib pero el operador necesita auditarlo ahora.
+  const ingestWorkshopFiles = useCallback(async (files: FileList | File[]) => {
+    const pdfs = Array.from(files).filter(isPdfFile);
+    if (pdfs.length === 0) {
+      setError('Arrastra archivos PDF para agregarlos al workspace.');
+      return;
+    }
+    const uploads = await Promise.all(
+      pdfs.map(async (file): Promise<WorkshopPdfUpload> => {
+        const dataUrl = await readFileAsDataUrl(file);
+        return {
+          id: `manual-${file.name}-${file.lastModified}-${file.size}-${crypto.randomUUID()}`,
+          name: file.name,
+          relativePath: file.webkitRelativePath || file.name,
+          dataUrl,
+        };
+      }),
+    );
+    setWorkshopPdfs((prev) => [...prev, ...uploads]);
+    setError(null);
+  }, []);
+
+  // Estado visual del drag-over para resaltar las zonas activas.
+  const [draggingZone, setDraggingZone] = useState<'order' | 'workshop' | null>(null);
+
+  // Filtros aplicados a la tabla de resultados.
+  const [resultsFilter, setResultsFilter] = useState('');
+  const [filterUrgentOnly, setFilterUrgentOnly] = useState(false);
+  const [filterMissingOnly, setFilterMissingOnly] = useState(false);
+
+  // Modal con la imagen completa del plano cuando el usuario hace click en la
+  // miniatura isométrica. Null = cerrado.
+  const [previewOrder, setPreviewOrder] = useState<Order | null>(null);
+
+  useEffect(() => {
+    if (!previewOrder) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewOrder(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [previewOrder]);
+
+  const buildDropHandlers = (
+    zone: 'order' | 'workshop',
+    onFiles: (files: FileList) => void | Promise<void>,
+  ) => ({
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (draggingZone !== zone) setDraggingZone(zone);
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      // Solo limpia si salimos del contenedor, no de un hijo.
+      if (e.currentTarget === e.target) setDraggingZone(null);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      setDraggingZone(null);
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        void onFiles(files);
+      }
+    },
+  });
 
   const removeFile = (type: 'order' | 'workshop', fileId?: string) => {
     if (type === 'order') {
@@ -910,9 +545,11 @@ export default function App() {
     spec: BlueprintSpec,
   ): Promise<BlueprintSpec> => {
     if (!isValidBoundingBox(spec.isometricBoundingBox)) return spec;
+    const [ymin, xmin, ymax, xmax] = spec.isometricBoundingBox;
+    if ((xmax - xmin) * (ymax - ymin) < REFINEMENT_SKIP_AREA_THRESHOLD) return spec;
     try {
       const croppedImageUrl = await cropToBoxRaw(imageDataUrl, spec.isometricBoundingBox);
-      const response = await ai.models.generateContent({
+      const response = await callWithRetry(() => ai.models.generateContent({
         model: GEMINI_BLUEPRINT_MODEL,
         contents: [{
           role: 'user',
@@ -938,7 +575,7 @@ No inventes información.` },
             required: ["box"],
           },
         },
-      });
+      }));
       const parsed = JSON.parse(response.text.trim()) as { box?: unknown };
       const refinedRelative = parseBoundingBox(parsed.box);
       if (!refinedRelative) return spec;
@@ -948,7 +585,7 @@ No inventes información.` },
       const origW = oXmax - oXmin;
       const origH = oYmax - oYmin;
       const [rYmin, rXmin, rYmax, rXmax] = refinedRelative;
-      const mapped: [number, number, number, number] = [
+      const mapped: BoundingBox = [
         oYmin + (rYmin / 1000) * origH,
         oXmin + (rXmin / 1000) * origW,
         oYmin + (rYmax / 1000) * origH,
@@ -994,7 +631,7 @@ No inventes información.` },
     try {
       // 1 + 1.5: Extract orders and fetch Tool Crib library concurrently — they are independent.
       setExtractingStep('Leyendo pedidos y biblioteca...');
-      const [ordersList, libResult] = await Promise.all([
+      const [rawOrders, libResult] = await Promise.all([
         (async (): Promise<ExtractedOrder[]> => {
           try {
             const orderHash = await createDocumentHash(orderPdf);
@@ -1004,28 +641,37 @@ No inventes información.` },
               return cachedOrders;
             }
             const orderAiStart = performance.now();
-            const response = await ai.models.generateContent({
+            const response = await callWithRetry(() => ai.models.generateContent({
               model: GEMINI_ORDER_MODEL,
               contents: [{
                 role: 'user',
                 parts: [
-                  { text: `Analiza esta tabla PDF de órdenes de taller tipo tool crib.
+                  { text: `Analiza esta tabla PDF de órdenes de taller tipo tool crib. El PDF puede tener múltiples páginas — procesa TODAS las páginas.
 Devuelve EXCLUSIVAMENTE un JSON array con objetos que tengan los campos exactos:
-- pieza
-- cantidad
+- pieza: descripción completa y ÚNICA de la pieza (incluyendo el número de parte si no tiene columna propia)
+- numero_parte: SOLO el código alfanumérico de parte (ej: "90-1012-05", "PN-12345", "WCD01-1824"). Si no existe o no aplica, devuelve "".
+- cantidad: número con su unidad si aparece (ej: "2.00\\nPieza", "10\\nSet").
 - orden
 - fecha
 - prioridad (solo "URGENTE" o "Normal")
 
 Reglas de extracción:
-1) Lee TODAS las columnas y filas, manejando celdas fusionadas o descripciones multi-línea.
+1) Lee TODAS las columnas y filas de TODAS las páginas, manejando celdas fusionadas o descripciones multi-línea.
 2) NO cortes las descripciones. Si una descripción de pieza continúa en la siguiente línea, concaténala.
-3) Identifica el "Código de Parte" (Part Number) si existe y asegúrate de incluirlo en el campo "pieza" junto a su descripción.
+3) Si existe una columna "Código de Parte", "Part Number" o similar, coloca ese valor en "numero_parte" y la descripción de la pieza en "pieza". Si ambos están en la misma celda, sepáralos.
 4) Devuelve una fila por cada pieza o variante real. Si hay sub-piezas bajo una cabecera, extrae cada una.
 5) Si una fila tiene dato de fecha, orden o cantidad, procésala.
 6) Excluye filas de totales (ej: "Piezas Requeridas", "Piezas Terminadas", "Restantes a Crear").
 7) Si no hay urgencia explícita, usa "Normal".
-8) No inventes campos ni texto fuera del JSON.` },
+8) NORMALIZA typos evidentes del origen sin cambiar el significado:
+   - "PRESAS" → "PRENSAS"
+   - "PATA" (cuando va seguida de PRENSAS/...) → "PARA"
+   - "3/8HEX" → "3/8 HEX"
+   - Variantes "PRESS-O-MATIC" / "PRESS O -MATIC" / "PRESS O MATIC ." / "PRESS O MATIC" → "PRESS-O-MATIC"
+   - Colapsa espacios múltiples a uno solo.
+9) SUB-LÍNEAS ÚNICAS: si bajo un mismo SO aparecen varias sub-líneas con descripciones aparentemente idénticas (ej: 5 renglones que solo dicen "Fabricación de pieza" bajo SO 2026/S00781), revisa la columna de descripción/detalle/notas y EXTRAE el detalle diferenciador (número de pieza secuencial, código de parte, dimensión, material) para que cada fila tenga una descripción ÚNICA. Si genuinamente no existe diferencia textual, consolida las sub-líneas en UNA SOLA fila sumando la cantidad — no devuelvas 5 filas idénticas.
+10) No devuelvas filas exactamente duplicadas (mismo pieza+numero_parte+orden+fecha+cantidad).
+11) No inventes campos ni texto fuera del JSON.` },
                   preparePdfPart(orderPdf)
                 ]
               }],
@@ -1037,16 +683,17 @@ Reglas de extracción:
                     type: Type.OBJECT,
                     properties: {
                       pieza: { type: Type.STRING },
+                      numero_parte: { type: Type.STRING },
                       cantidad: { type: Type.STRING },
                       orden: { type: Type.STRING },
                       fecha: { type: Type.STRING },
                       prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] }
                     },
-                    required: ["pieza", "cantidad", "orden", "fecha", "prioridad"]
+                    required: ["pieza", "numero_parte", "cantidad", "orden", "fecha", "prioridad"]
                   }
                 }
               }
-            });
+            }));
             aiOrderMs += performance.now() - orderAiStart;
             const parsed = parseOrdersResponse(response.text.trim());
             await writeCachedValue('orders', orderHash, ORDER_PROMPT_VERSION, parsed);
@@ -1060,10 +707,15 @@ Reglas de extracción:
         listActiveDrawingViews({ customer: 'SUPRAJIT' }),
       ]);
 
+      // Merge rows with identical piece descriptions: sum quantities, join SO numbers and dates
+      const ordersList = mergeGroupedOrders(rawOrders);
+
       // Auto-Matching: attach blueprints from library that match the extracted orders
       setExtractingStep('Buscando planos en biblioteca...');
+      log.debug('[smv-vision][library] resultado:', libResult.ok ? `${libResult.value.length} entradas` : `FALLO: ${(libResult as { ok: false; reason: string }).reason}`);
       if (libResult.ok) {
         const library = libResult.value;
+        log.debug('[smv-vision][library] entradas cargadas:', library.map((v) => `${v.partNumber} pdfUrl=${v.pdfUrl ? '✓' : '✗null'}`));
         const autoAttachedIds = new Set(Object.values(toolcribPdfToDrawing));
 
         // Pre-compute signals once per library entry and per manual PDF (#3, #5)
@@ -1077,9 +729,11 @@ Reglas de extracción:
 
         // Score all orders synchronously, collect unique library matches to fetch (#3, #5)
         const toFetchMap = new Map<string, { bestView: ToolcribActiveDrawingView; pdfId: string }>();
+        // Drawings found in library but missing a fetchable URL (network-only)
+        const noUrlMatches: Array<{ pieza: string; partNumber: string; drawingId: string }> = [];
 
         for (const order of ordersList) {
-          const orderSignals = extractOrderSignals(order.pieza);
+          const orderSignals = extractOrderSignals(order.pieza, order.numero_parte);
 
           const hasManualMatch = manualPdfSignals.some(
             ({ signals }) => scorePieceMatch(orderSignals, signals) >= MIN_BLUEPRINT_MATCH_SCORE
@@ -1097,18 +751,34 @@ Reglas de extracción:
             }
           }
 
-          if (
-            bestView &&
-            bestScore >= MIN_BLUEPRINT_MATCH_SCORE &&
-            bestView.pdfUrl &&
-            !autoAttachedIds.has(bestView.drawingId) &&
-            !toFetchMap.has(bestView.drawingId)
-          ) {
-            toFetchMap.set(bestView.drawingId, {
-              bestView,
-              pdfId: `toolcrib-${bestView.drawingId}-${crypto.randomUUID()}`,
-            });
+          log.debug(
+            '[smv-vision][match]',
+            order.pieza,
+            '→ best:', bestView ? `${bestView.partNumber} (score ${bestScore}, pdfUrl: ${bestView.pdfUrl ? '✓' : '✗null'})` : 'sin coincidencia',
+          );
+
+          if (bestView && bestScore >= MIN_BLUEPRINT_MATCH_SCORE) {
+            if (!bestView.pdfUrl) {
+              // Drawing is in catalog but has no fetchable URL — log and track
+              console.warn(
+                '[smv-vision][match] coincidencia encontrada sin pdfUrl (plano en red, no en Storage):',
+                order.pieza, '→', bestView.partNumber, `(drawingId: ${bestView.drawingId})`,
+              );
+              noUrlMatches.push({ pieza: order.pieza, partNumber: bestView.partNumber, drawingId: bestView.drawingId });
+            } else if (!autoAttachedIds.has(bestView.drawingId) && !toFetchMap.has(bestView.drawingId)) {
+              toFetchMap.set(bestView.drawingId, {
+                bestView,
+                pdfId: `toolcrib-${bestView.drawingId}-${crypto.randomUUID()}`,
+              });
+            }
           }
+        }
+
+        if (noUrlMatches.length > 0) {
+          console.warn(
+            '[smv-vision] Planos encontrados en catálogo pero sin URL de descarga (subir a Firebase Storage):',
+            noUrlMatches.map((m) => `${m.pieza} → ${m.partNumber}`).join(', '),
+          );
         }
 
         // Fetch all matched blueprints in parallel (#1)
@@ -1170,24 +840,45 @@ Reglas de extracción:
       // Deduplicates identical crop operations within a single run (#6)
       const cropCache = new Map<string, string>();
 
+      // Per-file tracking of which specs have been consumed by which order index.
+      // Lets us spread isometric crops across orders when a single blueprint
+      // contains multiple distinct pieces (#1).
+      const usedSpecsByFileId = new Map<string, Map<BlueprintSpec, number>>();
+
       // Progressive merge: applies one blueprint result against the current state of
       // orders, updating any order whose best match this blueprint improves on.
       const applyBlueprintToResults = async (result: BlueprintTaskResult): Promise<void> => {
         type Update = { orderIdx: number; partial: Partial<Order> };
         const updates: Update[] = [];
 
+        if (!usedSpecsByFileId.has(result.fileId)) {
+          usedSpecsByFileId.set(result.fileId, new Map());
+        }
+        const usedSpecsForFile = usedSpecsByFileId.get(result.fileId)!;
+
         for (let i = 0; i < ordersList.length; i++) {
           const order = ordersList[i];
+          // Build the "used" set excluding any spec previously assigned to THIS order
+          // (so that re-processing the same blueprint doesn't keep moving the order).
+          const usedSet = new Set<BlueprintSpec>();
+          for (const [spec, idx] of usedSpecsForFile) {
+            if (idx !== i) usedSet.add(spec);
+          }
           const match = selectBestBlueprintMatch(order.pieza, {
             fileLabel: result.fileLabel,
             specs: result.analysis.specs,
-          });
+          }, order.numero_parte, usedSet);
           if (match.score < MIN_BLUEPRINT_MATCH_SCORE) continue;
           const current = bestMatchByOrder.get(i);
           if (current && current.score >= match.score) continue;
 
           bestMatchByOrder.set(i, { score: match.score, fileId: result.fileId });
           matchedBlueprintFileIds.add(result.fileId);
+
+          // Mark this spec as consumed for this file/order pair.
+          if (match.spec) {
+            usedSpecsForFile.set(match.spec, i);
+          }
 
           const cropBox = isValidBoundingBox(match.spec?.isometricBoundingBox)
             ? match.spec!.isometricBoundingBox
@@ -1216,6 +907,8 @@ Reglas de extracción:
               sourcePdfName: result.fileLabel,
               sourcePdfPath: result.fileLabel,
               isometricView,
+              matchScore: match.score,
+              sourceImageDataUrl: result.analysis.image || undefined,
             },
           });
         }
@@ -1274,14 +967,14 @@ Reglas de extracción:
           let taskResult: BlueprintTaskResult;
           try {
             const workerResult = await rasterizeAndNormalizePdf(pdf.dataUrl, {
-              maxDim: 1536,
-              renderScale: 2.0,
-              jpegQuality: 0.85,
-              normalizeQuality: 0.82,
+              maxDim: 1024,
+              renderScale: 1.5,
+              jpegQuality: 0.80,
+              normalizeQuality: 0.78,
             });
 
             const blueprintAiStart = performance.now();
-            const response = await ai.models.generateContent({
+            const response = await callWithRetry(() => ai.models.generateContent({
               model: GEMINI_BLUEPRINT_MODEL,
               contents: [{
                 role: 'user',
@@ -1296,9 +989,10 @@ Reglas de extracción (ESTILO UT2033):
 4) REGLA CRÍTICA: Excluye ABSOLUTAMENTE todas las líneas de dimensión (cotas), flechas, números de medidas, líneas de extensión y notas de texto que rodeen la pieza. El recorte debe verse "limpio" como una foto de catálogo.
 5) Excluye el marco del plano, marcas de coordenadas en los bordes, cajetines y logos.
 6) El bounding box debe estar bien centrado sobre la masa física de la pieza.
-7) Si hay múltiples piezas diferentes en el mismo plano, devuelve una entrada por pieza.
-8) Si no hay vistas útiles, devuelve [].
-9) No inventes información.` },
+7) MULTI-PIEZA — REGLA OBLIGATORIA: si el plano contiene varias piezas (común en planos de variantes por tamaño, p.ej. HEX SWAGE BLOCK 7/32, 9/32, 3/8, 1/4, 5/16, 13/32, 7/16; o conjuntos de remaches, navajas, blocks, etc.), DEBES devolver UNA entrada por cada variante con su PROPIO bounding box centrado en SU geometría. NO devuelvas una sola entrada que englobe a todas. En "pieza_detectada" incluye el sufijo distintivo (tamaño, fracción, código, letra) que diferencia cada variante (ej: "HEX SWAGE BLOCK 7/32", "HEX SWAGE BLOCK 9/32"). Si no puedes leer el sufijo, usa un índice claro ("PIEZA 1", "PIEZA 2") pero sigue devolviendo una entrada por pieza distinta.
+8) Si solo hay una pieza con varias vistas (frontal, lateral, isométrica), devuelve UNA sola entrada con el bbox de la vista isométrica.
+9) Si no hay vistas útiles, devuelve [].
+10) No inventes información.` },
                   prepareImagePart(workerResult.imageDataUrl)
                 ]
               }],
@@ -1319,7 +1013,7 @@ Reglas de extracción (ESTILO UT2033):
                   }
                 }
               }
-            });
+            }));
             const aiElapsed = performance.now() - blueprintAiStart;
             const initialSpecs = parseBlueprintResponse(response.text.trim());
 
@@ -1477,10 +1171,50 @@ Reglas de extracción (ESTILO UT2033):
     try {
       await navigator.clipboard.writeText(JSON.stringify(results, null, 2));
       setCopying(true);
-      setTimeout(() => setCopying(false), 2000);
-    } catch {
-      // clipboard access denied — silent no-op
+      if (copyingResetTimerRef.current !== null) {
+        window.clearTimeout(copyingResetTimerRef.current);
+      }
+      copyingResetTimerRef.current = window.setTimeout(() => {
+        setCopying(false);
+        copyingResetTimerRef.current = null;
+      }, 2000);
+    } catch (err) {
+      console.warn('[smv-vision] clipboard write rechazado', err);
+      setError('No fue posible copiar al portapapeles. Revisa los permisos del navegador.');
     }
+  };
+
+  const downloadCsv = () => {
+    if (!results) return;
+    // Escape RFC 4180: envolver en comillas si el campo contiene coma, comilla
+    // o salto de línea; duplicar comillas internas. Las celdas multi-línea
+    // (cantidad, orden, fecha en órdenes agregadas) se colapsan a " | " para
+    // que Excel no parta el registro en filas separadas.
+    const escapeCell = (raw: string | undefined): string => {
+      const value = (raw ?? '').replace(/\r?\n/g, ' | ');
+      if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+      return value;
+    };
+    const header = ['Pieza', 'Numero de parte', 'Cantidad', 'SO', 'Fecha', 'Prioridad', 'Plano', 'Score'];
+    const rows = results.map((order) => [
+      escapeCell(order.pieza),
+      escapeCell(order.numero_parte),
+      escapeCell(order.cantidad),
+      escapeCell(order.orden),
+      escapeCell(order.fecha),
+      escapeCell(order.prioridad),
+      escapeCell(order.sourcePdfName),
+      escapeCell(typeof order.matchScore === 'number' ? String(order.matchScore) : ''),
+    ].join(','));
+    // BOM UTF-8 → Excel detecta encoding y los acentos no se rompen.
+    const csv = '﻿' + [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const downloadJson = () => {
@@ -1491,6 +1225,122 @@ Reglas de extracción (ESTILO UT2033):
     a.href = url;
     a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
+  };
+
+  const downloadSingleOrderPdf = (order: Order) => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const generatedAt = new Date();
+    const pageW = doc.internal.pageSize.getWidth();
+
+    // ── Header bar ──────────────────────────────────────────────────────────
+    doc.setFillColor(0, 0, 0);
+    doc.rect(0, 0, pageW, 48, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(255, 255, 255);
+    doc.text('SMV // VISION', 40, 20);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(180, 180, 180);
+    doc.text('ORDEN DE TRABAJO INDIVIDUAL // SUPRAJIT', 40, 34);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(255, 255, 255);
+    doc.text(generatedAt.toLocaleString(), pageW - 40, 27, { align: 'right' });
+
+    if (order.prioridad === 'URGENTE') {
+      doc.setFillColor(255, 78, 0);
+      doc.rect(pageW - 110, 8, 70, 22, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(255, 255, 255);
+      doc.text('URGENTE', pageW - 75, 22, { align: 'center' });
+    }
+
+    // ── Piece name ──────────────────────────────────────────────────────────
+    let y = 72;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(0, 0, 0);
+    const pieceLines = doc.splitTextToSize(order.pieza.toUpperCase(), pageW - 80) as string[];
+    doc.text(pieceLines, 40, y);
+    y += pieceLines.length * 26 + 4;
+
+    if (order.numero_parte) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text(`N° PARTE: ${order.numero_parte}`, 40, y);
+      y += 16;
+    }
+
+    // ── Divider ─────────────────────────────────────────────────────────────
+    y += 6;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(2);
+    doc.line(40, y, pageW - 40, y);
+    y += 16;
+
+    // ── Isometric view + detail grid ────────────────────────────────────────
+    const imgSize = 180;
+    const detailX = 40 + imgSize + 24;
+    const detailW = pageW - detailX - 40;
+
+    if (order.isometricView) {
+      try {
+        doc.addImage(order.isometricView, 'JPEG', 40, y, imgSize, imgSize);
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(1.5);
+        doc.rect(40, y, imgSize, imgSize);
+      } catch (e) {
+        console.warn('No se pudo incrustar la imagen isométrica', e);
+      }
+    }
+
+    const fields: [string, string][] = [
+      ['CANTIDAD', order.cantidad.split(/[\r\n]+/)[0].trim()],
+      ['SO / ORDEN', order.orden.replace(/\n/g, ' / ')],
+      ['FECHA', order.fecha.replace(/\n/g, ' / ')],
+      ['PLANO', order.sourcePdfName ?? '—'],
+    ];
+
+    const ageDays = getOrderAgeDays(order.fecha.split('\n')[0]);
+    if (ageDays !== null) {
+      fields.push(['ANTIGÜEDAD', formatAgeDays(ageDays)]);
+    }
+
+    let detailY = y + 8;
+    for (const [label, value] of fields) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(120, 120, 120);
+      doc.text(label, detailX, detailY);
+      detailY += 13;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(0, 0, 0);
+      const valLines = doc.splitTextToSize(value, detailW) as string[];
+      doc.text(valLines, detailX, detailY);
+      detailY += valLines.length * 16 + 10;
+    }
+
+    // ── Footer ───────────────────────────────────────────────────────────────
+    const footerY = doc.internal.pageSize.getHeight() - 28;
+    doc.setFillColor(0, 0, 0);
+    doc.rect(0, footerY, pageW, 28, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.text('SMV VISION // Servicios y Maquinados Vázquez', 40, footerY + 17);
+    doc.text(`Generado: ${generatedAt.toLocaleString()}`, pageW - 40, footerY + 17, { align: 'right' });
+
+    const safeName = order.pieza.replace(/[^A-Z0-9_\-]/gi, '_').slice(0, 40);
+    doc.save(`orden_${safeName}_${generatedAt.toISOString().split('T')[0]}.pdf`);
+    try {
+      window.open(doc.output('bloburl'), '_blank');
+    } catch (e) {
+      console.warn('No fue posible abrir el preview del PDF', e);
+    }
   };
 
   const downloadPdf = () => {
@@ -1512,19 +1362,27 @@ Reglas de extracción (ESTILO UT2033):
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
     doc.text(
-      `Fecha: ${dateLabel}   |   Ordenes: ${totalOrders}   |   Auditadas: ${auditedTotal}`,
+      `Fecha: ${dateLabel}   |   Órdenes: ${totalOrders}   |   Auditadas: ${auditedTotal}`,
       40,
       headerY + 12,
     );
 
     // Sort URGENTE first (oldest first within each group), then Normal (oldest first).
+    // Aggregated rows carry multi-line fechas ("01/10/2025\n15/10/2025"); use the
+    // first line so the regex in getOrderAgeDays can match.
     const sortByAgeDesc = (a: Order, b: Order): number => {
-      const ageA = getOrderAgeDays(a.fecha) ?? -1;
-      const ageB = getOrderAgeDays(b.fecha) ?? -1;
+      const ageA = getOrderAgeDays(a.fecha.split('\n')[0]) ?? -1;
+      const ageB = getOrderAgeDays(b.fecha.split('\n')[0]) ?? -1;
       return ageB - ageA;
     };
     const withBlueprint = results.filter((o) => !!o.isometricView);
+    // Audited y pendientes son mutuamente exclusivos por `isometricView`; cada
+    // entrada de `results` ya pasó por `mergeGroupedOrders` y aparece una sola
+    // vez. No requiere dedupe por SO — una SO puede legítimamente cubrir varias
+    // piezas distintas, y antes esta lógica eliminaba pendientes válidas cuyo
+    // SO coincidía con el de una pieza auditada diferente.
     const pendientes = results.filter((o) => !o.isometricView);
+
     const sortGroup = (group: Order[]): Order[] => [
       ...group.filter((o) => o.prioridad === 'URGENTE').sort(sortByAgeDesc),
       ...group.filter((o) => o.prioridad !== 'URGENTE').sort(sortByAgeDesc),
@@ -1532,13 +1390,29 @@ Reglas de extracción (ESTILO UT2033):
     const sortedWithBlueprint = sortGroup(withBlueprint);
     const sortedPendientes = sortGroup(pendientes);
 
-    const buildRows = (orders: Order[]): RowInput[] => orders.map((order) => {
-      const days = getOrderAgeDays(order.fecha);
-      const fechaCell = days !== null
-        ? `${order.fecha}\n(${formatAgeDays(days)})`
-        : order.fecha;
-      return ['', order.pieza, order.cantidad, order.orden, fechaCell];
-    });
+    const formatFechaCell = (raw: string): string => raw.split('\n').map((f) => {
+      const days = getOrderAgeDays(f);
+      return days !== null ? `${f}\n(${formatAgeDays(days)})` : f;
+    }).join('\n');
+
+    // Keep the unit suffix (Pieza/Set) so aggregated rows don't show a bare number.
+    const formatCantidadCell = (raw: string): string => raw.replace(/\s+/g, ' ').trim();
+
+    const buildRows = (orders: Order[]): RowInput[] => orders.map((order) => [
+      '',
+      order.pieza,
+      formatCantidadCell(order.cantidad),
+      order.orden,
+      formatFechaCell(order.fecha),
+    ]);
+
+    // Rows for the PENDIENTES table — DIBUJO column omitted entirely.
+    const buildPendienteRows = (orders: Order[]): RowInput[] => orders.map((order) => [
+      order.pieza,
+      formatCantidadCell(order.cantidad),
+      order.orden,
+      formatFechaCell(order.fecha),
+    ]);
 
     const sharedColumnStyles = {
       0: { cellWidth: 95,  halign: 'center' as const },
@@ -1584,6 +1458,7 @@ Reglas de extracción (ESTILO UT2033):
         headStyles: sharedHeadStyles,
         styles: sharedStyles,
         columnStyles: sharedColumnStyles,
+        rowPageBreak: 'avoid',
         didParseCell: (hookData: CellHookData) => {
           if (hookData.section === 'body' && hookData.column.index === 0) {
             const order = sortedWithBlueprint[hookData.row.index];
@@ -1626,18 +1501,30 @@ Reglas de extracción (ESTILO UT2033):
         sectionHeaderY + 12,
       );
 
+      // Pendientes never have a blueprint image — drop the DIBUJO column entirely
+      // and let NOMBRE DE LA PIEZA reclaim the width (#6).
+      const pendientesColumnStyles = {
+        0: { cellWidth: 320, fontStyle: 'bold' as const, fontSize: 9 },
+        1: { cellWidth: 45,  halign: 'center' as const, fontStyle: 'bold' as const, fontSize: 11 },
+        2: { cellWidth: 70,  halign: 'center' as const, fontStyle: 'bold' as const },
+        3: { cellWidth: 80,  halign: 'center' as const },
+      };
       autoTable(doc, {
         startY: sectionHeaderY + 20,
-        head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
-        body: buildRows(sortedPendientes),
+        head: [['NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
+        body: buildPendienteRows(sortedPendientes),
         theme: 'grid',
         headStyles: sharedHeadStyles,
         styles: sharedStyles,
-        columnStyles: sharedColumnStyles,
+        columnStyles: pendientesColumnStyles,
+        rowPageBreak: 'avoid',
         didDrawCell: (hookData: CellHookData) => {
           if (hookData.section !== 'body') return;
+          // Draw URGENTE indicator on the first (now NOMBRE) column instead of DIBUJO.
           const order = sortedPendientes[hookData.row.index];
-          drawUrgenteIndicator(order, hookData);
+          if (!order || order.prioridad !== 'URGENTE' || hookData.column.index !== 0) return;
+          doc.setFillColor(0, 0, 0);
+          doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
         },
       });
     }
@@ -1648,7 +1535,7 @@ Reglas de extracción (ESTILO UT2033):
       doc.setFontSize(7);
       doc.setTextColor(120, 120, 120);
       doc.text(`SMV VISION // ${generatedAt.toLocaleString()}`, 40, 820);
-      doc.text(`Pagina ${page} de ${pageCount}`, 555, 820, { align: 'right' });
+      doc.text(`Página ${page} de ${pageCount}`, 555, 820, { align: 'right' });
     }
 
     doc.save(`reporte_smv_${generatedAt.toISOString().split('T')[0]}.pdf`);
@@ -1666,6 +1553,25 @@ Reglas de extracción (ESTILO UT2033):
     () => (results ? results.filter((result) => result.haSidoAuditada).length : 0),
     [results],
   );
+
+  // Lista filtrada para la tabla. La exportación PDF/CSV sigue usando `results`
+  // crudo — los filtros son solo lente de visualización, no editan los datos.
+  const filteredResults = useMemo(() => {
+    if (!results) return null;
+    const term = resultsFilter.trim().toLowerCase();
+    return results.filter((order) => {
+      if (filterUrgentOnly && order.prioridad !== 'URGENTE') return false;
+      if (filterMissingOnly && order.isometricView) return false;
+      if (term.length === 0) return true;
+      const haystack = [
+        order.pieza,
+        order.numero_parte ?? '',
+        order.orden,
+        order.sourcePdfName ?? '',
+      ].join(' ').toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [results, resultsFilter, filterUrgentOnly, filterMissingOnly]);
 
   return (
     <div className="min-h-screen bg-bg font-sans text-ink border-12 border-ink flex flex-col h-screen">
@@ -1703,9 +1609,16 @@ Reglas de extracción (ESTILO UT2033):
             </div>
 
             {/* Order Visual Input */}
-            <div 
-              className={`min-h-[160px] border-2 border-dashed border-ink flex flex-col items-center justify-center p-6 relative transition-all group ${orderPdf ? 'bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)]' : 'bg-white/30 hover:bg-white hover:border-accent cursor-pointer'}`}
+            <div
+              className={`min-h-[160px] border-2 border-dashed flex flex-col items-center justify-center p-6 relative transition-all group ${
+                draggingZone === 'order'
+                  ? 'border-accent bg-accent/10 shadow-[6px_6px_0px_rgba(255,78,0,0.4)]'
+                  : orderPdf
+                    ? 'border-ink bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)]'
+                    : 'border-ink bg-white/30 hover:bg-white hover:border-accent cursor-pointer'
+              }`}
               onClick={() => !orderPdf && orderFileInputRef.current?.click()}
+              {...buildDropHandlers('order', ingestOrderFile)}
             >
               <input 
                 type="file" 
@@ -1743,6 +1656,13 @@ Reglas de extracción (ESTILO UT2033):
                 </div>
               )}
             </div>
+
+            {orderPdfWarning && (
+              <div className="flex items-start gap-2 border border-yellow-600 bg-yellow-50 px-2 py-1.5 text-[10px] font-mono text-yellow-700 leading-snug" role="alert">
+                <AlertCircle size={12} className="shrink-0 mt-0.5" />
+                <span>{orderPdfWarning}</span>
+              </div>
+            )}
           </div>
 
           {/* Module 2: Tool Crib Library */}
@@ -1767,30 +1687,43 @@ Reglas de extracción (ESTILO UT2033):
               <span className="bg-ink text-bg px-2 py-0.5 text-[10px] font-black">{workshopPdfs.length} PLANOS</span>
             </div>
 
-            {workshopPdfs.length > 0 && (
-              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-2">
-                {workshopPdfs.map((pdf) => (
-                  <div key={pdf.id} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)] hover:translate-y-[-1px] transition-transform">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      {workshopLoadingStates[pdf.id] === 'loading' ? (
-                        <Loader2 size={12} className="text-accent animate-spin shrink-0" />
-                      ) : (
-                        <CheckCircle2 size={12} className="text-green-500 shrink-0" />
-                      )}
-                      <span className="text-[9px] font-mono truncate uppercase font-bold">
-                        {pdf.relativePath.split('/').pop()}
-                      </span>
+            <div
+              className={`border-2 border-dashed p-2 transition-all ${
+                draggingZone === 'workshop'
+                  ? 'border-accent bg-accent/10'
+                  : 'border-ink/20 bg-white/30'
+              }`}
+              {...buildDropHandlers('workshop', ingestWorkshopFiles)}
+            >
+              {workshopPdfs.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-2">
+                  {workshopPdfs.map((pdf) => (
+                    <div key={pdf.id} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)] hover:-translate-y-px transition-transform">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        {workshopLoadingStates[pdf.id] === 'loading' ? (
+                          <Loader2 size={12} className="text-accent animate-spin shrink-0" />
+                        ) : (
+                          <CheckCircle2 size={12} className="text-green-500 shrink-0" />
+                        )}
+                        <span className="text-[9px] font-mono truncate uppercase font-bold">
+                          {pdf.relativePath.split('/').pop()}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
+                        className="text-ink/30 hover:text-accent transition-colors"
+                      >
+                        <X size={12} />
+                      </button>
                     </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
-                      className="text-ink/30 hover:text-accent transition-colors"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[10px] font-mono text-ink/40 text-center py-3 uppercase tracking-wider">
+                  Arrastra planos PDF aquí o úsalos desde la biblioteca
+                </p>
+              )}
+            </div>
             
             <button
               onClick={extractInfo}
@@ -1826,6 +1759,13 @@ Reglas de extracción (ESTILO UT2033):
                   className="bg-white border-2 border-ink text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink hover:text-bg transition-all"
                 >
                   {copying ? 'Copiado' : 'Copiar JSON'}
+                </button>
+                <button
+                  onClick={downloadCsv}
+                  className="bg-white border-2 border-ink text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink hover:text-bg transition-all"
+                  title="Descargar resultados como CSV (Excel)"
+                >
+                  CSV
                 </button>
                 <button
                   onClick={downloadPdf}
@@ -1918,6 +1858,50 @@ Reglas de extracción (ESTILO UT2033):
                 animate={{ opacity: 1 }}
                 className="grow flex flex-col"
               >
+                {/* Barra de filtros sobre la tabla. Los filtros NO se aplican
+                    a las exportaciones (PDF/CSV) — el reporte final usa siempre
+                    el dataset completo. */}
+                <div className="border-4 border-ink border-b-0 bg-white px-4 py-3 flex items-center gap-3 flex-wrap">
+                  <div className="grow flex items-center gap-2 border border-ink/30 px-2 py-1 bg-[#F4F4F4] min-w-[180px]">
+                    <input
+                      type="text"
+                      value={resultsFilter}
+                      onChange={(e) => setResultsFilter(e.target.value)}
+                      placeholder="Filtrar por pieza, parte o SO…"
+                      className="grow bg-transparent outline-none text-[11px] font-mono"
+                    />
+                    {resultsFilter && (
+                      <button
+                        onClick={() => setResultsFilter('')}
+                        className="text-ink/40 hover:text-accent"
+                        title="Limpiar filtro"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                  <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filterUrgentOnly}
+                      onChange={(e) => setFilterUrgentOnly(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    Solo URGENTE
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filterMissingOnly}
+                      onChange={(e) => setFilterMissingOnly(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    Sin plano
+                  </label>
+                  <span className="text-[10px] font-mono text-ink/50 ml-auto">
+                    {filteredResults?.length ?? 0} / {results.length}
+                  </span>
+                </div>
                 <div className="grow overflow-auto border-4 border-ink bg-white shadow-[12px_12px_0px_rgba(0,0,0,0.1)]">
                   {/* Styled Header matching PDF */}
                   <div className="bg-[#0D2B4D] text-white p-6 border-b-4 border-ink flex items-center justify-between">
@@ -1937,31 +1921,51 @@ Reglas de extracción (ESTILO UT2033):
                         <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 w-[50%]">PIEZA Y VISTA DE PLANO</th>
                         <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">CANT.</th>
                         <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">SO (ORDEN)</th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest text-center">FECHA</th>
+                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">FECHA</th>
+                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest text-center w-12"></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {results.map((order, idx) => (
+                      {(filteredResults ?? results).map((order, idx) => (
                         <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
                           {/* Pieza + Vista de Plano */}
                           <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
                             <div className="grow">
-                              <h4 className="font-black text-xl uppercase tracking-tight text-black mb-1">
-                                {order.pieza}
-                              </h4>
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <h4 className="font-black text-xl uppercase tracking-tight text-black">
+                                  {order.pieza}
+                                </h4>
+                                {/* Badge de confianza: solo se muestra si el score
+                                    es ambiguo (< 90). Match perfecto (95-100) se
+                                    asume y no estorba. Sin score = sin plano. */}
+                                {typeof order.matchScore === 'number' && order.matchScore < 90 && (
+                                  <span
+                                    className="bg-yellow-400 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
+                                    title={`Match con score ${order.matchScore}/100 — revisar a mano para confirmar.`}
+                                  >
+                                    {order.matchScore}% • REVISAR
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-[10px] text-gray-500 font-mono italic">
                                 {order.sourcePdfName || "Sin plano asociado"}
                               </p>
                             </div>
 
                             {order.isometricView && (
-                              <div className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] shrink-0 relative overflow-hidden flex items-center justify-center p-1">
-                                <img 
-                                  src={order.isometricView} 
-                                  alt="Vista" 
-                                  className="max-w-full max-h-full object-contain mix-blend-multiply" 
+                              <button
+                                type="button"
+                                onClick={() => setPreviewOrder(order)}
+                                disabled={!order.sourceImageDataUrl}
+                                title={order.sourceImageDataUrl ? 'Ver plano completo' : 'Plano completo no disponible'}
+                                className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] shrink-0 relative overflow-hidden flex items-center justify-center p-1 hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] disabled:hover:translate-x-0 disabled:hover:translate-y-0 cursor-zoom-in"
+                              >
+                                <img
+                                  src={order.isometricView}
+                                  alt="Vista"
+                                  className="max-w-full max-h-full object-contain mix-blend-multiply pointer-events-none"
                                 />
-                              </div>
+                              </button>
                             )}
                           </td>
                           
@@ -1972,23 +1976,38 @@ Reglas de extracción (ESTILO UT2033):
                           </td>
                           
                           <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
-                            <span className="font-mono text-sm font-black bg-black text-white px-2 py-1">
-                              {order.orden}
-                            </span>
-                          </td>
-                          
-                          <td className="px-5 py-4 text-center align-middle">
-                            <span className="font-black text-xs uppercase text-black">
-                              {order.fecha}
-                            </span>
-                            {(() => {
-                              const days = getOrderAgeDays(order.fecha);
-                              return days !== null ? (
-                                <span className="block text-[10px] text-gray-400 font-normal normal-case">
-                                  {formatAgeDays(days)}
+                            <div className="flex flex-col gap-1 items-center">
+                              {order.orden.split('\n').map((o, i) => (
+                                <span key={i} className="font-mono text-sm font-black bg-black text-white px-2 py-1 block">
+                                  {o}
                                 </span>
-                              ) : null;
-                            })()}
+                              ))}
+                            </div>
+                          </td>
+
+                          <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+                            {order.fecha.split('\n').map((f, i) => {
+                              const days = getOrderAgeDays(f);
+                              return (
+                                <div key={i}>
+                                  <span className="font-black text-xs uppercase text-black">{f}</span>
+                                  {days !== null && (
+                                    <span className="block text-[10px] text-gray-400 font-normal normal-case">
+                                      {formatAgeDays(days)}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </td>
+                          <td className="px-3 py-4 text-center align-middle">
+                            <button
+                              onClick={() => downloadSingleOrderPdf(order)}
+                              title="Imprimir esta orden"
+                              className="p-2 border border-ink/20 bg-white hover:bg-ink hover:text-bg hover:border-ink transition-colors opacity-40 group-hover:opacity-100"
+                            >
+                              <Printer size={14} />
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -2056,6 +2075,47 @@ Reglas de extracción (ESTILO UT2033):
           <span className="opacity-50">v3.1.PRO</span>
         </div>
       </footer>
+
+      {/* Modal de plano completo. Click en backdrop o ESC cierra. */}
+      {previewOrder?.sourceImageDataUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 sm:p-8"
+          onClick={() => setPreviewOrder(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white border-4 border-ink shadow-[12px_12px_0px_rgba(255,78,0,0.6)] max-w-6xl w-full max-h-full flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b-2 border-ink bg-[#0D2B4D] text-white">
+              <div className="min-w-0">
+                <p className="text-[10px] font-mono opacity-60 uppercase tracking-widest truncate">
+                  {previewOrder.sourcePdfName ?? 'Plano'}
+                </p>
+                <h3 className="text-lg font-black uppercase tracking-tight truncate">
+                  {previewOrder.pieza}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewOrder(null)}
+                className="shrink-0 p-1.5 border-2 border-white/40 hover:bg-accent hover:border-accent transition-colors"
+                title="Cerrar (ESC)"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="grow overflow-auto bg-[#F4F4F4] p-4 flex items-center justify-center">
+              <img
+                src={previewOrder.sourceImageDataUrl}
+                alt={`Plano ${previewOrder.pieza}`}
+                className="max-w-full max-h-full object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

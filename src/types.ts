@@ -1,18 +1,34 @@
+/** Cuádruple [ymin, xmin, ymax, xmax] en escala 0-1000 sobre la imagen rasterizada. */
+export type BoundingBox = [number, number, number, number];
+
 export interface Order {
   pieza: string;
+  numero_parte?: string;
   cantidad: string;
   orden: string;
   fecha: string;
   prioridad: 'URGENTE' | 'Normal';
   haSidoAuditada?: boolean;
   isometricView?: string;
-  isometricBoundingBox?: [number, number, number, number];
+  isometricBoundingBox?: BoundingBox;
   sourcePdfName?: string;
   sourcePdfPath?: string;
+  /**
+   * Score del mejor blueprint match (0-100). Solo presente cuando la orden
+   * fue auditada. Usado para señalar confianza en UI: <90 = revisar a mano.
+   */
+  matchScore?: number;
+  /**
+   * dataURL de la imagen completa rasterizada del plano (no el recorte). Se
+   * usa para abrir el plano original en un modal al hacer click en la
+   * miniatura. Opcional porque las órdenes sin match no lo tienen.
+   */
+  sourceImageDataUrl?: string;
 }
 
 export interface ExtractedOrder {
   pieza: string;
+  numero_parte: string;
   cantidad: string;
   orden: string;
   fecha: string;
@@ -21,7 +37,7 @@ export interface ExtractedOrder {
 
 export interface BlueprintSpec {
   pieza_detectada: string;
-  isometricBoundingBox: [number, number, number, number];
+  isometricBoundingBox: BoundingBox;
 }
 
 export interface BlueprintAnalysis {

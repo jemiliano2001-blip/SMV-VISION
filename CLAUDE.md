@@ -49,7 +49,7 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
 5. **Merge + crop** — Orders are matched to blueprint specs. The bounding box is used to `cropIsometricView()` from the rasterized JPEG. Falls back to `FALLBACK_CENTER_BOX = [30, 30, 720, 970]` if the box is invalid.
 6. **PDF export** — `jsPDF` + `jspdf-autotable` generates the final report with one row per order and the cropped isometric image embedded.
 
-Up to 5 blueprints are analyzed concurrently (`MAX_BLUEPRINT_CONCURRENCY = 5`, via `runWithConcurrencyLimit` in `src/lib/documentAnalysis/concurrency.ts`). Results are cached in IndexedDB by document SHA-256 + prompt version (`src/lib/documentAnalysis/cache.ts`, TTL: 7 days).
+Up to 8 blueprints are analyzed concurrently (`MAX_BLUEPRINT_CONCURRENCY = 8`, via `runWithConcurrencyLimit` in `src/lib/documentAnalysis/concurrency.ts`). Results are cached in IndexedDB by document SHA-256 + prompt version (`src/lib/documentAnalysis/cache.ts`, TTL: 7 days).
 
 **Prompt versioning**: When the Gemini prompts in `extractInfo()` change, bump `ORDER_PROMPT_VERSION` or `BLUEPRINT_PROMPT_VERSION` at the top of `App.tsx` to invalidate stale IndexedDB cache entries for all users.
 
@@ -79,7 +79,7 @@ Key modules:
 
 Security rules (`firestore.rules`): any authenticated user can read/write. Data validation lives in TypeScript, not in rules.
 
-**Known N+1**: `listActiveDrawingViews` iterates each part and issues one Firestore read per part to fetch its active drawing. For the current catalog size this is acceptable, but it does not scale to thousands of parts.
+**Two-query join**: `listActiveDrawingViews` issues exactly two Firestore reads — one for parts, one for all active drawings (`isActive == true`) — then joins them in memory by `partId`. No N+1.
 
 ### Web Worker (`src/workers/pdfImageWorker.ts`)
 
@@ -110,6 +110,6 @@ Tailwind v4 is used via the `@tailwindcss/vite` plugin — there is no `tailwind
 
 The Vite build splits vendor code into named chunks to avoid one giant bundle: `pdfjs-vendor`, `genai-vendor`, `motion-vendor`, `react-vendor`. This is configured in `vite.config.ts` under `build.rollupOptions.output.manualChunks`.
 
-### Known duplication
+### Shared utilities
 
-`fetchPdfAsDataUrl` (30-second AbortController timeout, FileReader → dataURL) is defined identically in both `App.tsx` and `ToolcribLibraryPanel.tsx`. If you change one, update the other, or extract it to `src/lib/`.
+`fetchPdfAsDataUrl` (30-second AbortController timeout, FileReader → dataURL) lives in `src/lib/fetchPdf.ts` and is consumed by `App.tsx` (auto-matching) and `ToolcribLibraryPanel.tsx` (manual attach).

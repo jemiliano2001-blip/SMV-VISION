@@ -16,3 +16,6 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+// Inyectado por Vite (vite.config.ts → define). Espejo de `version` en package.json.
+declare const __APP_VERSION__: string;
+

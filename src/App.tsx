@@ -48,7 +48,7 @@ import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/Tool
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
 import { fetchPdfAsDataUrl } from './lib/fetchPdf';
 
-const ORDER_PROMPT_VERSION = 'orders-v6-sublineas-dedupe';
+const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
 const BLUEPRINT_PROMPT_VERSION = 'blueprints-v15-multi-piece-variants';
 const SMV_VISION_APP_VERSION = `smv-vision@${__APP_VERSION__}`;
 const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
@@ -651,9 +651,10 @@ Devuelve EXCLUSIVAMENTE un JSON array con objetos que tengan los campos exactos:
 - pieza: descripción completa y ÚNICA de la pieza (incluyendo el número de parte si no tiene columna propia)
 - numero_parte: SOLO el código alfanumérico de parte (ej: "90-1012-05", "PN-12345", "WCD01-1824"). Si no existe o no aplica, devuelve "".
 - cantidad: número con su unidad si aparece (ej: "2.00\\nPieza", "10\\nSet").
-- orden
-- fecha
+- orden: el número de SO (sales order / orden interna) de la hoja. Si no hay, "".
+- fecha: la fecha de la orden de trabajo (OT) que aparece en la hoja. Si no hay, "".
 - prioridad (solo "URGENTE" o "Normal")
+- poNumber: el número de PO (orden de compra del cliente) de la hoja. Cada hoja del PDF es una PO con sus piezas. PO y SO son DISTINTOS. Si no hay, "".
 
 Reglas de extracción:
 1) Lee TODAS las columnas y filas de TODAS las páginas, manejando celdas fusionadas o descripciones multi-línea.
@@ -671,7 +672,8 @@ Reglas de extracción:
    - Colapsa espacios múltiples a uno solo.
 9) SUB-LÍNEAS ÚNICAS: si bajo un mismo SO aparecen varias sub-líneas con descripciones aparentemente idénticas (ej: 5 renglones que solo dicen "Fabricación de pieza" bajo SO 2026/S00781), revisa la columna de descripción/detalle/notas y EXTRAE el detalle diferenciador (número de pieza secuencial, código de parte, dimensión, material) para que cada fila tenga una descripción ÚNICA. Si genuinamente no existe diferencia textual, consolida las sub-líneas en UNA SOLA fila sumando la cantidad — no devuelvas 5 filas idénticas.
 10) No devuelvas filas exactamente duplicadas (mismo pieza+numero_parte+orden+fecha+cantidad).
-11) No inventes campos ni texto fuera del JSON.` },
+11) Cada HOJA del PDF corresponde a una PO. Propaga el mismo poNumber (y su SO/fecha) a TODAS las piezas listadas en esa hoja.
+12) No inventes campos ni texto fuera del JSON.` },
                   preparePdfPart(orderPdf)
                 ]
               }],
@@ -687,9 +689,10 @@ Reglas de extracción:
                       cantidad: { type: Type.STRING },
                       orden: { type: Type.STRING },
                       fecha: { type: Type.STRING },
-                      prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] }
+                      prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] },
+                      poNumber: { type: Type.STRING }
                     },
-                    required: ["pieza", "numero_parte", "cantidad", "orden", "fecha", "prioridad"]
+                    required: ["pieza", "numero_parte", "cantidad", "orden", "fecha", "prioridad", "poNumber"]
                   }
                 }
               }

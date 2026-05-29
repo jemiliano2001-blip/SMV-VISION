@@ -152,7 +152,8 @@ export function mergeGroupedOrders(orders: ExtractedOrder[]): ExtractedOrder[] {
 
     const prioridad: 'URGENTE' | 'Normal' = group.some((o) => o.prioridad === 'URGENTE') ? 'URGENTE' : 'Normal';
 
-    result.push({ pieza: group[0].pieza, numero_parte: group[0].numero_parte, cantidad, orden, fecha, prioridad });
+    const poNumber = group.find((o) => o.poNumber)?.poNumber ?? group[0].poNumber ?? '';
+    result.push({ pieza: group[0].pieza, numero_parte: group[0].numero_parte, cantidad, orden, fecha, prioridad, poNumber });
   }
 
   return [...result, ...ungrouped];
@@ -174,6 +175,7 @@ export function parseOrdersResponse(text: string): ExtractedOrder[] {
       orden: asString(item.orden) || 'N/A',
       fecha: asString(item.fecha) || 'N/A',
       prioridad: parsePriority(item.prioridad),
+      poNumber: asString(item.poNumber),
     }))
     .filter((item) => item.pieza.length > 0 && !isOrderSummaryRow(item.pieza));
 }

@@ -45,6 +45,7 @@ import {
 } from './lib/matching';
 import { mergeGroupedOrders, parseOrdersResponse, validateOrderPdfName } from './lib/orderMerge';
 import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/ToolcribLibraryPanel';
+import { WorkOrdersPanel } from './components/WorkOrdersPanel';
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
 import { upsertWorkOrders, type IncomingWorkOrder } from './lib/firebase/workOrders';
 import { fetchPdfAsDataUrl } from './lib/fetchPdf';
@@ -339,6 +340,7 @@ export default function App() {
   // Modal con la imagen completa del plano cuando el usuario hace click en la
   // miniatura isométrica. Null = cerrado.
   const [previewOrder, setPreviewOrder] = useState<Order | null>(null);
+  const [activeTab, setActiveTab] = useState<'reporte' | 'control'>('reporte');
 
   useEffect(() => {
     if (!previewOrder) return;
@@ -1643,7 +1645,35 @@ Reglas de extracción (ESTILO UT2033):
         </div>
       </header>
 
-      <main className="grow grid grid-cols-1 xl:grid-cols-12 overflow-hidden">
+      {/* Tab bar */}
+      <nav className="bg-bg border-b-2 border-ink px-10 flex gap-0">
+        {([
+          ['reporte', 'Generar Reporte'],
+          ['control', 'Control de Órdenes'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActiveTab(key)}
+            className={`px-5 py-3 text-[12px] font-black uppercase tracking-widest border-r-2 border-ink transition-colors ${
+              activeTab === key ? 'bg-ink text-bg' : 'bg-bg text-ink hover:bg-ink/10'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === 'control' && (
+        <main className="grow overflow-y-auto p-8">
+          <WorkOrdersPanel />
+        </main>
+      )}
+
+      <main
+        className="grow grid-cols-1 xl:grid-cols-12 overflow-hidden grid"
+        style={{ display: activeTab === 'reporte' ? undefined : 'none' }}
+      >
         {/* Input & Vision Sidebar */}
         <section className="xl:col-span-4 bg-[#E8E8E8] border-r-2 border-ink p-8 flex flex-col gap-8 overflow-y-auto">
           

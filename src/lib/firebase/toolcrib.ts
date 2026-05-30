@@ -272,14 +272,16 @@ export async function listActiveDrawingViews(options?: {
       const normalized = normalizeToolcribDrawing(docSnap.id, docSnap.data());
       if (!normalized) return;
       const existing = drawingByPartId.get(normalized.partId);
+      // Estado inconsistente: más de una revisión activa para la misma parte.
+      // Avisamos en cuanto detectamos la segunda y nos quedamos con la más reciente.
+      if (existing) {
+        console.warn(
+          '[smv-vision][toolcrib] múltiples revisiones activas detectadas para partId',
+          normalized.partId,
+        );
+      }
       // Keep the most recently created drawing when multiple actives exist (inconsistent state)
       if (!existing || (normalized.createdAtUTC ?? '') > (existing.createdAtUTC ?? '')) {
-        if (!existing && drawingByPartId.has(normalized.partId)) {
-          console.warn(
-            '[smv-vision][toolcrib] múltiples revisiones activas detectadas para partId',
-            normalized.partId,
-          );
-        }
         drawingByPartId.set(normalized.partId, normalized);
       }
     });

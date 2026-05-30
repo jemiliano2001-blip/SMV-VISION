@@ -474,7 +474,7 @@ export default function App() {
   // Produces a square JPEG with white padding so the isometric fits proportionally
   // in the fixed 72×72pt cell in the PDF without distortion.
   const cropIsometricView = (base64: string, box: number[]): Promise<string> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         const padding = 12;
@@ -510,6 +510,9 @@ export default function App() {
 
         resolve(squareCanvas.toDataURL('image/jpeg', 0.9));
       };
+      // Sin onerror, una imagen corrupta dejaría la promesa colgada para
+      // siempre y bloquearía el pipeline de planos (se hace await de este crop).
+      img.onerror = () => reject(new Error('No se pudo cargar la imagen para recortar la vista isométrica.'));
       img.src = base64;
     });
   };
@@ -517,7 +520,7 @@ export default function App() {
   // Crops the image to the bounding box without any padding or square-padding.
   // Used as the intermediate input for the two-pass box refinement.
   const cropToBoxRaw = (base64: string, box: number[]): Promise<string> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         const [ymin, xmin, ymax, xmax] = box;
@@ -534,6 +537,7 @@ export default function App() {
         ctx.drawImage(img, x, y, width, height, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL('image/jpeg', 0.9));
       };
+      img.onerror = () => reject(new Error('No se pudo cargar la imagen para el refinamiento del bounding box.'));
       img.src = base64;
     });
   };

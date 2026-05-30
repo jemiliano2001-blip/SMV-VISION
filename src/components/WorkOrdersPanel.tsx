@@ -118,7 +118,7 @@ export function WorkOrdersPanel(): ReactElement {
     }
     setOrders((prev) => prev.map((o) => (
       o.id === order.id
-        ? { ...o, status: 'entregada', deliveredToTornero: torneroName, deliveredAtUTC: new Date().toISOString() }
+        ? { ...o, status: 'entregada', deliveredToTornero: res.value.deliveredToTornero, deliveredAtUTC: new Date().toISOString() }
         : o
     )));
   }, []);

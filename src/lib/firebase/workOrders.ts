@@ -8,13 +8,18 @@ import {
   addDoc,
   collection,
   doc,
+  documentId,
   getDocs,
   limit as fbLimit,
+  orderBy,
   query,
   serverTimestamp,
+  startAfter,
   updateDoc,
   writeBatch,
   type Firestore,
+  type QueryConstraint,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 
 import type { WorkOrder, Tornero } from '../../types';
@@ -36,6 +41,8 @@ export const WORK_ORDERS_COLLECTION = 'workOrders';
 export const TORNEROS_COLLECTION = 'torneros';
 
 const DEFAULT_MAX = 2000;
+/** Límite duro de Firestore: 500 operaciones por WriteBatch. */
+const MAX_BATCH_OPS = 500;
 
 export type WorkOrderFailureReason =
   | 'not-configured'
@@ -114,6 +121,42 @@ export async function listWorkOrders(options?: {
 }
 
 /**
+ * Construye el mapa dedupeKey -> { id } recorriendo TODA la colección por
+ * páginas (ordenadas por documentId con `startAfter`). A diferencia de
+ * `listWorkOrders`, no tiene tope de 2000: si la colección crece (las
+ * archivadas nunca se borran) el dedup seguiría siendo correcto y no se
+ * crearían duplicados de órdenes ya existentes.
+ */
+async function loadExistingDedupeKeys(
+  database: Firestore,
+): Promise<Map<string, { id: string }>> {
+  const PAGE = 500;
+  const MAX_PAGES = 200; // tope defensivo: 100k docs
+  const existingByKey = new Map<string, { id: string }>();
+  let cursor: QueryDocumentSnapshot | null = null;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const constraints: QueryConstraint[] = [orderBy(documentId()), fbLimit(PAGE)];
+    if (cursor) constraints.push(startAfter(cursor));
+    const snap = await getDocs(query(collection(database, WORK_ORDERS_COLLECTION), ...constraints));
+    if (snap.empty) break;
+    snap.forEach((d) => {
+      const n = normalizeWorkOrder(d.id, d.data());
+      if (!n) return;
+      const key = buildDedupeKey({
+        soNumber: n.soNumber, poNumber: n.poNumber,
+        numeroParte: n.numeroParte, pieza: n.pieza,
+      });
+      if (!existingByKey.has(key)) existingByKey.set(key, { id: n.id });
+    });
+    cursor = snap.docs[snap.docs.length - 1] ?? null;
+    if (snap.size < PAGE) break;
+  }
+
+  return existingByKey;
+}
+
+/**
  * Crea/actualiza órdenes a partir de un lote extraído. Lee lo existente una
  * vez, calcula el diff con `mergeUpsert` (puro) y escribe en batch. Preserva
  * el estado de entrega: las actualizaciones nunca tocan `status`/`delivered*`.
@@ -129,16 +172,13 @@ export async function upsertWorkOrders(
   }
   if (incoming.length === 0) return { ok: true, value: { created: 0, updated: 0 } };
 
-  // 1) snapshot existente -> Map por dedupeKey
-  const existingResult = await listWorkOrders();
-  if (existingResult.ok === false) return existingResult;
-  const existingByKey = new Map<string, { id: string }>();
-  for (const wo of existingResult.value) {
-    const key = buildDedupeKey({
-      soNumber: wo.soNumber, poNumber: wo.poNumber,
-      numeroParte: wo.numeroParte, pieza: wo.pieza,
-    });
-    if (!existingByKey.has(key)) existingByKey.set(key, { id: wo.id });
+  // 1) snapshot existente -> Map por dedupeKey (paginado, sin tope de 2000)
+  let existingByKey: Map<string, { id: string }>;
+  try {
+    existingByKey = await loadExistingDedupeKeys(database);
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] lectura de dedup falló', error);
+    return { ok: false, reason: 'read-failed' };
   }
 
   // 2) diff puro
@@ -153,35 +193,51 @@ export async function upsertWorkOrders(
   const byKey = new Map(incomingWithKeys.map((i) => [i.key, i.raw]));
   const diff = mergeUpsert(existingByKey, incomingWithKeys);
 
-  // 3) escritura en batch (Firestore: máx 500 ops por batch)
+  // 3) escritura en batch. Firestore corta los batches en 500 ops, así que
+  // acumulamos las operaciones y las fragmentamos en lotes de ≤500. Sin esto,
+  // un PDF con muchas piezas haría fallar el commit completo y perderíamos
+  // todo el upsert.
+  type WriteOp =
+    | { kind: 'create'; o: IncomingWorkOrder }
+    | { kind: 'update'; id: string; fields: UpsertMutableFields };
+
+  const ops: WriteOp[] = [
+    ...diff.toCreate.map((key): WriteOp => ({ kind: 'create', o: byKey.get(key)! })),
+    ...diff.toUpdate.map((u): WriteOp => ({ kind: 'update', id: u.id, fields: u.fields })),
+  ];
+
   try {
-    const batch = writeBatch(database);
-    for (const key of diff.toCreate) {
-      const o = byKey.get(key)!;
-      const ref = doc(collection(database, WORK_ORDERS_COLLECTION));
-      batch.set(ref, {
-        poNumber: o.poNumber, soNumber: o.soNumber, otDate: o.otDate,
-        customer: o.customer, pieza: o.pieza, numeroParte: o.numeroParte,
-        cantidad: o.cantidad, prioridad: o.prioridad,
-        status: 'pendiente',
-        matchedPartId: o.matchedPartId, matchedDrawingId: o.matchedDrawingId,
-        matchScore: o.matchScore,
-        deliveredToTornero: null, deliveredAtUTC: null, deliveredByUid: null,
-        sourcePdfName: o.sourcePdfName, archived: false,
-        createdAtUTC: serverTimestamp(), updatedAtUTC: serverTimestamp(),
-      });
+    for (let start = 0; start < ops.length; start += MAX_BATCH_OPS) {
+      const chunk = ops.slice(start, start + MAX_BATCH_OPS);
+      const batch = writeBatch(database);
+      for (const op of chunk) {
+        if (op.kind === 'create') {
+          const o = op.o;
+          const ref = doc(collection(database, WORK_ORDERS_COLLECTION));
+          batch.set(ref, {
+            poNumber: o.poNumber, soNumber: o.soNumber, otDate: o.otDate,
+            customer: o.customer, pieza: o.pieza, numeroParte: o.numeroParte,
+            cantidad: o.cantidad, prioridad: o.prioridad,
+            status: 'pendiente',
+            matchedPartId: o.matchedPartId, matchedDrawingId: o.matchedDrawingId,
+            matchScore: o.matchScore,
+            deliveredToTornero: null, deliveredAtUTC: null, deliveredByUid: null,
+            sourcePdfName: o.sourcePdfName, archived: false,
+            createdAtUTC: serverTimestamp(), updatedAtUTC: serverTimestamp(),
+          });
+        } else {
+          const ref = doc(database, WORK_ORDERS_COLLECTION, op.id);
+          batch.update(ref, {
+            cantidad: op.fields.cantidad, prioridad: op.fields.prioridad,
+            matchedPartId: op.fields.matchedPartId, matchedDrawingId: op.fields.matchedDrawingId,
+            matchScore: op.fields.matchScore, otDate: op.fields.otDate,
+            poNumber: op.fields.poNumber, soNumber: op.fields.soNumber,
+            updatedAtUTC: serverTimestamp(),
+          });
+        }
+      }
+      await batch.commit();
     }
-    for (const u of diff.toUpdate) {
-      const ref = doc(database, WORK_ORDERS_COLLECTION, u.id);
-      batch.update(ref, {
-        cantidad: u.fields.cantidad, prioridad: u.fields.prioridad,
-        matchedPartId: u.fields.matchedPartId, matchedDrawingId: u.fields.matchedDrawingId,
-        matchScore: u.fields.matchScore, otDate: u.fields.otDate,
-        poNumber: u.fields.poNumber, soNumber: u.fields.soNumber,
-        updatedAtUTC: serverTimestamp(),
-      });
-    }
-    await batch.commit();
     return { ok: true, value: { created: diff.toCreate.length, updated: diff.toUpdate.length } };
   } catch (error) {
     console.warn('[smv-vision][work-orders] upsertWorkOrders falló', error);
@@ -189,11 +245,16 @@ export async function upsertWorkOrders(
   }
 }
 
-/** Marca una orden como entregada. El uid lo fija el writer desde Auth. */
+/**
+ * Marca una orden como entregada. El uid lo fija el writer desde Auth.
+ * Devuelve el nombre ya saneado que quedó persistido para que la UI haga
+ * su update optimista con el MISMO valor (evita que el nombre mostrado
+ * difiera del guardado hasta el siguiente refresh).
+ */
 export async function markDelivered(
   orderId: string,
   torneroName: string,
-): Promise<WorkOrderResult<void>> {
+): Promise<WorkOrderResult<{ deliveredToTornero: string }>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
   const uid = getCurrentUserUid();
@@ -210,7 +271,7 @@ export async function markDelivered(
       deliveredByUid: uid,
       updatedAtUTC: serverTimestamp(),
     });
-    return { ok: true, value: undefined };
+    return { ok: true, value: { deliveredToTornero: name } };
   } catch (error) {
     console.warn('[smv-vision][work-orders] markDelivered falló', error);
     return { ok: false, reason: 'write-failed' };

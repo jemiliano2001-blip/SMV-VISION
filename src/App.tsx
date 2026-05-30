@@ -855,12 +855,10 @@ Reglas de extracción:
           };
         });
         const upsertResult = await upsertWorkOrders(incoming);
-        if (upsertResult.ok) {
-          log.debug('[smv-vision][work-orders] upsert', upsertResult.value);
+        if (upsertResult.ok === false) {
+          console.warn('[smv-vision][work-orders] upsert no aplicado:', upsertResult.reason);
         } else {
-          // upsertResult.ok === false branch — reason is always present here
-          const failedResult = upsertResult as { ok: false; reason: string };
-          console.warn('[smv-vision][work-orders] upsert no aplicado:', failedResult.reason);
+          log.debug('[smv-vision][work-orders] upsert', upsertResult.value);
         }
       } catch (woErr) {
         console.warn('[smv-vision][work-orders] upsert lanzó (inesperado)', woErr);

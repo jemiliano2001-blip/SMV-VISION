@@ -37,8 +37,9 @@ function num(v: unknown): number | null {
 function priority(v: unknown): 'URGENTE' | 'Normal' {
   return v === 'URGENTE' ? 'URGENTE' : 'Normal';
 }
+const VALID_STATUSES: WorkOrderStatus[] = ['pendiente', 'en_proceso', 'terminada', 'entregada'];
 function statusOf(v: unknown): WorkOrderStatus {
-  return v === 'entregada' ? 'entregada' : 'pendiente';
+  return VALID_STATUSES.includes(v as WorkOrderStatus) ? (v as WorkOrderStatus) : 'pendiente';
 }
 function hasTimestampShape(v: unknown): v is Timestamp {
   return isPlainObject(v) && typeof (v as { toDate?: unknown }).toDate === 'function';
@@ -74,6 +75,11 @@ export function normalizeWorkOrder(id: string, raw: unknown): WorkOrder | null {
     deliveredToTornero: optStr(raw.deliveredToTornero, ID_MAX),
     deliveredAtUTC: ts(raw.deliveredAtUTC),
     deliveredByUid: optStr(raw.deliveredByUid, ID_MAX),
+    dueDate: optStr(raw.dueDate, ID_MAX),
+    assignedToTornero: optStr(raw.assignedToTornero, ID_MAX),
+    assignedAtUTC: ts(raw.assignedAtUTC),
+    finishedAtUTC: ts(raw.finishedAtUTC),
+    notes: str(raw.notes, '', STR_MAX),
     sourcePdfName: str(raw.sourcePdfName, '', STR_MAX),
     archived: bool(raw.archived, false),
     createdAtUTC: ts(raw.createdAtUTC),

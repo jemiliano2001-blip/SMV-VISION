@@ -46,6 +46,36 @@ export function getOrderAgeDays(fecha: string): number | null {
   return null;
 }
 
+/**
+ * Parsea una fecha en los formatos que puede traer el PDF (DD/MM/YYYY,
+ * DD-MM-YYYY, YYYY-MM-DD) y devuelve un string ISO-8601 (solo fecha,
+ * sin hora), o `null` si el formato no es reconocido.
+ * Reutiliza la misma lógica de `getOrderAgeDays` para no duplicar parsers.
+ */
+export function parseDateToISO(fecha: string): string | null {
+  let d: number, m: number, y: number;
+
+  let match = fecha.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    [, d, m, y] = match.map(Number) as [string, number, number, number];
+    const date = new Date(y, m - 1, d);
+    if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+  }
+  match = fecha.trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (match) {
+    [, d, m, y] = match.map(Number) as [string, number, number, number];
+    const date = new Date(y, m - 1, d);
+    if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+  }
+  match = fecha.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    [, y, m, d] = match.map(Number) as [string, number, number, number];
+    const date = new Date(y, m - 1, d);
+    if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+  }
+  return null;
+}
+
 /** Renderiza una cantidad de días en español compacto ("Hoy", "3 días", "5 sem", "2 meses"). */
 export function formatAgeDays(days: number): string {
   if (days === 0) return 'Hoy';

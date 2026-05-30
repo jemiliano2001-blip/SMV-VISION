@@ -93,8 +93,14 @@ export interface ToolcribActiveDrawingView {
   effectiveFromUTC: string | null;
 }
 
-/** Estado de una orden de trabajo en la capa de control. */
-export type WorkOrderStatus = 'pendiente' | 'entregada';
+/**
+ * Estado de una orden de trabajo en la capa de control.
+ *  pendiente  → recibida, sin asignar
+ *  en_proceso → plano entregado al tornero, en maquinado
+ *  terminada  → pieza lista, esperando envío a Suprajit
+ *  entregada  → entregada a Suprajit
+ */
+export type WorkOrderStatus = 'pendiente' | 'en_proceso' | 'terminada' | 'entregada';
 
 /**
  * Forma canónica de una orden de trabajo (una pieza de una PO) lista para
@@ -118,6 +124,16 @@ export interface WorkOrder {
   deliveredToTornero: string | null;
   deliveredAtUTC: string | null;
   deliveredByUid: string | null;
+  /** Fecha límite de entrega a Suprajit (ISO date string, ej. "2025-06-15"). */
+  dueDate: string | null;
+  /** Tornero que tiene la pieza en este momento (puede diferir de deliveredToTornero). */
+  assignedToTornero: string | null;
+  /** Cuándo se le dio el plano/hoja al tornero (inicio de maquinado). */
+  assignedAtUTC: string | null;
+  /** Cuándo quedó terminada (antes de la entrega a Suprajit). */
+  finishedAtUTC: string | null;
+  /** Notas libres del supervisor. */
+  notes: string;
   sourcePdfName: string;
   archived: boolean;
   createdAtUTC: string | null;

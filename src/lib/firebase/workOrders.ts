@@ -22,7 +22,7 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 
-import type { WorkOrder, Tornero } from '../../types';
+import type { WorkOrder, WorkOrderStatus, Tornero } from '../../types';
 import { getCurrentUserUid } from './auth';
 import { getFirestoreClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
@@ -36,6 +36,10 @@ import {
   mergeUpsert,
   type UpsertMutableFields,
 } from '../workOrders/dedupe';
+import { parseDateToISO } from '../age';
+
+/** Días de ciclo estándar para Suprajit (plazo por defecto si no hay fecha en el PDF). */
+const DEFAULT_CYCLE_DAYS = 14;
 
 export const WORK_ORDERS_COLLECTION = 'workOrders';
 export const TORNEROS_COLLECTION = 'torneros';
@@ -214,6 +218,17 @@ export async function upsertWorkOrders(
         if (op.kind === 'create') {
           const o = op.o;
           const ref = doc(collection(database, WORK_ORDERS_COLLECTION));
+          // Calcular dueDate automáticamente: otDate (primera línea) + 14 días.
+          // Si el formato no es reconocido, se deja null hasta que el supervisor
+          // lo ajuste a mano desde el panel de control.
+          const firstOtDate = o.otDate.split(/[\r\n]+/)[0].trim();
+          const parsedOtDate = parseDateToISO(firstOtDate);
+          let dueDate: string | null = null;
+          if (parsedOtDate) {
+            const d = new Date(parsedOtDate);
+            d.setDate(d.getDate() + DEFAULT_CYCLE_DAYS);
+            dueDate = d.toISOString().split('T')[0];
+          }
           batch.set(ref, {
             poNumber: o.poNumber, soNumber: o.soNumber, otDate: o.otDate,
             customer: o.customer, pieza: o.pieza, numeroParte: o.numeroParte,
@@ -222,6 +237,9 @@ export async function upsertWorkOrders(
             matchedPartId: o.matchedPartId, matchedDrawingId: o.matchedDrawingId,
             matchScore: o.matchScore,
             deliveredToTornero: null, deliveredAtUTC: null, deliveredByUid: null,
+            dueDate,
+            assignedToTornero: null, assignedAtUTC: null,
+            finishedAtUTC: null, notes: '',
             sourcePdfName: o.sourcePdfName, archived: false,
             createdAtUTC: serverTimestamp(), updatedAtUTC: serverTimestamp(),
           });
@@ -317,6 +335,119 @@ export async function archiveWorkOrder(
     return { ok: true, value: undefined };
   } catch (error) {
     console.warn('[smv-vision][work-orders] archiveWorkOrder falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+/**
+ * Transiciona el estado de una orden con los timestamps correspondientes.
+ *
+ * - pendiente   → (ningún timestamp extra)
+ * - en_proceso  → assignedAtUTC = now, assignedToTornero = torneroName
+ * - terminada   → finishedAtUTC = now
+ * - entregada   → deliveredAtUTC = now, deliveredToTornero = torneroName
+ *
+ * El uid se resuelve siempre desde Auth (no spoofeable).
+ */
+export async function updateOrderStatus(
+  orderId: string,
+  status: WorkOrderStatus,
+  torneroName?: string,
+): Promise<WorkOrderResult<{ deliveredToTornero: string | null }>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  const uid = getCurrentUserUid();
+  if (!uid && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
+  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+
+  // Para transiciones que requieren tornero, sanitizamos el nombre
+  const name = torneroName ? sanitizeTorneroName(torneroName) : null;
+  if ((status === 'en_proceso' || status === 'entregada') && !name) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+
+  const extra: Record<string, unknown> = {};
+  if (status === 'en_proceso') {
+    extra.assignedToTornero = name;
+    extra.assignedAtUTC = serverTimestamp();
+  } else if (status === 'terminada') {
+    extra.finishedAtUTC = serverTimestamp();
+  } else if (status === 'entregada') {
+    extra.deliveredToTornero = name;
+    extra.deliveredAtUTC = serverTimestamp();
+    extra.deliveredByUid = uid ?? null;
+  } else if (status === 'pendiente') {
+    // Revertir: limpia timestamps de progreso
+    extra.assignedToTornero = null;
+    extra.assignedAtUTC = null;
+    extra.finishedAtUTC = null;
+    extra.deliveredToTornero = null;
+    extra.deliveredAtUTC = null;
+    extra.deliveredByUid = null;
+  }
+
+  try {
+    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
+      status,
+      ...extra,
+      updatedAtUTC: serverTimestamp(),
+    });
+    return { ok: true, value: { deliveredToTornero: name } };
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] updateOrderStatus falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+/** Actualiza la fecha límite de entrega (override manual). */
+export async function updateDueDate(
+  orderId: string,
+  dueDate: string | null,
+): Promise<WorkOrderResult<void>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
+  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  // Validar formato ISO date básico (YYYY-MM-DD)
+  if (dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  try {
+    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
+      dueDate: dueDate ?? null,
+      updatedAtUTC: serverTimestamp(),
+    });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] updateDueDate falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+/** Guarda notas libres del supervisor para una orden. */
+export async function updateNotes(
+  orderId: string,
+  notes: string,
+): Promise<WorkOrderResult<void>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
+  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  const clean = (typeof notes === 'string' ? notes : '').slice(0, 1024);
+  try {
+    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
+      notes: clean,
+      updatedAtUTC: serverTimestamp(),
+    });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] updateNotes falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

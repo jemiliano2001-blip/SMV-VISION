@@ -17,6 +17,10 @@ import {
   X,
   Maximize2,
   Printer,
+  Pencil,
+  Trash2,
+  RotateCcw,
+  Check,
 } from 'lucide-react';
 import {
   AnalysisMetrics,
@@ -26,6 +30,7 @@ import {
   BoundingBox,
   ExtractedOrder,
   Order,
+  WorkOrder,
   WorkshopPdfUpload,
   ToolcribActiveDrawingView,
 } from './types';
@@ -44,10 +49,27 @@ import {
   selectBestBlueprintMatch,
 } from './lib/matching';
 import { mergeGroupedOrders, parseOrdersResponse, validateOrderPdfName } from './lib/orderMerge';
+import { consolidateHotStamps, isHotStampCatalogEntry, isHotStampPiece } from './lib/hotStamp';
+import {
+  cleanPieceName,
+  withPartNumber,
+  collapseDuplicateOrders,
+  computeDueDate,
+  dueSeverity,
+  dueLabel,
+  fmtISOToDisplay,
+  dueDaysOrInfinity,
+  summarizeOrders,
+} from './lib/reportFormat';
 import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/ToolcribLibraryPanel';
 import { WorkOrdersPanel } from './components/WorkOrdersPanel';
+import { AppShell, type AppView } from './components/shell/AppShell';
+import { InicioView, type AlertSeverity } from './components/InicioView';
+import { BibliotecaView } from './components/BibliotecaView';
+import { useDashboardSummary } from './lib/useDashboardSummary';
 import { listActiveDrawingViews } from './lib/firebase/toolcrib';
-import { upsertWorkOrders, type IncomingWorkOrder } from './lib/firebase/workOrders';
+import { upsertWorkOrders, updateCantidad, archiveWorkOrder, type IncomingWorkOrder } from './lib/firebase/workOrders';
+import { buildDedupeKey } from './lib/workOrders/dedupe';
 import { fetchPdfAsDataUrl } from './lib/fetchPdf';
 
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -202,6 +224,59 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * Llave de dedup de una orden del REPORTE (mismo formato que el upsert de
+ * Control). Permite mapear una fila del reporte a su `WorkOrder` en Firestore.
+ */
+function dedupeKeyOfReportOrder(order: Order): string {
+  return buildDedupeKey({
+    soNumber: order.orden,
+    poNumber: order.poNumber ?? '',
+    numeroParte: order.numero_parte ?? '',
+    pieza: order.pieza,
+  });
+}
+
+/**
+ * Celda de cantidad editable (modo edición del reporte). Mantiene un borrador
+ * local y confirma en blur/Enter; Esc cancela. Se re-sincroniza si la orden
+ * cambia desde fuera (p. ej. "Restaurar todo").
+ */
+function EditableCantidad({
+  order,
+  onCommit,
+}: {
+  order: Order;
+  onCommit: (order: Order, value: string) => void;
+}) {
+  const [draft, setDraft] = useState(order.cantidad);
+  useEffect(() => {
+    setDraft(order.cantidad);
+  }, [order.cantidad]);
+  const commit = () => {
+    const value = draft.trim();
+    if (value && value !== order.cantidad) onCommit(order, value);
+    else setDraft(order.cantidad);
+  };
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(order.cantidad);
+          e.currentTarget.blur();
+        }
+      }}
+      aria-label="Editar cantidad"
+      className="w-20 text-center font-mono font-black text-lg text-black bg-white border-2 border-black px-1 py-1.5 outline-none focus:border-[#FF4E00]"
+    />
+  );
+}
+
 
 export default function App() {
   const [orderPdf, setOrderPdf] = useState<string | null>(null);
@@ -225,6 +300,7 @@ export default function App() {
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
   const workshopStatePatchTimerRef = useRef<number | null>(null);
   const copyingResetTimerRef = useRef<number | null>(null);
+  const hotStampRefImageRef = useRef<string | null>(null);
 
   // Cancela timers pendientes si el componente se desmonta mid-corrida (evita
   // setState-after-unmount). Cubre el batcher de estados de plano y el reset
@@ -340,7 +416,52 @@ export default function App() {
   // Modal con la imagen completa del plano cuando el usuario hace click en la
   // miniatura isométrica. Null = cerrado.
   const [previewOrder, setPreviewOrder] = useState<Order | null>(null);
-  const [activeTab, setActiveTab] = useState<'reporte' | 'control'>('reporte');
+
+  // ── Modo edición del reporte (preview editable antes de imprimir) ──────────
+  // `editMode` activa la edición inline sobre la hoja. `originalResults` es el
+  // snapshot para "Restaurar todo" (capturado perezosamente en la 1ª mutación).
+  // `excludedOrders` son las órdenes excluidas (soft-delete reversible), con su
+  // `workOrderId` ya resuelto para restaurar/des-archivar sin re-buscar.
+  const [editMode, setEditMode] = useState(false);
+  const [originalResults, setOriginalResults] = useState<Order[] | null>(null);
+  const [excludedOrders, setExcludedOrders] = useState<Array<{ order: Order; workOrderId: string | null }>>([]);
+
+  const [activeView, setActiveView] = useState<AppView>('inicio');
+  const [controlAlert, setControlAlert] = useState<AlertSeverity | null>(null);
+  const { summary, refresh } = useDashboardSummary();
+
+  // Mapa dedupeKey -> WorkOrder (de Control) para enlazar cada fila del reporte
+  // con su documento en Firestore y poder sincronizar ediciones/exclusiones.
+  const workOrderByKey = useMemo(() => {
+    const map = new Map<string, WorkOrder>();
+    for (const wo of summary.orders) {
+      const key = buildDedupeKey({
+        soNumber: wo.soNumber,
+        poNumber: wo.poNumber,
+        numeroParte: wo.numeroParte,
+        pieza: wo.pieza,
+      });
+      if (!map.has(key)) map.set(key, wo);
+    }
+    return map;
+  }, [summary.orders]);
+
+  const findWorkOrderId = useCallback(
+    (order: Order): string | null => workOrderByKey.get(dedupeKeyOfReportOrder(order))?.id ?? null,
+    [workOrderByKey],
+  );
+
+  // Navegación: al ir a Control sin una alerta específica, limpia el filtro.
+  const navigate = useCallback((view: AppView) => {
+    if (view !== 'control') setControlAlert(null);
+    setActiveView(view);
+  }, []);
+
+  // Desde "atención inmediata" de Inicio: salta a Control con el filtro puesto.
+  const handleFocusAlert = useCallback((sev: AlertSeverity) => {
+    setControlAlert(sev);
+    setActiveView('control');
+  }, []);
 
   useEffect(() => {
     if (!previewOrder) return;
@@ -621,6 +742,11 @@ No inventes información.` },
     setIsExtracting(true);
     setError(null);
     setResults(null);
+    hotStampRefImageRef.current = null;
+    // Reinicia el modo edición/exclusiones: una corrida nueva parte de cero.
+    setEditMode(false);
+    setExcludedOrders([]);
+    setOriginalResults(null);
     setAnalysisSummary(null);
     setExtractingStep('Iniciando análisis...');
     setOrderLoadingState('loading');
@@ -754,16 +880,30 @@ Reglas de extracción:
           );
           if (hasManualMatch) continue;
 
-          let bestView: ToolcribActiveDrawingView | null = null;
-          let bestScore = 0;
+          // ISO-first: si algún ISO supera el umbral, gana sobre cualquier plano CAD.
+          let bestIsoView: ToolcribActiveDrawingView | null = null;
+          let bestIsoScore = 0;
+          let bestNonIsoView: ToolcribActiveDrawingView | null = null;
+          let bestNonIsoScore = 0;
 
           for (const view of library) {
             const score = scorePieceMatch(orderSignals, librarySignals.get(view.drawingId)!);
-            if (score > bestScore) {
-              bestScore = score;
-              bestView = view;
+            const isIso =
+              view.partNumber.toLowerCase().includes('.iso') ||
+              (view.sourcePath ?? '').toLowerCase().includes('.iso');
+            if (isIso) {
+              if (score > bestIsoScore) { bestIsoScore = score; bestIsoView = view; }
+            } else {
+              if (score > bestNonIsoScore) { bestNonIsoScore = score; bestNonIsoView = view; }
             }
           }
+
+          const bestView = (bestIsoView && bestIsoScore >= MIN_BLUEPRINT_MATCH_SCORE)
+            ? bestIsoView
+            : (bestNonIsoView ?? bestIsoView);
+          const bestScore = (bestIsoView && bestIsoScore >= MIN_BLUEPRINT_MATCH_SCORE)
+            ? bestIsoScore
+            : (bestNonIsoView ? bestNonIsoScore : bestIsoScore);
 
           log.debug(
             '[smv-vision][match]',
@@ -801,6 +941,35 @@ Reglas de extracción:
             '[smv-vision] Planos encontrados en catálogo pero sin URL de descarga (subir a Firebase Storage):',
             noUrlMatches.map((m) => `${m.pieza} → ${m.partNumber}`).join(', '),
           );
+        }
+
+        // Hot stamp ISO: búsqueda dedicada por keyword (el fuzzy no conecta
+        // "HOT STAMP LETRA M" con "PUNZONES DE MARCA"). Si hay ≥2 punzones y
+        // existe una entrada en el catálogo, rasteriza el ISO como referencia.
+        const hotStampOrders = ordersList.filter((o) => isHotStampPiece(o.pieza));
+        if (hotStampOrders.length >= 2) {
+          const hotStampEntry =
+            library.find((v) => isHotStampCatalogEntry(v) && (
+              v.partNumber.toLowerCase().includes('.iso') ||
+              (v.sourcePath ?? '').toLowerCase().includes('.iso')
+            )) ??
+            library.find((v) => isHotStampCatalogEntry(v));
+
+          if (hotStampEntry?.pdfUrl) {
+            try {
+              const hsDataUrl = await fetchPdfAsDataUrl(hotStampEntry.pdfUrl);
+              const hsRaster = await rasterizeAndNormalizePdf(hsDataUrl, {
+                maxDim: 1024,
+                renderScale: 1.5,
+                jpegQuality: 0.80,
+                normalizeQuality: 0.78,
+              });
+              hotStampRefImageRef.current = hsRaster.imageDataUrl;
+              log.debug('[smv-vision][hot-stamp] ISO de referencia rasterizado:', hotStampEntry.partNumber);
+            } catch (e) {
+              console.warn('[smv-vision][hot-stamp] Error al rasterizar ISO de referencia:', e);
+            }
+          }
         }
 
         // Fetch all matched blueprints in parallel (#1)
@@ -870,6 +1039,10 @@ Reglas de extracción:
         console.warn('[smv-vision][work-orders] upsert lanzó (inesperado)', woErr);
       }
 
+      // Revalida el resumen global (badges del rail + portada Inicio) con las
+      // órdenes recién creadas/actualizadas.
+      void refresh();
+
       if (currentWorkshopPdfs.length === 0) {
         setError('No se encontraron planos para las piezas detectadas. Sube planos manualmente o verifica la biblioteca.');
         setIsExtracting(false);
@@ -885,7 +1058,8 @@ Reglas de extracción:
       setResults(initialResults);
 
       // Best-match tracking per order index, mutated as blueprints complete.
-      const bestMatchByOrder = new Map<number, { score: number; fileId: string }>();
+      // `isIso` permite que un ISO proteja su posición contra planos CAD con score mayor.
+      const bestMatchByOrder = new Map<number, { score: number; fileId: string; isIso: boolean }>();
       const matchedBlueprintFileIds = new Set<string>();
       let completedBlueprints = 0;
       const totalBlueprints = currentWorkshopPdfs.length;
@@ -921,10 +1095,15 @@ Reglas de extracción:
             specs: result.analysis.specs,
           }, order.numero_parte, usedSet);
           if (match.score < MIN_BLUEPRINT_MATCH_SCORE) continue;
+          const isNewIso = result.fileLabel.toLowerCase().includes('.iso');
           const current = bestMatchByOrder.get(i);
-          if (current && current.score >= match.score) continue;
+          if (current) {
+            if (current.isIso && !isNewIso) continue;         // ISO protege su posición
+            if (!current.isIso && isNewIso) { /* ISO reemplaza CAD */ }
+            else if (current.score >= match.score) continue;  // comparación normal
+          }
 
-          bestMatchByOrder.set(i, { score: match.score, fileId: result.fileId });
+          bestMatchByOrder.set(i, { score: match.score, fileId: result.fileId, isIso: isNewIso });
           matchedBlueprintFileIds.add(result.fileId);
 
           // Mark this spec as consumed for this file/order pair.
@@ -1408,36 +1587,52 @@ Reglas de extracción (ESTILO UT2033):
     const totalOrders = analysisSummary?.totalOrders ?? results.length;
     const headerY = 40;
 
+    // Consolida los punzones de estampado (hot stamps) en un solo renglón antes
+    // de dividir en secciones. Es puramente de presentación del PDF — el panel
+    // de control y Firestore siguen viendo una orden por punzón. Si se rasterizó
+    // un ISO de referencia, el renglón sintético va a la tabla principal con imagen.
+    const reportOrders = consolidateHotStamps(results, hotStampRefImageRef.current ?? undefined);
+    const withBlueprint = reportOrders.filter((o) => !!o.isometricView);
+    // Audited y pendientes son mutuamente exclusivos por `isometricView`. Las
+    // pendientes pueden traer renglones visualmente idénticos (mismo nombre/SO/
+    // fecha/cant) que el extractor duplica — se colapsan en "×N".
+    const pendientes = collapseDuplicateOrders(reportOrders.filter((o) => !o.isometricView));
+
+    const renglones = withBlueprint.length + pendientes.length;
+    const summary = summarizeOrders([...withBlueprint, ...pendientes]);
+    const piezasLabel = Number.isInteger(summary.totalPiezas)
+      ? String(summary.totalPiezas)
+      : summary.totalPiezas.toFixed(2);
+
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
     doc.text('REPORTE DE TRABAJO: SUPRAJIT', 40, headerY);
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
     doc.text(
-      `Fecha: ${dateLabel}   |   Órdenes: ${totalOrders}   |   Auditadas: ${auditedTotal}`,
+      `Fecha: ${dateLabel}   |   Órdenes: ${totalOrders}   |   Renglones: ${renglones}   |   Auditadas: ${auditedTotal}`,
       40,
       headerY + 12,
     );
+    // Banda de resumen: lo accionable de un vistazo.
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    // Nota: jsPDF (fuente estándar) solo soporta Latin-1 — los símbolos ≤ y ≈
+    // salen como basura. Se usa texto ASCII. El · y × sí están en Latin-1.
+    doc.text(
+      `${summary.vencidas} vencidas  ·  ${summary.criticas} críticas (3 días o menos)  ·  ${summary.urgentes} urgentes  ·  ${piezasLabel} piezas en total`,
+      40,
+      headerY + 26,
+    );
+    doc.setFont('helvetica', 'normal');
 
-    // Sort URGENTE first (oldest first within each group), then Normal (oldest first).
-    // Aggregated rows carry multi-line fechas ("01/10/2025\n15/10/2025"); use the
-    // first line so the regex in getOrderAgeDays can match.
-    const sortByAgeDesc = (a: Order, b: Order): number => {
-      const ageA = getOrderAgeDays(a.fecha.split('\n')[0]) ?? -1;
-      const ageB = getOrderAgeDays(b.fecha.split('\n')[0]) ?? -1;
-      return ageB - ageA;
-    };
-    const withBlueprint = results.filter((o) => !!o.isometricView);
-    // Audited y pendientes son mutuamente exclusivos por `isometricView`; cada
-    // entrada de `results` ya pasó por `mergeGroupedOrders` y aparece una sola
-    // vez. No requiere dedupe por SO — una SO puede legítimamente cubrir varias
-    // piezas distintas, y antes esta lógica eliminaba pendientes válidas cuyo
-    // SO coincidía con el de una pieza auditada diferente.
-    const pendientes = results.filter((o) => !o.isometricView);
-
+    // Orden por urgencia: lo más vencido primero; sin fecha parseable al final.
+    // Se conserva el bloque URGENTE arriba del bloque Normal (prioridad del
+    // cliente). Las fechas multi-línea usan la primera línea (en computeDueDate).
+    const sortByUrgency = (a: Order, b: Order): number => dueDaysOrInfinity(a) - dueDaysOrInfinity(b);
     const sortGroup = (group: Order[]): Order[] => [
-      ...group.filter((o) => o.prioridad === 'URGENTE').sort(sortByAgeDesc),
-      ...group.filter((o) => o.prioridad !== 'URGENTE').sort(sortByAgeDesc),
+      ...group.filter((o) => o.prioridad === 'URGENTE').sort(sortByUrgency),
+      ...group.filter((o) => o.prioridad !== 'URGENTE').sort(sortByUrgency),
     ];
     const sortedWithBlueprint = sortGroup(withBlueprint);
     const sortedPendientes = sortGroup(pendientes);
@@ -1450,28 +1645,44 @@ Reglas de extracción (ESTILO UT2033):
     // Keep the unit suffix (Pieza/Set) so aggregated rows don't show a bare number.
     const formatCantidadCell = (raw: string): string => raw.replace(/\s+/g, ' ').trim();
 
+    // Celda ENTREGA: fecha límite (fecha de orden + 14d) y días restantes.
+    const formatEntregaCell = (order: Order): string => {
+      const due = computeDueDate(order);
+      if (!due) return '—';
+      const label = dueLabel(due);
+      return label ? `${fmtISOToDisplay(due)}\n${label}` : fmtISOToDisplay(due);
+    };
+
+    // Nombre mostrado: sin prefijo "(WESCON)" y con el número de parte si no
+    // está ya en la descripción (desambigua piezas con nombre genérico).
+    const displayName = (order: Order): string =>
+      withPartNumber(cleanPieceName(order.pieza), order.numero_parte);
+
     const buildRows = (orders: Order[]): RowInput[] => orders.map((order) => [
       '',
-      order.pieza,
+      displayName(order),
       formatCantidadCell(order.cantidad),
       order.orden,
       formatFechaCell(order.fecha),
+      formatEntregaCell(order),
     ]);
 
     // Rows for the PENDIENTES table — DIBUJO column omitted entirely.
     const buildPendienteRows = (orders: Order[]): RowInput[] => orders.map((order) => [
-      order.pieza,
+      displayName(order),
       formatCantidadCell(order.cantidad),
       order.orden,
       formatFechaCell(order.fecha),
+      formatEntregaCell(order),
     ]);
 
     const sharedColumnStyles = {
-      0: { cellWidth: 95,  halign: 'center' as const },
-      1: { cellWidth: 225, fontStyle: 'bold' as const, fontSize: 9 },
-      2: { cellWidth: 45,  halign: 'center' as const, fontStyle: 'bold' as const, fontSize: 11 },
-      3: { cellWidth: 70,  halign: 'center' as const, fontStyle: 'bold' as const },
-      4: { cellWidth: 80,  halign: 'center' as const },
+      0: { cellWidth: 80,  halign: 'center' as const },
+      1: { cellWidth: 183, fontStyle: 'bold' as const, fontSize: 9 },
+      2: { cellWidth: 38,  halign: 'center' as const, fontStyle: 'bold' as const, fontSize: 10 },
+      3: { cellWidth: 62,  halign: 'center' as const, fontStyle: 'bold' as const },
+      4: { cellWidth: 64,  halign: 'center' as const, fontSize: 7 },
+      5: { cellWidth: 88,  halign: 'center' as const, fontSize: 7 },
     };
     const sharedStyles = {
       fontSize: 8,
@@ -1500,11 +1711,34 @@ Reglas de extracción (ESTILO UT2033):
       doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
     };
 
+    // Colorea la celda ENTREGA según la severidad de la fecha límite. El color
+    // se pierde en fotocopias B/N, así que las vencidas además llevan una barra
+    // negra (drawOverdueIndicator) que sí sobrevive.
+    const applyDueStyle = (hookData: CellHookData, order: Order | undefined): void => {
+      if (!order) return;
+      const sev = dueSeverity(computeDueDate(order));
+      if (sev === 'overdue') {
+        hookData.cell.styles.textColor = [190, 0, 0];
+        hookData.cell.styles.fontStyle = 'bold';
+      } else if (sev === 'critical') {
+        hookData.cell.styles.textColor = [200, 80, 0];
+        hookData.cell.styles.fontStyle = 'bold';
+      } else if (sev === 'warning') {
+        hookData.cell.styles.fontStyle = 'bold';
+      }
+    };
+
+    const drawOverdueIndicator = (order: Order | undefined, hookData: CellHookData): void => {
+      if (!order || dueSeverity(computeDueDate(order)) !== 'overdue') return;
+      doc.setFillColor(0, 0, 0);
+      doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
+    };
+
     // Render main table: orders with blueprints
     if (sortedWithBlueprint.length > 0) {
       autoTable(doc, {
-        startY: headerY + 20,
-        head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
+        startY: headerY + 40,
+        head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA', 'ENTREGA']],
         body: buildRows(sortedWithBlueprint),
         theme: 'grid',
         headStyles: sharedHeadStyles,
@@ -1512,17 +1746,20 @@ Reglas de extracción (ESTILO UT2033):
         columnStyles: sharedColumnStyles,
         rowPageBreak: 'avoid',
         didParseCell: (hookData: CellHookData) => {
-          if (hookData.section === 'body' && hookData.column.index === 0) {
-            const order = sortedWithBlueprint[hookData.row.index];
-            if (order?.isometricView) {
-              hookData.cell.styles.minCellHeight = 82;
-            }
+          if (hookData.section !== 'body') return;
+          const order = sortedWithBlueprint[hookData.row.index];
+          if (hookData.column.index === 0 && order?.isometricView) {
+            hookData.cell.styles.minCellHeight = 82;
+          }
+          if (hookData.column.index === 5) {
+            applyDueStyle(hookData, order);
           }
         },
         didDrawCell: (hookData: CellHookData) => {
           if (hookData.section !== 'body') return;
           const order = sortedWithBlueprint[hookData.row.index];
           drawUrgenteIndicator(order, hookData);
+          if (hookData.column.index === 5) drawOverdueIndicator(order, hookData);
           if (hookData.column.index !== 0 || !order?.isometricView) return;
           const imageSize = 72;
           const imageX = hookData.cell.x + (hookData.cell.width - imageSize) / 2;
@@ -1539,44 +1776,53 @@ Reglas de extracción (ESTILO UT2033):
     // Render PENDIENTES section: orders without a matched blueprint
     if (sortedPendientes.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lastY = (doc as any).lastAutoTable?.finalY ?? headerY + 20;
+      const lastY = (doc as any).lastAutoTable?.finalY ?? headerY + 40;
       const sectionHeaderY = lastY + 28;
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(11);
       doc.setTextColor(0, 0, 0);
-      doc.text('PENDIENTES — SIN PLANO ENCONTRADO', 40, sectionHeaderY);
+      doc.text('OTRAS ÓRDENES (fabricación / sin plano de catálogo)', 40, sectionHeaderY);
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.text(
-        `${sortedPendientes.length} órden${sortedPendientes.length === 1 ? '' : 'es'} sin plano adjunto.`,
+        `${sortedPendientes.length} órden${sortedPendientes.length === 1 ? '' : 'es'} sin plano de catálogo.`,
         40,
         sectionHeaderY + 12,
       );
 
       // Pendientes never have a blueprint image — drop the DIBUJO column entirely
-      // and let NOMBRE DE LA PIEZA reclaim the width (#6).
+      // and let NOMBRE DE LA PIEZA reclaim the width.
       const pendientesColumnStyles = {
-        0: { cellWidth: 320, fontStyle: 'bold' as const, fontSize: 9 },
-        1: { cellWidth: 45,  halign: 'center' as const, fontStyle: 'bold' as const, fontSize: 11 },
-        2: { cellWidth: 70,  halign: 'center' as const, fontStyle: 'bold' as const },
-        3: { cellWidth: 80,  halign: 'center' as const },
+        0: { cellWidth: 263, fontStyle: 'bold' as const, fontSize: 9 },
+        1: { cellWidth: 38,  halign: 'center' as const, fontStyle: 'bold' as const, fontSize: 10 },
+        2: { cellWidth: 62,  halign: 'center' as const, fontStyle: 'bold' as const },
+        3: { cellWidth: 64,  halign: 'center' as const, fontSize: 7 },
+        4: { cellWidth: 88,  halign: 'center' as const, fontSize: 7 },
       };
       autoTable(doc, {
         startY: sectionHeaderY + 20,
-        head: [['NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA']],
+        head: [['NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA', 'ENTREGA']],
         body: buildPendienteRows(sortedPendientes),
         theme: 'grid',
         headStyles: sharedHeadStyles,
         styles: sharedStyles,
         columnStyles: pendientesColumnStyles,
         rowPageBreak: 'avoid',
+        didParseCell: (hookData: CellHookData) => {
+          if (hookData.section === 'body' && hookData.column.index === 4) {
+            applyDueStyle(hookData, sortedPendientes[hookData.row.index]);
+          }
+        },
         didDrawCell: (hookData: CellHookData) => {
           if (hookData.section !== 'body') return;
-          // Draw URGENTE indicator on the first (now NOMBRE) column instead of DIBUJO.
           const order = sortedPendientes[hookData.row.index];
-          if (!order || order.prioridad !== 'URGENTE' || hookData.column.index !== 0) return;
-          doc.setFillColor(0, 0, 0);
-          doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
+          if (!order) return;
+          // Barra URGENTE en la primera columna (ahora NOMBRE) en vez de DIBUJO.
+          if (order.prioridad === 'URGENTE' && hookData.column.index === 0) {
+            doc.setFillColor(0, 0, 0);
+            doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
+          }
+          if (hookData.column.index === 4) drawOverdueIndicator(order, hookData);
         },
       });
     }
@@ -1600,6 +1846,100 @@ Reglas de extracción (ESTILO UT2033):
       console.warn('No fue posible abrir el preview del PDF', e);
     }
   };
+
+  // ── Handlers de edición del reporte ─────────────────────────────────────────
+  // Todas mutan el set local `results` (fuente única de la hoja + exportaciones)
+  // y, si la orden tiene su WorkOrder en Control, sincronizan Firestore en
+  // best-effort (nunca bloquean ni lanzan). El snapshot original se captura en
+  // la 1ª mutación para permitir "Restaurar todo".
+
+  const snapshotOriginalOnce = useCallback(() => {
+    setOriginalResults((prev) => prev ?? (results ? [...results] : null));
+  }, [results]);
+
+  const handleEditCantidad = useCallback(
+    (order: Order, nuevaCantidad: string) => {
+      const clean = nuevaCantidad.trim();
+      if (!clean || clean === order.cantidad) return;
+      snapshotOriginalOnce();
+      setResults((prev) => (prev ? prev.map((o) => (o === order ? { ...o, cantidad: clean } : o)) : prev));
+      const woId = findWorkOrderId(order);
+      if (woId) {
+        void (async () => {
+          const res = await updateCantidad(woId, clean);
+          if (res.ok === false) console.warn('[smv-vision][report-edit] updateCantidad no aplicado:', res.reason);
+          else void refresh();
+        })();
+      }
+    },
+    [snapshotOriginalOnce, findWorkOrderId, refresh],
+  );
+
+  const handleExcludeOrder = useCallback(
+    (order: Order) => {
+      snapshotOriginalOnce();
+      const woId = findWorkOrderId(order);
+      setExcludedOrders((prev) => [...prev, { order, workOrderId: woId }]);
+      setResults((prev) => (prev ? prev.filter((o) => o !== order) : prev));
+      if (woId) {
+        void (async () => {
+          const res = await archiveWorkOrder(woId, true);
+          if (res.ok === false) console.warn('[smv-vision][report-edit] archive no aplicado:', res.reason);
+          else void refresh();
+        })();
+      }
+    },
+    [snapshotOriginalOnce, findWorkOrderId, refresh],
+  );
+
+  const handleRestoreOrder = useCallback(
+    (entry: { order: Order; workOrderId: string | null }) => {
+      setExcludedOrders((prev) => prev.filter((e) => e !== entry));
+      setResults((prev) => (prev ? [...prev, entry.order] : [entry.order]));
+      if (entry.workOrderId) {
+        void (async () => {
+          const res = await archiveWorkOrder(entry.workOrderId!, false);
+          if (res.ok) void refresh();
+        })();
+      }
+    },
+    [refresh],
+  );
+
+  const handleRestoreAll = useCallback(() => {
+    const snapshot = originalResults;
+    const current = results ?? [];
+    const excluded = excludedOrders;
+    // 1) Revertir la vista local al snapshot post-auditoría.
+    if (snapshot) setResults(snapshot);
+    setExcludedOrders([]);
+    setOriginalResults(null);
+    // 2) Sincronizar Control: des-archivar las excluidas y revertir cantidades
+    //    que se hayan cambiado (comparando snapshot vs estado actual por llave).
+    void (async () => {
+      let touched = false;
+      for (const e of excluded) {
+        if (e.workOrderId) {
+          await archiveWorkOrder(e.workOrderId, false);
+          touched = true;
+        }
+      }
+      if (snapshot) {
+        const currentByKey = new Map(current.map((o) => [dedupeKeyOfReportOrder(o), o.cantidad] as const));
+        for (const o of snapshot) {
+          const key = dedupeKeyOfReportOrder(o);
+          if (currentByKey.has(key) && currentByKey.get(key) !== o.cantidad) {
+            const woId = workOrderByKey.get(key)?.id ?? null;
+            if (woId) {
+              await updateCantidad(woId, o.cantidad);
+              touched = true;
+            }
+          }
+        }
+      }
+      if (touched) void refresh();
+    })();
+  }, [originalResults, results, excludedOrders, workOrderByKey, refresh]);
 
   const auditedCount = useMemo(
     () => (results ? results.filter((result) => result.haSidoAuditada).length : 0),
@@ -1626,535 +1966,583 @@ Reglas de extracción (ESTILO UT2033):
   }, [results, resultsFilter, filterUrgentOnly, filterMissingOnly]);
 
   return (
-    <div className="min-h-screen bg-bg font-sans text-ink border-12 border-ink flex flex-col h-screen">
-      {/* Header - Compacted */}
-      <header className="bg-bg border-b-2 border-ink px-10 py-6">
-        <div className="flex flex-col md:flex-row items-end justify-between gap-4">
-          <div className="space-y-2">
-            <span className="text-[11px] font-black uppercase tracking-[2px] bg-ink text-bg px-2 py-0.5 inline-block">
-              Servicios y Maquinados Vázquez
-            </span>
-            <h1 className="text-[48px] lg:text-[64px] font-black leading-none tracking-[-3px] uppercase italic">
-              SMV // VISION
-            </h1>
-          </div>
-          <div className="text-right space-y-1">
-            <span className="text-[11px] font-black uppercase tracking-[2px] bg-accent text-bg px-2 py-0.5 inline-block">
-              Intelligent Workshop Analyzer
-            </span>
-            <p className="text-[20px] font-black tracking-[-0.5px] uppercase opacity-40">
-              AUDIT CORE V3.1
-            </p>
-          </div>
-        </div>
-      </header>
-
-      {/* Tab bar */}
-      <nav className="bg-bg border-b-2 border-ink px-10 flex gap-0">
-        {([
-          ['reporte', 'Generar Reporte'],
-          ['control', 'Control de Órdenes'],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setActiveTab(key)}
-            className={`px-5 py-3 text-[12px] font-black uppercase tracking-widest border-r-2 border-ink transition-colors ${
-              activeTab === key ? 'bg-ink text-bg' : 'bg-bg text-ink hover:bg-ink/10'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {activeTab === 'control' && (
-        <main className="grow overflow-y-auto p-8">
-          <WorkOrdersPanel />
-        </main>
-      )}
-
-      <main
-        className="grow grid-cols-1 xl:grid-cols-12 overflow-hidden grid"
-        style={{ display: activeTab === 'reporte' ? undefined : 'none' }}
+    <>
+      <AppShell
+        activeView={activeView}
+        onNavigate={navigate}
+        counts={summary.counts}
+        version="v3.1.PRO"
       >
-        {/* Input & Vision Sidebar */}
-        <section className="xl:col-span-4 bg-[#E8E8E8] border-r-2 border-ink p-8 flex flex-col gap-8 overflow-y-auto">
-          
-          {/* Header Module: Config & Orders */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-widest text-ink/40">
-              <div className="w-4 h-1 bg-ink"></div>
-              01. Pedidos
-            </div>
+        {/* ── Generar Reporte — montado siempre, oculto para preservar PDFs/resultados ── */}
+        <div className="h-full" style={{ display: activeView === 'reporte' ? 'block' : 'none' }}>
+          <div className="h-full flex flex-col xl:flex-row">
 
-            {/* Order Visual Input */}
-            <div
-              className={`min-h-[160px] border-2 border-dashed flex flex-col items-center justify-center p-6 relative transition-all group ${
-                draggingZone === 'order'
-                  ? 'border-accent bg-accent/10 shadow-[6px_6px_0px_rgba(255,78,0,0.4)]'
-                  : orderPdf
-                    ? 'border-ink bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)]'
-                    : 'border-ink bg-white/30 hover:bg-white hover:border-accent cursor-pointer'
-              }`}
-              onClick={() => !orderPdf && orderFileInputRef.current?.click()}
-              {...buildDropHandlers('order', ingestOrderFile)}
-            >
-              <input 
-                type="file" 
-                ref={orderFileInputRef} 
-                className="hidden" 
-                accept="application/pdf" 
-                onChange={(e) => void handleOrderInputUpload(e)} 
-              />
-              
-              {!orderPdf ? (
-                <div className="text-center space-y-2 group-hover:scale-105 transition-transform">
-                  <Database className="mx-auto w-10 h-10 text-ink/20 group-hover:text-accent" />
-                  <p className="font-black uppercase text-xs tracking-tighter">Subir Reporte de Pedidos</p>
-                  <p className="text-[9px] text-gray-400 font-mono uppercase">PDF de Google Sheets (Suprajit)</p>
+            {/* ── Columna de entrada (CTA siempre visible al pie) ── */}
+            <section className="xl:w-[400px] xl:shrink-0 xl:h-full border-b-2 xl:border-b-0 xl:border-r-2 border-line bg-surface flex flex-col">
+              <div className="flex-1 overflow-y-auto p-5 space-y-7">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">Auditoría de planos</p>
+                  <h1 className="font-display font-black text-3xl uppercase italic tracking-[-1px] leading-none">Generar Reporte</h1>
                 </div>
-              ) : (
-                <div className="relative w-full h-full flex flex-col items-center justify-center">
-                  <div className="relative">
-                    <FileText className={`w-14 h-14 ${orderLoadingState === 'loading' ? 'text-accent animate-pulse' : 'text-ink'}`} />
-                    {orderLoadingState === 'done' && (
-                      <div className="absolute -bottom-1 -right-1 bg-green-500 p-1 rounded-full border-2 border-white">
-                        <CheckCircle2 size={12} className="text-white" />
+
+                {/* 01 Pedidos */}
+                <div className="space-y-3">
+                  <StepLabel n="01" label="Pedidos" done={!!orderPdf} />
+                  <div
+                    className={`min-h-[150px] border-2 border-dashed flex flex-col items-center justify-center p-6 relative transition-all group ${
+                      draggingZone === 'order'
+                        ? 'border-accent bg-accent/10'
+                        : orderPdf
+                          ? 'border-line bg-surface-2'
+                          : 'border-line bg-surface-2/40 hover:bg-surface-2 hover:border-accent cursor-pointer'
+                    }`}
+                    onClick={() => !orderPdf && orderFileInputRef.current?.click()}
+                    {...buildDropHandlers('order', ingestOrderFile)}
+                  >
+                    <input
+                      type="file"
+                      ref={orderFileInputRef}
+                      className="hidden"
+                      accept="application/pdf"
+                      onChange={(e) => void handleOrderInputUpload(e)}
+                    />
+                    {!orderPdf ? (
+                      <div className="text-center space-y-2 group-hover:scale-105 transition-transform">
+                        <Database className="mx-auto w-10 h-10 text-ink-dim group-hover:text-accent transition-colors" />
+                        <p className="font-display font-black uppercase text-xs tracking-tight text-ink">Subir Reporte de Pedidos</p>
+                        <p className="text-[9px] text-ink-dim font-mono uppercase">PDF de Google Sheets (Suprajit)</p>
+                      </div>
+                    ) : (
+                      <div className="relative w-full flex flex-col items-center justify-center">
+                        <div className="relative">
+                          <FileText className={`w-12 h-12 ${orderLoadingState === 'loading' ? 'text-accent animate-pulse' : 'text-ink'}`} />
+                          {orderLoadingState === 'done' && (
+                            <div className="absolute -bottom-1 -right-1 bg-ok p-1 rounded-full border-2 border-surface">
+                              <CheckCircle2 size={12} className="text-bg" />
+                            </div>
+                          )}
+                        </div>
+                        <p className="mt-3 font-black text-[11px] uppercase tracking-widest truncate max-w-full px-4 text-ink">
+                          {orderPdfName}
+                        </p>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); removeFile('order'); }}
+                          className="absolute -top-3 -right-3 p-1.5 bg-accent text-bg hover:bg-ink border-2 border-surface transition-colors"
+                        >
+                          <X size={14} />
+                        </button>
                       </div>
                     )}
                   </div>
-                  <p className="mt-4 font-black text-[11px] uppercase tracking-widest truncate max-w-full px-4">
-                    {orderPdfName}
-                  </p>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); removeFile('order'); }}
-                    className="absolute -top-4 -right-4 p-2 bg-accent text-bg hover:bg-ink transition-colors border-2 border-ink shadow-[2px_2px_0px_rgba(0,0,0,1)]"
-                  >
-                    <X size={16} />
-                  </button>
+
+                  {orderPdfWarning && (
+                    <div className="flex items-start gap-2 border border-warn/60 bg-warn/10 px-2 py-1.5 text-[10px] font-mono text-warn leading-snug" role="alert">
+                      <AlertCircle size={12} className="shrink-0 mt-0.5" />
+                      <span>{orderPdfWarning}</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {orderPdfWarning && (
-              <div className="flex items-start gap-2 border border-yellow-600 bg-yellow-50 px-2 py-1.5 text-[10px] font-mono text-yellow-700 leading-snug" role="alert">
-                <AlertCircle size={12} className="shrink-0 mt-0.5" />
-                <span>{orderPdfWarning}</span>
+                {/* 02 Biblioteca */}
+                <div className="space-y-3">
+                  <StepLabel n="02" label="Biblioteca de Planos" />
+                  <ToolcribLibraryPanel
+                    onAttachDrawing={handleAttachToolcribDrawing}
+                    attachedDrawingIds={attachedToolcribDrawingIds}
+                  />
+                </div>
+
+                {/* 03 Workspace */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <StepLabel n="03" label="Workspace" done={workshopPdfs.length > 0} />
+                    <span className="bg-ink text-bg px-2 py-0.5 text-[10px] font-black font-mono">{workshopPdfs.length} PLANOS</span>
+                  </div>
+                  <div
+                    className={`border-2 border-dashed p-2 transition-all ${
+                      draggingZone === 'workshop' ? 'border-accent bg-accent/10' : 'border-line bg-surface-2/40'
+                    }`}
+                    {...buildDropHandlers('workshop', ingestWorkshopFiles)}
+                  >
+                    {workshopPdfs.length > 0 ? (
+                      <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                        {workshopPdfs.map((pdf) => (
+                          <div key={pdf.id} className="relative group border border-line bg-surface-2 p-2 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              {workshopLoadingStates[pdf.id] === 'loading' ? (
+                                <Loader2 size={12} className="text-accent animate-spin shrink-0" />
+                              ) : (
+                                <CheckCircle2 size={12} className="text-ok shrink-0" />
+                              )}
+                              <span className="text-[9px] font-mono truncate uppercase font-bold text-ink">
+                                {pdf.relativePath.split('/').pop()}
+                              </span>
+                            </div>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
+                              className="text-ink-dim hover:text-accent transition-colors"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] font-mono text-ink-dim text-center py-3 uppercase tracking-wider">
+                        Arrastra planos PDF aquí o úsalos desde la biblioteca
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* Module 2: Tool Crib Library */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-widest text-ink/40">
-              <div className="w-4 h-1 bg-ink"></div>
-              02. Biblioteca de Planos
-            </div>
-            <ToolcribLibraryPanel
-              onAttachDrawing={handleAttachToolcribDrawing}
-              attachedDrawingIds={attachedToolcribDrawingIds}
-            />
-          </div>
-
-          {/* Module 3: Active Workspace & Actions */}
-          <div className="mt-auto pt-6 space-y-4 border-t-4 border-ink/5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-widest text-ink/40">
-                <div className="w-4 h-1 bg-accent"></div>
-                03. Workspace
+              {/* CTA fija */}
+              <div className="border-t-2 border-line p-4 bg-surface-2">
+                <button
+                  onClick={extractInfo}
+                  disabled={isExtracting || !orderPdf}
+                  className="w-full bg-accent text-bg font-display font-black py-4 text-lg uppercase tracking-[3px] transition-all shadow-hard hover:shadow-none hover:translate-x-1 hover:translate-y-1 active:scale-[0.98] disabled:bg-surface disabled:text-ink-dim disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+                >
+                  {isExtracting ? (
+                    <><Loader2 className="w-5 h-5 animate-spin" /> Analizando…</>
+                  ) : (
+                    'Ejecutar Auditoría'
+                  )}
+                </button>
               </div>
-              <span className="bg-ink text-bg px-2 py-0.5 text-[10px] font-black">{workshopPdfs.length} PLANOS</span>
-            </div>
+            </section>
 
-            <div
-              className={`border-2 border-dashed p-2 transition-all ${
-                draggingZone === 'workshop'
-                  ? 'border-accent bg-accent/10'
-                  : 'border-ink/20 bg-white/30'
-              }`}
-              {...buildDropHandlers('workshop', ingestWorkshopFiles)}
-            >
-              {workshopPdfs.length > 0 ? (
-                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-2">
-                  {workshopPdfs.map((pdf) => (
-                    <div key={pdf.id} className="relative group border border-ink bg-white p-2 flex items-center justify-between gap-2 shadow-[2px_2px_0px_rgba(0,0,0,1)] hover:-translate-y-px transition-transform">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        {workshopLoadingStates[pdf.id] === 'loading' ? (
-                          <Loader2 size={12} className="text-accent animate-spin shrink-0" />
-                        ) : (
-                          <CheckCircle2 size={12} className="text-green-500 shrink-0" />
-                        )}
-                        <span className="text-[9px] font-mono truncate uppercase font-bold">
-                          {pdf.relativePath.split('/').pop()}
+            {/* ── Columna de resultados ── */}
+            <section className="flex-1 min-w-0 h-full overflow-y-auto bp-grid">
+              <div className="p-6 lg:p-8 flex flex-col min-h-full">
+                <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="w-3 h-3 bg-accent" />
+                    <h2 className="font-display font-black text-2xl uppercase italic tracking-tight">Audit Dashboard</h2>
+                  </div>
+
+                  {results && (
+                    <div className="flex gap-2 flex-wrap">
+                      {!isExtracting && (
+                        <button
+                          onClick={() => setEditMode((v) => !v)}
+                          aria-pressed={editMode}
+                          title={editMode ? 'Salir del modo edición (conserva los cambios)' : 'Editar el reporte antes de imprimir: ajustar cantidades y excluir órdenes'}
+                          className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest border-2 transition-colors inline-flex items-center gap-1.5 ${
+                            editMode
+                              ? 'bg-accent text-bg border-accent'
+                              : 'bg-surface border-line text-ink hover:border-accent hover:text-accent'
+                          }`}
+                        >
+                          {editMode ? <><Check size={12} /> Listo</> : <><Pencil size={12} /> Editar reporte</>}
+                        </button>
+                      )}
+                      <button
+                        onClick={copyResults}
+                        className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors"
+                      >
+                        {copying ? 'Copiado' : 'Copiar JSON'}
+                      </button>
+                      <button
+                        onClick={downloadCsv}
+                        className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors"
+                        title="Descargar resultados como CSV (Excel)"
+                      >
+                        CSV
+                      </button>
+                      <button
+                        onClick={downloadPdf}
+                        className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5"
+                      >
+                        Exportar Reporte (PDF)
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <AnimatePresence mode="wait">
+                  {!results && !isExtracting && !error && (
+                    <motion.div
+                      key="waiting"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="grow border-2 border-line border-dashed flex flex-col items-center justify-center text-center p-12 bg-surface/40 corner-ticks"
+                    >
+                      <div className="relative mb-8">
+                        <Maximize2 className="text-line w-28 h-28" />
+                        <FileText className="absolute inset-0 m-auto text-ink-dim w-10 h-10" />
+                      </div>
+                      <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">Esperando Instrucciones</h3>
+                      <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px]">Carga el reporte de pedidos y selecciona planos para iniciar</p>
+                      <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl w-full">
+                        {[
+                          ['01', 'Carga el PDF de órdenes generado por Google Sheets.'],
+                          ['02', 'Usa el Auto-Matching o la Biblioteca para buscar planos.'],
+                          ['03', 'Presiona "Ejecutar" para que Vision AI audite las piezas.'],
+                        ].map(([n, text]) => (
+                          <div key={n} className="p-4 border-2 border-line bg-surface text-left">
+                            <p className="font-display font-black text-[11px] uppercase mb-1 text-accent">Paso {n}</p>
+                            <p className="text-[9px] font-mono text-ink-dim leading-tight">{text}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {isExtracting && (
+                    <motion.div
+                      key="extracting"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="grow border-2 border-line bg-surface-2 flex flex-col items-center justify-center text-center p-12 relative overflow-hidden"
+                    >
+                      <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#FF4E00 1px, transparent 0)', backgroundSize: '24px 24px' }}></div>
+
+                      <div className="relative z-10 space-y-8">
+                        <div className="relative">
+                          <div className="w-36 h-36 border-8 border-line border-t-accent rounded-full animate-spin"></div>
+                          <Database className="absolute inset-0 m-auto text-accent w-10 h-10 animate-pulse" />
+                        </div>
+                        <div className="space-y-2">
+                          <h3 className="text-ink font-display font-black text-5xl uppercase tracking-tighter italic">Procesando…</h3>
+                          <p className="text-accent font-mono text-sm uppercase tracking-[8px] animate-pulse">{extractingStep}</p>
+                        </div>
+                        <div className="flex justify-center gap-1 max-w-xs mx-auto flex-wrap">
+                          {workshopPdfs.map((pdf) => (
+                            <div
+                              key={pdf.id}
+                              className={`h-2 transition-all duration-500 ${
+                                workshopLoadingStates[pdf.id] === 'done' ? 'bg-ok w-8' :
+                                workshopLoadingStates[pdf.id] === 'loading' ? 'bg-accent w-4 animate-pulse' : 'bg-line w-2'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {error && (
+                    <motion.div
+                      key="error"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="grow border-2 border-danger bg-danger/5 p-12 flex flex-col items-center justify-center text-center"
+                    >
+                      <AlertCircle className="text-danger w-20 h-20 mb-6" />
+                      <h3 className="text-ink font-display font-black text-2xl uppercase italic mb-4">Error Crítico Visión AI</h3>
+                      <p className="text-ink-dim font-mono text-sm max-w-md mx-auto bg-surface p-4 border-2 border-line">{error}</p>
+                    </motion.div>
+                  )}
+
+                  {results && (
+                    <motion.div
+                      key="results"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="grow flex flex-col"
+                    >
+                      {/* Barra de filtros (dark). Los filtros NO se aplican a las
+                          exportaciones (PDF/CSV) — el reporte final usa siempre el
+                          dataset completo. */}
+                      <div className="border-2 border-line bg-surface px-4 py-3 flex items-center gap-3 flex-wrap">
+                        <div className="grow flex items-center gap-2 border border-line px-2 py-1.5 bg-surface-2 min-w-[180px]">
+                          <input
+                            type="text"
+                            value={resultsFilter}
+                            onChange={(e) => setResultsFilter(e.target.value)}
+                            placeholder="Filtrar por pieza, parte o SO…"
+                            className="grow bg-transparent outline-none text-[11px] font-mono text-ink placeholder:text-ink-dim/70"
+                          />
+                          {resultsFilter && (
+                            <button onClick={() => setResultsFilter('')} className="text-ink-dim hover:text-accent" title="Limpiar filtro">
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                        <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none text-ink-dim hover:text-ink">
+                          <input type="checkbox" checked={filterUrgentOnly} onChange={(e) => setFilterUrgentOnly(e.target.checked)} className="accent-accent" />
+                          Solo URGENTE
+                        </label>
+                        <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none text-ink-dim hover:text-ink">
+                          <input type="checkbox" checked={filterMissingOnly} onChange={(e) => setFilterMissingOnly(e.target.checked)} className="accent-accent" />
+                          Sin plano
+                        </label>
+                        <span className="text-[10px] font-mono text-ink-dim ml-auto">
+                          {filteredResults?.length ?? 0} / {results.length}
                         </span>
                       </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); removeFile('workshop', pdf.id); }}
-                        className="text-ink/30 hover:text-accent transition-colors"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[10px] font-mono text-ink/40 text-center py-3 uppercase tracking-wider">
-                  Arrastra planos PDF aquí o úsalos desde la biblioteca
-                </p>
-              )}
-            </div>
-            
-            <button
-              onClick={extractInfo}
-              disabled={isExtracting || !orderPdf}
-              className="w-full bg-accent hover:bg-ink disabled:bg-gray-300 text-bg font-black py-5 px-8 text-xl uppercase tracking-[4px] transition-all shadow-[6px_6px_0px_rgba(0,0,0,0.2)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 active:scale-[0.98]"
-            >
-              {isExtracting ? (
-                <span className="flex items-center justify-center gap-3 italic">
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  Analizando...
-                </span>
-              ) : (
-                <span className="flex items-center justify-center gap-3">
-                  Ejecutar Auditoría
-                </span>
-              )}
-            </button>
-          </div>
-        </section>
 
-        {/* Results Section */}
-        <section className="xl:col-span-8 p-10 flex flex-col bg-bg overflow-hidden relative">
-          <div className="flex items-center justify-between mb-10">
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 bg-ink"></div>
-              <h2 className="text-2xl font-black uppercase tracking-tighter italic">Audit Dashboard</h2>
-            </div>
-            
-            {results && (
-              <div className="flex gap-2">
-                <button
-                  onClick={copyResults}
-                  className="bg-white border-2 border-ink text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink hover:text-bg transition-all"
-                >
-                  {copying ? 'Copiado' : 'Copiar JSON'}
-                </button>
-                <button
-                  onClick={downloadCsv}
-                  className="bg-white border-2 border-ink text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink hover:text-bg transition-all"
-                  title="Descargar resultados como CSV (Excel)"
-                >
-                  CSV
-                </button>
-                <button
-                  onClick={downloadPdf}
-                  className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-ink transition-all shadow-[4px_4px_0px_rgba(0,0,0,1)] hover:shadow-none active:translate-x-0.5 active:translate-y-0.5"
-                >
-                  Exportar Reporte (PDF)
-                </button>
-              </div>
-            )}
-          </div>
-
-          <AnimatePresence mode="wait">
-            {!results && !isExtracting && !error && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="grow border-4 border-ink border-dashed flex flex-col items-center justify-center text-center p-16 bg-white shadow-inner"
-              >
-                <div className="relative mb-8">
-                  <Maximize2 className="text-ink/5 w-32 h-32" />
-                  <FileText className="absolute inset-0 m-auto text-ink/20 w-12 h-12" />
-                </div>
-                <h3 className="font-black text-4xl uppercase tracking-tighter text-ink/20 italic mb-4">Esperando Instrucciones</h3>
-                <p className="text-[11px] font-mono text-ink/40 uppercase tracking-[4px]">Carga el reporte de pedidos y selecciona planos para iniciar</p>
-                <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-2xl w-full">
-                  <div className="p-4 border-2 border-ink/10 bg-bg/50 text-left">
-                    <p className="font-black text-[10px] uppercase mb-1">Paso 01</p>
-                    <p className="text-[9px] font-mono opacity-60 leading-tight">Carga el PDF de órdenes generado por Google Sheets.</p>
-                  </div>
-                  <div className="p-4 border-2 border-ink/10 bg-bg/50 text-left">
-                    <p className="font-black text-[10px] uppercase mb-1">Paso 02</p>
-                    <p className="text-[9px] font-mono opacity-60 leading-tight">Usa el Auto-Matching o la Biblioteca para buscar planos.</p>
-                  </div>
-                  <div className="p-4 border-2 border-ink/10 bg-bg/50 text-left">
-                    <p className="font-black text-[10px] uppercase mb-1">Paso 03</p>
-                    <p className="text-[9px] font-mono opacity-60 leading-tight">Presiona "Ejecutar" para que Vision AI audite las piezas.</p>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {isExtracting && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="grow border-4 border-ink bg-ink flex flex-col items-center justify-center text-center p-12 relative overflow-hidden"
-              >
-                {/* Background Pattern */}
-                <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#FF4E00 1px, transparent 0)', backgroundSize: '24px 24px' }}></div>
-                
-                <div className="relative z-10 space-y-8">
-                  <div className="relative">
-                    <div className="w-40 h-40 border-8 border-white/5 border-t-accent rounded-full animate-spin"></div>
-                    <Database className="absolute inset-0 m-auto text-accent w-10 h-10 animate-pulse" />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="text-bg font-black text-5xl uppercase tracking-tighter italic">Procesando...</h3>
-                    <p className="text-accent font-mono text-sm uppercase tracking-[8px] animate-pulse">{extractingStep}</p>
-                  </div>
-                  <div className="flex justify-center gap-1 max-w-xs mx-auto flex-wrap">
-                    {workshopPdfs.map((pdf) => (
-                      <div 
-                        key={pdf.id} 
-                        className={`h-2 transition-all duration-500 ${
-                          workshopLoadingStates[pdf.id] === 'done' ? 'bg-green-500 w-8' : 
-                          workshopLoadingStates[pdf.id] === 'loading' ? 'bg-accent w-4 animate-pulse' : 'bg-white/10 w-2'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {error && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="grow border-4 border-accent bg-accent/5 p-12 flex flex-col items-center justify-center text-center"
-              >
-                <AlertCircle className="text-accent w-20 h-20 mb-6" />
-                <h3 className="text-ink font-black text-2xl uppercase italic mb-4">Error Crítico Visión AI</h3>
-                <p className="text-gray-600 font-mono text-sm max-w-md mx-auto bg-white p-4 border-2 border-ink">{error}</p>
-              </motion.div>
-            )}
-
-            {results && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="grow flex flex-col"
-              >
-                {/* Barra de filtros sobre la tabla. Los filtros NO se aplican
-                    a las exportaciones (PDF/CSV) — el reporte final usa siempre
-                    el dataset completo. */}
-                <div className="border-4 border-ink border-b-0 bg-white px-4 py-3 flex items-center gap-3 flex-wrap">
-                  <div className="grow flex items-center gap-2 border border-ink/30 px-2 py-1 bg-[#F4F4F4] min-w-[180px]">
-                    <input
-                      type="text"
-                      value={resultsFilter}
-                      onChange={(e) => setResultsFilter(e.target.value)}
-                      placeholder="Filtrar por pieza, parte o SO…"
-                      className="grow bg-transparent outline-none text-[11px] font-mono"
-                    />
-                    {resultsFilter && (
-                      <button
-                        onClick={() => setResultsFilter('')}
-                        className="text-ink/40 hover:text-accent"
-                        title="Limpiar filtro"
-                      >
-                        <X size={12} />
-                      </button>
-                    )}
-                  </div>
-                  <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={filterUrgentOnly}
-                      onChange={(e) => setFilterUrgentOnly(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    Solo URGENTE
-                  </label>
-                  <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={filterMissingOnly}
-                      onChange={(e) => setFilterMissingOnly(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    Sin plano
-                  </label>
-                  <span className="text-[10px] font-mono text-ink/50 ml-auto">
-                    {filteredResults?.length ?? 0} / {results.length}
-                  </span>
-                </div>
-                <div className="grow overflow-auto border-4 border-ink bg-white shadow-[12px_12px_0px_rgba(0,0,0,0.1)]">
-                  {/* Styled Header matching PDF */}
-                  <div className="bg-[#0D2B4D] text-white p-6 border-b-4 border-ink flex items-center justify-between">
-                    <div>
-                      <h2 className="text-3xl font-black uppercase tracking-tighter">REPORTE DE TRABAJO: SUPRAJIT</h2>
-                      <p className="text-xs font-mono opacity-60">AUDITORÍA AUTOMATIZADA // SMV VISION</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] font-black uppercase tracking-widest bg-accent text-bg px-2 inline-block mb-1">PRODUCCIÓN ACTIVA</p>
-                      <p className="text-xs font-mono">{new Date().toLocaleDateString()}</p>
-                    </div>
-                  </div>
-
-                  <table className="w-full text-left border-collapse">
-                    <thead className="sticky top-0 z-20">
-                      <tr className="bg-[#000000] text-bg">
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 w-[50%]">PIEZA Y VISTA DE PLANO</th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">CANT.</th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">SO (ORDEN)</th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">FECHA</th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest text-center w-12"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(filteredResults ?? results).map((order, idx) => (
-                        <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
-                          {/* Pieza + Vista de Plano */}
-                          <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
-                            <div className="grow">
-                              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                <h4 className="font-black text-xl uppercase tracking-tight text-black">
-                                  {order.pieza}
-                                </h4>
-                                {/* Badge de confianza: solo se muestra si el score
-                                    es ambiguo (< 90). Match perfecto (95-100) se
-                                    asume y no estorba. Sin score = sin plano. */}
-                                {typeof order.matchScore === 'number' && order.matchScore < 90 && (
-                                  <span
-                                    className="bg-yellow-400 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
-                                    title={`Match con score ${order.matchScore}/100 — revisar a mano para confirmar.`}
-                                  >
-                                    {order.matchScore}% • REVISAR
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[10px] text-gray-500 font-mono italic">
-                                {order.sourcePdfName || "Sin plano asociado"}
-                              </p>
-                            </div>
-
-                            {order.isometricView && (
-                              <button
-                                type="button"
-                                onClick={() => setPreviewOrder(order)}
-                                disabled={!order.sourceImageDataUrl}
-                                title={order.sourceImageDataUrl ? 'Ver plano completo' : 'Plano completo no disponible'}
-                                className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] shrink-0 relative overflow-hidden flex items-center justify-center p-1 hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] disabled:hover:translate-x-0 disabled:hover:translate-y-0 cursor-zoom-in"
-                              >
-                                <img
-                                  src={order.isometricView}
-                                  alt="Vista"
-                                  className="max-w-full max-h-full object-contain mix-blend-multiply pointer-events-none"
-                                />
-                              </button>
-                            )}
-                          </td>
-                          
-                          <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
-                            <span className="font-black text-2xl text-black italic">
-                              {order.cantidad}
+                      {/* Banda de modo edición: ajustar cantidades / excluir órdenes antes de imprimir */}
+                      {editMode && (
+                        <div className="border-x-2 border-b-2 border-accent bg-accent/10 px-4 py-2.5 flex items-center gap-3 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-black uppercase tracking-widest text-accent">
+                            <Pencil size={12} /> Modo edición
+                          </span>
+                          <span className="font-mono text-[10px] text-ink-dim hidden sm:inline">
+                            Ajusta cantidades y excluye órdenes antes de imprimir.
+                          </span>
+                          {summary.status === 'error' && (
+                            <span className="font-mono text-[9px] uppercase tracking-wider text-warn border border-warn/60 px-1.5 py-0.5">
+                              edición local · sin sincronizar
                             </span>
-                          </td>
-                          
-                          <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
-                            <div className="flex flex-col gap-1 items-center">
-                              {order.orden.split('\n').map((o, i) => (
-                                <span key={i} className="font-mono text-sm font-black bg-black text-white px-2 py-1 block">
-                                  {o}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
+                          )}
+                          <span className="font-mono text-[10px] text-ink-dim ml-auto">
+                            {results.length} en reporte{excludedOrders.length > 0 ? ` · ${excludedOrders.length} excluidas` : ''}
+                          </span>
+                          {(originalResults || excludedOrders.length > 0) && (
+                            <button
+                              onClick={handleRestoreAll}
+                              className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-ink hover:text-accent border-2 border-line hover:border-accent px-2 py-1 transition-colors"
+                              title="Revertir cantidades y exclusiones de esta corrida"
+                            >
+                              <RotateCcw size={11} /> Restaurar todo
+                            </button>
+                          )}
+                        </div>
+                      )}
 
-                          <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
-                            {order.fecha.split('\n').map((f, i) => {
-                              const days = getOrderAgeDays(f);
-                              return (
-                                <div key={i}>
-                                  <span className="font-black text-xs uppercase text-black">{f}</span>
-                                  {days !== null && (
-                                    <span className="block text-[10px] text-gray-400 font-normal normal-case">
-                                      {formatAgeDays(days)}
+                      {/* Hoja de papel: reporte sobre la mesa oscura */}
+                      <div className="overflow-auto border-2 border-line border-t-0 paper shadow-hard">
+                        <div className="bg-[#0D2B4D] text-white p-6 border-b-2 border-black/20 flex items-center justify-between">
+                          <div>
+                            <h2 className="font-display text-3xl font-black uppercase tracking-tighter">REPORTE DE TRABAJO: SUPRAJIT</h2>
+                            <p className="text-xs font-mono opacity-60">AUDITORÍA AUTOMATIZADA // SMV VISION</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] font-black uppercase tracking-widest bg-accent text-bg px-2 inline-block mb-1">PRODUCCIÓN ACTIVA</p>
+                            <p className="text-xs font-mono">{new Date().toLocaleDateString()}</p>
+                          </div>
+                        </div>
+
+                        <table className="w-full text-left border-collapse">
+                          <thead className="sticky top-0 z-20">
+                            <tr className="bg-[#11161C] text-white">
+                              <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 w-[50%]">PIEZA Y VISTA DE PLANO</th>
+                              <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">CANT.</th>
+                              <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">SO (ORDEN)</th>
+                              <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">FECHA</th>
+                              <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest text-center w-12"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(filteredResults ?? results).map((order, idx) => (
+                              <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
+                                <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
+                                  <div className="grow">
+                                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                      <h4 className="font-display font-black text-xl uppercase tracking-tight text-black">
+                                        {order.pieza}
+                                      </h4>
+                                      {typeof order.matchScore === 'number' && order.matchScore < 90 && (
+                                        <span
+                                          className="bg-yellow-400 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
+                                          title={`Match con score ${order.matchScore}/100 — revisar a mano para confirmar.`}
+                                        >
+                                          {order.matchScore}% • REVISAR
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[10px] text-gray-500 font-mono italic">
+                                      {order.sourcePdfName || "Sin plano asociado"}
+                                    </p>
+                                  </div>
+
+                                  {order.isometricView && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewOrder(order)}
+                                      disabled={!order.sourceImageDataUrl}
+                                      title={order.sourceImageDataUrl ? 'Ver plano completo' : 'Plano completo no disponible'}
+                                      className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] shrink-0 relative overflow-hidden flex items-center justify-center p-1 hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] disabled:hover:translate-x-0 disabled:hover:translate-y-0 cursor-zoom-in"
+                                    >
+                                      <img
+                                        src={order.isometricView}
+                                        alt="Vista"
+                                        className="max-w-full max-h-full object-contain mix-blend-multiply pointer-events-none"
+                                      />
+                                    </button>
+                                  )}
+                                </td>
+
+                                <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+                                  {editMode ? (
+                                    <EditableCantidad order={order} onCommit={handleEditCantidad} />
+                                  ) : (
+                                    <span className="font-black text-2xl text-black italic">
+                                      {order.cantidad}
                                     </span>
                                   )}
-                                </div>
-                              );
-                            })}
-                          </td>
-                          <td className="px-3 py-4 text-center align-middle">
+                                </td>
+
+                                <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+                                  <div className="flex flex-col gap-1 items-center">
+                                    {order.orden.split('\n').map((o, i) => (
+                                      <span key={i} className="font-mono text-sm font-black bg-black text-white px-2 py-1 block">
+                                        {o}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </td>
+
+                                <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+                                  {order.fecha.split('\n').map((f, i) => {
+                                    const days = getOrderAgeDays(f);
+                                    return (
+                                      <div key={i}>
+                                        <span className="font-black text-xs uppercase text-black">{f}</span>
+                                        {days !== null && (
+                                          <span className="block text-[10px] text-gray-400 font-normal normal-case">
+                                            {formatAgeDays(days)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </td>
+                                <td className="px-3 py-4 text-center align-middle">
+                                  {editMode ? (
+                                    <button
+                                      onClick={() => handleExcludeOrder(order)}
+                                      title="Excluir esta orden del reporte"
+                                      aria-label="Excluir orden del reporte"
+                                      className="p-2 border-2 border-black bg-white text-black hover:bg-danger hover:text-white hover:border-danger transition-colors"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => downloadSingleOrderPdf(order)}
+                                      title="Imprimir esta orden"
+                                      className="p-2 border border-black/20 bg-white hover:bg-black hover:text-white hover:border-black transition-colors opacity-40 group-hover:opacity-100"
+                                    >
+                                      <Printer size={14} />
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Órdenes excluidas del reporte (soft-delete reversible) */}
+                      {excludedOrders.length > 0 && (
+                        <div className="mt-4 border-2 border-line bg-surface p-4">
+                          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-ink-dim inline-flex items-center gap-1.5">
+                              <Trash2 size={12} className="text-danger" /> Excluidas del reporte ({excludedOrders.length})
+                            </p>
                             <button
-                              onClick={() => downloadSingleOrderPdf(order)}
-                              title="Imprimir esta orden"
-                              className="p-2 border border-ink/20 bg-white hover:bg-ink hover:text-bg hover:border-ink transition-colors opacity-40 group-hover:opacity-100"
+                              onClick={handleRestoreAll}
+                              className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-ink hover:text-accent border-2 border-line hover:border-accent px-2 py-1 transition-colors"
                             >
-                              <Printer size={14} />
+                              <RotateCcw size={11} /> Restaurar todo
                             </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {excludedOrders.map((entry, i) => (
+                              <div key={i} className="inline-flex items-center gap-2 bg-surface-2 border-2 border-line px-2 py-1.5">
+                                <div className="min-w-0">
+                                  <p className="text-[11px] font-bold text-ink truncate max-w-[200px]" title={entry.order.pieza}>
+                                    {entry.order.pieza}
+                                  </p>
+                                  <p className="font-mono text-[9px] text-ink-dim">
+                                    SO {entry.order.orden.split('\n')[0] || '—'} · cant. {entry.order.cantidad.split('\n')[0]}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => handleRestoreOrder(entry)}
+                                  title="Restaurar esta orden al reporte"
+                                  aria-label="Restaurar orden"
+                                  className="shrink-0 p-1.5 border-2 border-line text-ink-dim hover:text-accent hover:border-accent transition-colors"
+                                >
+                                  <RotateCcw size={12} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
-                {/* Production Summary Cards */}
-                <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="bg-ink p-5 border-t-8 border-accent">
-                    <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Total Auditado</p>
-                    <p className="text-4xl font-black text-bg italic">{analysisSummary?.totalAudited ?? results.length}</p>
-                  </div>
-                  <div className="bg-ink p-5 border-t-8 border-accent">
-                    <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Match Visual</p>
-                    <p className="text-4xl font-black text-accent italic">{auditedCount}</p>
-                  </div>
-                  <div className="bg-ink p-5 border-t-8 border-accent">
-                    <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Planos Analizados</p>
-                    <p className="text-4xl font-black text-white italic">{analysisSummary?.totalAnalyzed ?? workshopPdfs.length}</p>
-                  </div>
-                  <div className="bg-ink p-5 flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">No Coincidentes</p>
-                      <p className="text-2xl font-black text-accent italic">{analysisSummary?.totalNonMatching ?? 0}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-2 text-[10px] font-mono text-ink/60">
-                  Cargados: {analysisSummary?.totalLoaded ?? workshopPdfs.length} PDFs de taller. Ordenes en reporte: {analysisSummary?.totalOrders ?? results.length}.
-                </div>
-                {metricsComparison && (
-                  <div className="mt-4 bg-[#0D2B4D] text-white border-2 border-ink p-4">
-                    <div className="flex items-center justify-between gap-4 flex-wrap">
-                      <p className="text-[10px] font-black uppercase tracking-widest">Métricas de rendimiento</p>
-                      <p className="text-xs font-mono">
-                        Total actual: {metricsComparison.latest.totalMs.toFixed(0)}ms
-                      </p>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-[10px] font-mono">
-                      <p>Raster: {metricsComparison.latest.pdfRasterMs.toFixed(0)}ms</p>
-                      <p>AI órdenes: {metricsComparison.latest.aiOrderMs.toFixed(0)}ms</p>
-                      <p>AI planos: {metricsComparison.latest.aiBlueprintMs.toFixed(0)}ms</p>
-                      <p>Merge: {metricsComparison.latest.mergeMs.toFixed(0)}ms</p>
-                      <p className={metricsComparison.totalImprovementPct >= 0 ? 'text-green-300' : 'text-red-300'}>
-                        Delta baseline: {metricsComparison.totalImprovementPct.toFixed(1)}%
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
-      </main>
+                      {/* Tarjetas de resumen */}
+                      <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="bg-surface border-2 border-line border-t-4 border-t-accent p-5">
+                          <p className="text-[10px] text-ink-dim uppercase font-black tracking-widest">Total Auditado</p>
+                          <p className="font-display text-4xl font-black text-ink italic">{analysisSummary?.totalAudited ?? results.length}</p>
+                        </div>
+                        <div className="bg-surface border-2 border-line border-t-4 border-t-accent p-5">
+                          <p className="text-[10px] text-ink-dim uppercase font-black tracking-widest">Match Visual</p>
+                          <p className="font-display text-4xl font-black text-accent italic">{auditedCount}</p>
+                        </div>
+                        <div className="bg-surface border-2 border-line border-t-4 border-t-accent p-5">
+                          <p className="text-[10px] text-ink-dim uppercase font-black tracking-widest">Planos Analizados</p>
+                          <p className="font-display text-4xl font-black text-ink italic">{analysisSummary?.totalAnalyzed ?? workshopPdfs.length}</p>
+                        </div>
+                        <div className="bg-surface border-2 border-line p-5 flex items-center justify-center">
+                          <div className="text-center">
+                            <p className="text-[10px] text-ink-dim uppercase font-black tracking-widest">No Coincidentes</p>
+                            <p className="font-display text-2xl font-black text-accent italic">{analysisSummary?.totalNonMatching ?? 0}</p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[10px] font-mono text-ink-dim">
+                        Cargados: {analysisSummary?.totalLoaded ?? workshopPdfs.length} PDFs de taller. Ordenes en reporte: {analysisSummary?.totalOrders ?? results.length}.
+                      </div>
+                      {metricsComparison && (
+                        <div className="mt-4 bg-surface-2 text-ink border-2 border-line p-4">
+                          <div className="flex items-center justify-between gap-4 flex-wrap">
+                            <p className="text-[10px] font-black uppercase tracking-widest">Métricas de rendimiento</p>
+                            <p className="text-xs font-mono text-ink-dim">
+                              Total actual: {metricsComparison.latest.totalMs.toFixed(0)}ms
+                            </p>
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-[10px] font-mono text-ink-dim">
+                            <p>Raster: {metricsComparison.latest.pdfRasterMs.toFixed(0)}ms</p>
+                            <p>AI órdenes: {metricsComparison.latest.aiOrderMs.toFixed(0)}ms</p>
+                            <p>AI planos: {metricsComparison.latest.aiBlueprintMs.toFixed(0)}ms</p>
+                            <p>Merge: {metricsComparison.latest.mergeMs.toFixed(0)}ms</p>
+                            <p className={metricsComparison.totalImprovementPct >= 0 ? 'text-ok' : 'text-danger'}>
+                              Delta baseline: {metricsComparison.totalImprovementPct.toFixed(1)}%
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </section>
+          </div>
+        </div>
 
-      {/* Footer */}
-      <footer className="bg-ink text-bg px-10 py-5 flex items-center justify-between text-[11px] font-black uppercase tracking-widest">
-        <div className="flex items-center gap-3">
-          <div className="w-2.5 h-2.5 bg-[#00FF41] rounded-full animate-pulse shadow-[0_0_8px_#00FF41]"></div>
-          VISION CORE ONLINE // SUPRAJIT ANALYZER READY
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-accent italic">SMV DATA CENTER</span>
-          <span className="opacity-50">v3.1.PRO</span>
-        </div>
-      </footer>
+        {/* ── Otras vistas (con transición) ── */}
+        <AnimatePresence mode="wait">
+          {activeView !== 'reporte' && (
+            <motion.div
+              key={activeView}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="h-full overflow-y-auto"
+            >
+              {activeView === 'inicio' && (
+                <InicioView
+                  summary={summary}
+                  onNavigate={navigate}
+                  onFocusAlert={handleFocusAlert}
+                  analysisSummary={analysisSummary}
+                />
+              )}
+              {activeView === 'control' && (
+                <WorkOrdersPanel initialAlertFilter={controlAlert} onDataChanged={refresh} />
+              )}
+              {activeView === 'biblioteca' && <BibliotecaView />}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </AppShell>
 
       {/* Modal de plano completo. Click en backdrop o ESC cierra. */}
       {previewOrder?.sourceImageDataUrl && (
@@ -2165,15 +2553,15 @@ Reglas de extracción (ESTILO UT2033):
           aria-modal="true"
         >
           <div
-            className="bg-white border-4 border-ink shadow-[12px_12px_0px_rgba(255,78,0,0.6)] max-w-6xl w-full max-h-full flex flex-col"
+            className="bg-surface border-2 border-line shadow-hard-accent max-w-6xl w-full max-h-full flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b-2 border-ink bg-[#0D2B4D] text-white">
+            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white">
               <div className="min-w-0">
                 <p className="text-[10px] font-mono opacity-60 uppercase tracking-widest truncate">
                   {previewOrder.sourcePdfName ?? 'Plano'}
                 </p>
-                <h3 className="text-lg font-black uppercase tracking-tight truncate">
+                <h3 className="font-display text-lg font-black uppercase tracking-tight truncate">
                   {previewOrder.pieza}
                 </h3>
               </div>
@@ -2196,6 +2584,18 @@ Reglas de extracción (ESTILO UT2033):
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+/** Etiqueta de paso del flujo de Reporte (01/02/03), con check cuando está cumplido. */
+function StepLabel({ n, label, done = false }: { n: string; label: string; done?: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`font-mono text-[11px] font-bold w-7 h-7 grid place-items-center border-2 ${done ? 'border-ok text-ok' : 'border-line text-ink-dim'}`}>
+        {done ? '✓' : n}
+      </span>
+      <span className="font-display font-black text-[13px] uppercase tracking-wider text-ink">{label}</span>
     </div>
   );
 }

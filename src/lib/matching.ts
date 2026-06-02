@@ -190,10 +190,12 @@ export function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignal
     }
   }
 
-  // RULE 2: If we have IDs in both but they DON'T match, it's a hard NO.
-  // This prevents "90-1012-05" from matching "90-1012-06" just because they share "90-1012".
+  let penalty = 0;
+  // RULE 2: If we have IDs in both but they DON'T match, apply a penalty.
+  // This prevents "90-1012-05" from easily matching "90-1012-06", but still
+  // allows a match if the descriptive overlap is excellent.
   if (orderIds.length > 0 && candidateIds.length > 0) {
-    return 0;
+    penalty = 10;
   }
 
   // RULE 3: Descriptive matching (Fuzzy)
@@ -203,13 +205,18 @@ export function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignal
 
   if (sharedTokens.length === 0) return 0;
 
-  const overlapRatio = sharedTokens.length / Math.max(orderSet.size, candidateSet.size);
+  // Use Math.min instead of Math.max to avoid penalizing long blueprint descriptions
+  // when the shorter order description is fully contained within it.
+  const overlapRatio = sharedTokens.length / Math.min(orderSet.size, candidateSet.size);
   const hasStrongSharedToken = sharedTokens.some(isStrongToken);
 
-  if (hasStrongSharedToken && overlapRatio >= 0.6) return 85;
-  if (sharedTokens.length >= 2 && overlapRatio >= 0.5) return 82;
+  let score = 0;
+  if (overlapRatio === 1.0 && sharedTokens.length >= 2) score = 90;
+  else if (hasStrongSharedToken && overlapRatio >= 0.5) score = 85;
+  else if (sharedTokens.length >= 2 && overlapRatio >= 0.4) score = 82;
+  else if (sharedTokens.length >= 1 && hasStrongSharedToken) score = 80;
 
-  return 0;
+  return Math.max(0, score - penalty);
 }
 
 function calculatePieceMatchScore(orderPiece: string, blueprintPiece: string): number {
@@ -252,7 +259,11 @@ export function selectBestBlueprintMatch(
 
   const orderSignals = extractOrderSignals(orderPiece, numeroParte);
   const fileSignals = extractBlueprintSignals(candidate.fileLabel, candidate.specs);
-  const fileScore = scorePieceMatch(orderSignals, fileSignals);
+  let fileScore = scorePieceMatch(orderSignals, fileSignals);
+  
+  if (candidate.fileLabel.toLowerCase().includes('.iso')) {
+    fileScore += 15;
+  }
 
   let bestSpec: BlueprintSpec | null = null;
   let bestSpecScore = 0;

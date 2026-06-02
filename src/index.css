@@ -1,11 +1,108 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-mono: "Courier New", Courier, monospace;
-  
-  --color-bg: #F0F0F0;
-  --color-ink: #111111;
-  --color-accent: #FF4E00;
-  --color-border-dark: #333333;
+  /* ── Tipografía: instrumento de ingeniería ───────────────────────────── */
+  --font-display: "Saira", "Arial Narrow", sans-serif;        /* títulos / KPIs */
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;        /* UI / cuerpo */
+  --font-mono: "IBM Plex Mono", "Courier New", monospace;     /* datos / cotas */
+
+  /* ── Paleta oscura "mesa de dibujo" (solo pantalla) ──────────────────── */
+  --color-bg: #0D1014;          /* lienzo */
+  --color-surface: #151A21;     /* panel */
+  --color-surface-2: #1B222B;   /* panel elevado */
+  --color-line: #2A323C;        /* hairline sutil sobre oscuro */
+
+  --color-ink: #E8EBED;         /* texto primario (claro) */
+  --color-ink-dim: #8A93A0;     /* texto secundario */
+
+  --color-accent: #FF4E00;      /* naranja de marca / máquina */
+  --color-draft: #3DA9FC;       /* cian técnico: info / "en proceso" */
+
+  --color-danger: #FF3B30;
+  --color-warn: #F5A623;
+  --color-ok: #37C871;
+
+  --color-paper: #FFFFFF;       /* hojas de reporte / plano */
+  --color-paper-ink: #11161C;   /* texto sobre papel */
+
+  --color-grid: rgba(122, 142, 170, 0.07);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Scrollbars acordes al instrumento oscuro */
+  * {
+    scrollbar-color: var(--color-line) transparent;
+  }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border: 2px solid var(--color-bg);
+    border-radius: 0;
+  }
+  *::-webkit-scrollbar-thumb:hover { background: #3a4350; }
+
+  /* Inputs de fecha legibles sobre oscuro */
+  input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.85); }
+}
+
+@layer utilities {
+  /* Rejilla de plano técnico para fondos atmosféricos */
+  .bp-grid {
+    background-image:
+      linear-gradient(var(--color-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-grid) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .bp-grid-lg {
+    background-image:
+      linear-gradient(var(--color-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-grid) 1px, transparent 1px),
+      linear-gradient(rgba(122,142,170,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(122,142,170,0.04) 1px, transparent 1px);
+    background-size: 28px 28px, 28px 28px, 140px 140px, 140px 140px;
+  }
+
+  /* Hoja de papel: reportes y planos sobre la mesa oscura */
+  .paper {
+    background-color: var(--color-paper);
+    color: var(--color-paper-ink);
+  }
+
+  /* Sombra dura "offset" del lenguaje brutalist, adaptada a oscuro */
+  .shadow-hard { box-shadow: 4px 4px 0 0 #000; }
+  .shadow-hard-accent { box-shadow: 5px 5px 0 0 var(--color-accent); }
+
+  /* Marcas de registro/encuadre (eco del recorte isométrico) */
+  .corner-ticks { position: relative; }
+  .corner-ticks::before,
+  .corner-ticks::after {
+    content: "";
+    position: absolute;
+    width: 10px; height: 10px;
+    border-color: var(--color-accent);
+    pointer-events: none;
+  }
+  .corner-ticks::before { top: 6px; left: 6px; border-top: 2px solid; border-left: 2px solid; }
+  .corner-ticks::after { bottom: 6px; right: 6px; border-bottom: 2px solid; border-right: 2px solid; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
 }

@@ -46,41 +46,83 @@ export function getOrderAgeDays(fecha: string): number | null {
   return null;
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/**
+ * Valida que (y, m, d) sea una fecha-calendario real (rechaza overflow como
+ * 31/02) y devuelve los componentes. `m` es 1-12. Devuelve null si inválida.
+ */
+function validDateParts(y: number, m: number, d: number): { y: number; m: number; d: number } | null {
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return null;
+  // Detectar overflow (ej. 31/02 → 03/03): los componentes deben coincidir.
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+  return { y, m, d };
+}
+
 /**
  * Parsea una fecha en los formatos que puede traer el PDF (DD/MM/YYYY,
- * DD-MM-YYYY, YYYY-MM-DD) y devuelve un string ISO-8601 (solo fecha,
- * sin hora), o `null` si el formato no es reconocido.
- * Reutiliza la misma lógica de `getOrderAgeDays` para no duplicar parsers.
+ * DD-MM-YYYY, YYYY-MM-DD) y devuelve un string de solo fecha `YYYY-MM-DD`,
+ * o `null` si el formato no es reconocido.
+ *
+ * Construye el string directamente desde los componentes (sin `toISOString`)
+ * para no introducir desfases por zona horaria: la fecha-calendario que se
+ * leyó del PDF es la misma que se persiste.
  */
 export function parseDateToISO(fecha: string): string | null {
-  let d: number, m: number, y: number;
+  const s = fecha.trim();
+  let parts: { y: number; m: number; d: number } | null = null;
 
-  let match = fecha.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (match) {
-    [, d, m, y] = match.map(Number) as [string, number, number, number];
-    const date = new Date(y, m - 1, d);
-    if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+  let match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) parts = validDateParts(Number(match[3]), Number(match[2]), Number(match[1]));
+
+  if (!parts && (match = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/))) {
+    parts = validDateParts(Number(match[3]), Number(match[2]), Number(match[1]));
   }
-  match = fecha.trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (match) {
-    [, d, m, y] = match.map(Number) as [string, number, number, number];
-    const date = new Date(y, m - 1, d);
-    if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+  if (!parts && (match = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) {
+    parts = validDateParts(Number(match[1]), Number(match[2]), Number(match[3]));
   }
-  match = fecha.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (match) {
-    [, y, m, d] = match.map(Number) as [string, number, number, number];
-    const date = new Date(y, m - 1, d);
-    if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
-  }
-  return null;
+
+  return parts ? `${parts.y}-${pad2(parts.m)}-${pad2(parts.d)}` : null;
+}
+
+/**
+ * Suma `days` días-calendario a una fecha `YYYY-MM-DD` y devuelve otra fecha
+ * `YYYY-MM-DD`. Toda la aritmética se hace en UTC para que el resultado sea
+ * determinista e independiente de la zona horaria del navegador.
+ */
+export function addDaysToISODate(isoDate: string, days: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!m) return null;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(dt.getTime())) return null;
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().split('T')[0];
+}
+
+/**
+ * Días-calendario desde HOY (local) hasta `isoDate` (`YYYY-MM-DD`).
+ *  > 0  faltan N días   · 0 vence hoy   · < 0 venció hace N días.
+ * Compara medianoche local contra medianoche local (no instantes UTC), así
+ * "vence hoy" significa hoy en el huso del usuario, sin desfases de ±1 día.
+ * Devuelve `null` si el formato no es válido.
+ */
+export function daysUntilISODate(isoDate: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!m) return null;
+  const due = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(due.getTime())) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Math.round absorbe los saltos de DST (días de 23/25h) sin desfasar.
+  return Math.round((due.getTime() - today.getTime()) / 86_400_000);
 }
 
 /** Renderiza una cantidad de días en español compacto ("Hoy", "3 días", "5 sem", "2 meses"). */
 export function formatAgeDays(days: number): string {
   if (days === 0) return 'Hoy';
   if (days === 1) return '1 día';
-  if (days < 14) return `${days} días`;
-  if (days < 60) return `${Math.floor(days / 7)} sem`;
-  return `${Math.floor(days / 30)} meses`;
+  return `${days} días`;
 }

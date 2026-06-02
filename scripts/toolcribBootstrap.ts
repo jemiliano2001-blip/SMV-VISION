@@ -67,6 +67,7 @@ import {
   Timestamp,
   type Firestore,
 } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 
 const PARTS_COLLECTION = 'toolcribParts';
 const DRAWINGS_COLLECTION = 'toolcribDrawings';
@@ -404,16 +405,18 @@ function initAdmin(credentialsPath: string | null): void {
     return;
   }
 
+  const options = { storageBucket: 'smv-brain.firebasestorage.app' };
+
   if (credentialsPath) {
     const serviceAccount = JSON.parse(
       // Lee el JSON de credenciales en runtime sin usar require (ESM-safe).
       readFileSync(credentialsPath, 'utf8'),
     ) as ServiceAccount;
-    initializeApp({ credential: cert(serviceAccount) });
+    initializeApp({ credential: cert(serviceAccount), ...options });
     return;
   }
 
-  initializeApp({ credential: applicationDefault() });
+  initializeApp({ credential: applicationDefault(), ...options });
 }
 
 async function upsertPart(
@@ -456,6 +459,7 @@ async function upsertDrawings(
   dryRun: boolean,
 ): Promise<void> {
   const activeRevision = revisions.find((r) => r.isActive) ?? null;
+  const bucket = getStorage().bucket();
 
   for (const revision of revisions) {
     const drawingId = buildDrawingDocId(partId, revision.revision);
@@ -468,14 +472,34 @@ async function upsertDrawings(
       continue;
     }
 
+    let pdfUrl = revision.pdfUrl;
+    let sourceType = revision.sourceType;
+
+    if (!pdfUrl && revision.sourcePath && revision.sourceType === 'network') {
+      const destName = `toolcrib/${partId}/${revision.revision}.pdf`;
+      console.info(`Subiendo a Storage: ${destName}`);
+      const file = bucket.file(destName);
+      await bucket.upload(revision.sourcePath, {
+        destination: destName,
+        metadata: { contentType: 'application/pdf' },
+      });
+      // Creamos un signed URL muy largo para acceso de solo lectura
+      const [url] = await file.getSignedUrl({
+        action: 'read',
+        expires: '01-01-2100',
+      });
+      pdfUrl = url;
+      sourceType = 'storage';
+    }
+
     const existing = await ref.get();
     const payload: Record<string, unknown> = {
       partId,
       revision: revision.revision,
       isActive: revision.isActive,
-      sourceType: revision.sourceType,
+      sourceType,
       sourcePath: revision.sourcePath,
-      pdfUrl: revision.pdfUrl,
+      pdfUrl,
       checksumSha256: revision.checksumSha256,
       effectiveFromUTC: revision.effectiveFromUTC
         ? Timestamp.fromDate(revision.effectiveFromUTC)

@@ -27,6 +27,7 @@ import {
   RefreshCcw,
   Search,
 } from 'lucide-react';
+import Fuse from 'fuse.js';
 
 import {
   listActiveDrawingViews,
@@ -68,19 +69,9 @@ interface RowActionState {
 function normalizeSearchTerm(value: string): string {
   return value
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .trim();
-}
-
-function matchesSearch(view: ToolcribActiveDrawingView, term: string): boolean {
-  if (term.length === 0) {
-    return true;
-  }
-  const haystack = normalizeSearchTerm(
-    `${view.partNumber} ${view.description} ${view.revision} ${view.customer}`,
-  );
-  return haystack.includes(term);
 }
 
 function buildDisplayName(view: ToolcribActiveDrawingView): string {
@@ -136,7 +127,29 @@ export function ToolcribLibraryPanel({
     if (term.length === 0) {
       return views;
     }
-    return views.filter((view) => matchesSearch(view, term));
+
+    const fuse = new Fuse(views, {
+      keys: [
+        { name: 'partNumber', weight: 2 },
+        { name: 'description', weight: 1 },
+        { name: 'sourcePath', weight: 1 },
+      ],
+      threshold: 0.4,
+      ignoreLocation: true,
+      includeScore: true,
+    });
+
+    // Sort logic to prioritize exact matches or `.iso` files for identical scores
+    return fuse.search(term).sort((a, b) => {
+      const aIso = a.item.partNumber.toLowerCase().includes('.iso') || (a.item.sourcePath || '').toLowerCase().includes('.iso');
+      const bIso = b.item.partNumber.toLowerCase().includes('.iso') || (b.item.sourcePath || '').toLowerCase().includes('.iso');
+
+      // If one is an .iso file and scores are relatively close, give it a tiny priority
+      if (aIso && !bIso && Math.abs((a.score || 0) - (b.score || 0)) < 0.1) return -1;
+      if (!aIso && bIso && Math.abs((a.score || 0) - (b.score || 0)) < 0.1) return 1;
+
+      return (a.score || 0) - (b.score || 0);
+    }).map(result => result.item);
   }, [searchTerm, views]);
 
   const handlePrint = useCallback(
@@ -244,46 +257,46 @@ export function ToolcribLibraryPanel({
   const isEmpty = status === 'ready' && totalCount === 0;
 
   return (
-    <div className="border-2 border-ink bg-white shadow-[3px_3px_0px_rgba(0,0,0,1)]">
+    <div className="border-2 border-line bg-surface">
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2.5 font-display text-[12px] font-black uppercase tracking-wider text-ink hover:text-accent transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent"
         aria-expanded={isOpen}
       >
         <span className="flex items-center gap-2">
-          <FolderOpen size={14} />
-          Biblioteca Tool Crib (planos Suprajit)
+          <FolderOpen size={15} className="text-accent" />
+          Biblioteca Tool Crib
         </span>
-        <span className="flex items-center gap-2 text-[10px] font-mono">
+        <span className="flex items-center gap-2 font-mono text-[10px]">
           {status === 'loading' ? (
             <Loader2 size={12} className="animate-spin" />
           ) : status === 'ready' ? (
             <span className="bg-ink text-bg px-1.5 py-0.5">{totalCount}</span>
           ) : status === 'error' ? (
-            <AlertCircle size={12} className="text-accent" />
+            <AlertCircle size={12} className="text-danger" />
           ) : null}
         </span>
       </button>
 
       {isOpen && (
-        <div className="border-t border-ink p-3 space-y-3">
+        <div className="border-t-2 border-line p-3 space-y-3">
           <div className="flex items-center gap-2">
-            <div className="grow flex items-center gap-2 border border-ink/30 px-2 py-1 bg-[#F4F4F4]">
-              <Search size={12} className="text-ink/50 shrink-0" />
+            <div className="grow flex items-center gap-2 border border-line px-2 py-1.5 bg-surface-2">
+              <Search size={12} className="text-ink-dim shrink-0" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 placeholder="Buscar parte, descripción o revisión…"
-                className="grow bg-transparent outline-none text-[11px] font-mono"
+                className="grow bg-transparent outline-none text-[11px] font-mono text-ink placeholder:text-ink-dim/70"
               />
             </div>
             <button
               type="button"
               onClick={() => void loadLibrary()}
               disabled={status === 'loading'}
-              className="shrink-0 border border-ink bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg disabled:opacity-40 transition-colors flex items-center gap-1"
+              className="shrink-0 border border-line bg-surface-2 px-2 py-1.5 text-[9px] font-black uppercase tracking-wider text-ink-dim hover:text-accent hover:border-accent disabled:opacity-40 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent"
               aria-label="Refrescar biblioteca"
               title="Refrescar biblioteca"
             >
@@ -297,7 +310,7 @@ export function ToolcribLibraryPanel({
 
           {errorMessage && (
             <div
-              className="flex items-start gap-2 border border-accent bg-accent/10 px-2 py-1.5 text-[10px] font-mono text-accent leading-snug"
+              className="flex items-start gap-2 border border-danger/60 bg-danger/10 px-2 py-1.5 text-[10px] font-mono text-danger leading-snug"
               role="alert"
             >
               <AlertCircle size={12} className="shrink-0 mt-0.5" />
@@ -306,20 +319,20 @@ export function ToolcribLibraryPanel({
           )}
 
           {status === 'loading' && (
-            <div className="text-[10px] font-mono text-ink/60 flex items-center gap-2">
+            <div className="text-[10px] font-mono text-ink-dim flex items-center gap-2">
               <Loader2 size={12} className="animate-spin" /> Cargando catálogo…
             </div>
           )}
 
           {isEmpty && (
-            <div className="text-[10px] font-mono text-ink/60">
+            <div className="text-[10px] font-mono text-ink-dim">
               Aún no hay planos registrados. Ejecuta el script de bootstrap o carga el primer inventario.
             </div>
           )}
 
           {status === 'ready' && totalCount > 0 && (
             <>
-              <p className="text-[9px] font-mono text-ink/50">
+              <p className="text-[9px] font-mono text-ink-dim">
                 Mostrando {visibleCount} de {totalCount} planos activos.
               </p>
               <div className="max-h-64 overflow-y-auto pr-1 space-y-2">
@@ -329,14 +342,14 @@ export function ToolcribLibraryPanel({
                   return (
                     <div
                       key={view.drawingId}
-                      className="border border-ink/40 bg-[#FBFBFB] p-2 space-y-1"
+                      className="border border-line bg-surface-2 p-2 space-y-1"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-[11px] font-black uppercase tracking-tight truncate" title={view.partNumber}>
+                          <p className="text-[11px] font-black uppercase tracking-tight truncate text-ink" title={view.partNumber}>
                             {view.partNumber}
                           </p>
-                          <p className="text-[9px] font-mono text-ink/60 truncate" title={view.description}>
+                          <p className="text-[9px] font-mono text-ink-dim truncate" title={view.description}>
                             {view.description || 'Sin descripción'}
                           </p>
                         </div>
@@ -348,7 +361,7 @@ export function ToolcribLibraryPanel({
                         </span>
                       </div>
 
-                      <p className="text-[9px] font-mono text-ink/40 truncate" title={view.sourcePath}>
+                      <p className="text-[9px] font-mono text-ink-dim/70 truncate" title={view.sourcePath}>
                         <FileText size={9} className="inline-block mr-1 -mt-0.5" />
                         {view.sourcePath || '(sin ruta)'}
                       </p>
@@ -358,7 +371,7 @@ export function ToolcribLibraryPanel({
                           type="button"
                           onClick={() => void handlePrint(view)}
                           disabled={rowActionState.status === 'printing'}
-                          className="border border-ink bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink hover:text-bg disabled:opacity-40 transition-colors flex items-center gap-1"
+                          className="border border-line bg-surface px-2 py-1 text-[9px] font-black uppercase tracking-wider text-ink hover:border-accent hover:text-accent disabled:opacity-40 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent"
                         >
                           {rowActionState.status === 'printing' ? (
                             <>
@@ -378,7 +391,7 @@ export function ToolcribLibraryPanel({
                             disabled={
                               rowActionState.status === 'attaching' || isAttached || !view.pdfUrl
                             }
-                            className="border border-ink bg-accent text-bg px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-ink disabled:opacity-40 transition-colors flex items-center gap-1"
+                            className="border border-accent bg-accent text-bg px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-accent/80 disabled:opacity-40 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent"
                             title={
                               !view.pdfUrl
                                 ? 'Falta pdfUrl accesible'
@@ -405,7 +418,7 @@ export function ToolcribLibraryPanel({
                       </div>
 
                       {rowActionState.status === 'error' && rowActionState.message && (
-                        <p className="text-[9px] font-mono text-accent leading-tight">
+                        <p className="text-[9px] font-mono text-danger leading-tight">
                           {rowActionState.message}
                         </p>
                       )}
@@ -413,7 +426,7 @@ export function ToolcribLibraryPanel({
                   );
                 })}
                 {filteredViews.length === 0 && (
-                  <p className="text-[10px] font-mono text-ink/50 italic">
+                  <p className="text-[10px] font-mono text-ink-dim italic">
                     Ningún plano coincide con la búsqueda.
                   </p>
                 )}

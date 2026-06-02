@@ -36,7 +36,7 @@ import {
   mergeUpsert,
   type UpsertMutableFields,
 } from '../workOrders/dedupe';
-import { parseDateToISO } from '../age';
+import { parseDateToISO, addDaysToISODate } from '../age';
 
 /** Días de ciclo estándar para Suprajit (plazo por defecto si no hay fecha en el PDF). */
 const DEFAULT_CYCLE_DAYS = 14;
@@ -218,17 +218,19 @@ export async function upsertWorkOrders(
         if (op.kind === 'create') {
           const o = op.o;
           const ref = doc(collection(database, WORK_ORDERS_COLLECTION));
-          // Calcular dueDate automáticamente: otDate (primera línea) + 14 días.
-          // Si el formato no es reconocido, se deja null hasta que el supervisor
-          // lo ajuste a mano desde el panel de control.
-          const firstOtDate = o.otDate.split(/[\r\n]+/)[0].trim();
-          const parsedOtDate = parseDateToISO(firstOtDate);
-          let dueDate: string | null = null;
-          if (parsedOtDate) {
-            const d = new Date(parsedOtDate);
-            d.setDate(d.getDate() + DEFAULT_CYCLE_DAYS);
-            dueDate = d.toISOString().split('T')[0];
+          // Calcular dueDate automáticamente: fecha más antigua de otDate + 14 días.
+          // Se usa la más antigua (misma estrategia que computeDueDate en reportFormat)
+          // para que el plazo refleje el compromiso más urgente. Si ninguna línea es
+          // parseable, se deja null hasta que el supervisor lo ajuste a mano.
+          const otDateLines = o.otDate.split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
+          let parsedOtDate: string | null = null;
+          for (const line of otDateLines) {
+            const iso = parseDateToISO(line);
+            if (iso && (parsedOtDate === null || iso < parsedOtDate)) parsedOtDate = iso;
           }
+          const dueDate = parsedOtDate
+            ? addDaysToISODate(parsedOtDate, DEFAULT_CYCLE_DAYS)
+            : null;
           batch.set(ref, {
             poNumber: o.poNumber, soNumber: o.soNumber, otDate: o.otDate,
             customer: o.customer, pieza: o.pieza, numeroParte: o.numeroParte,
@@ -276,7 +278,7 @@ export async function markDelivered(
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
   const uid = getCurrentUserUid();
-  if (!uid) return { ok: false, reason: 'not-authenticated' };
+  if (!uid && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
   const name = sanitizeTorneroName(torneroName);
   if (typeof orderId !== 'string' || orderId.trim().length === 0 || !name) {
     return { ok: false, reason: 'invalid-input' };
@@ -300,7 +302,7 @@ export async function markDelivered(
 export async function markPending(orderId: string): Promise<WorkOrderResult<void>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
-  if (!getCurrentUserUid()) return { ok: false, reason: 'not-authenticated' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
   if (typeof orderId !== 'string' || orderId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }
@@ -323,7 +325,7 @@ export async function archiveWorkOrder(
 ): Promise<WorkOrderResult<void>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
-  if (!getCurrentUserUid()) return { ok: false, reason: 'not-authenticated' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
   if (typeof orderId !== 'string' || orderId.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }
@@ -452,6 +454,35 @@ export async function updateNotes(
   }
 }
 
+/**
+ * Actualiza SOLO la cantidad de una orden. Usado por la edición manual del
+ * reporte antes de imprimir (p. ej. ajustar a una entrega parcial). No toca el
+ * estado de entrega ni ningún otro campo. Mismo contrato result-type.
+ */
+export async function updateCantidad(
+  orderId: string,
+  cantidad: string,
+): Promise<WorkOrderResult<void>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
+  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  const clean = (typeof cantidad === 'string' ? cantidad : '').trim().slice(0, 256);
+  if (!clean) return { ok: false, reason: 'invalid-input' };
+  try {
+    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
+      cantidad: clean,
+      updatedAtUTC: serverTimestamp(),
+    });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] updateCantidad falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
 export async function listTorneros(): Promise<WorkOrderResult<Tornero[]>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
@@ -475,7 +506,7 @@ export async function listTorneros(): Promise<WorkOrderResult<Tornero[]>> {
 export async function addTornero(name: string): Promise<WorkOrderResult<{ id: string }>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
-  if (!getCurrentUserUid()) return { ok: false, reason: 'not-authenticated' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
   const clean = sanitizeTorneroName(name);
   if (!clean) return { ok: false, reason: 'invalid-input' };
   try {
@@ -495,7 +526,7 @@ export async function setTorneroActive(
 ): Promise<WorkOrderResult<void>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
-  if (!getCurrentUserUid()) return { ok: false, reason: 'not-authenticated' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
   if (typeof id !== 'string' || id.trim().length === 0) {
     return { ok: false, reason: 'invalid-input' };
   }

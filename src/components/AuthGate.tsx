@@ -2,20 +2,19 @@
  * AuthGate: puerta de entrada a pantalla completa.
  *
  * - Permite inicio de sesión con Google o Correo/Contraseña.
- * - Mantiene el estilo brutalist de la app (border-ink, shadow duro).
+ * - Estilo "instrumento de ingeniería" (oscuro) consistente con la app.
  * - Errores de login se muestran como feedback constructivo al usuario.
- * - Si Firebase no está configurado, permite el paso con un banner de advertencia.
- * - MODO DEBUG: Permite bypass manual para desarrollo.
+ * - Si Firebase no está configurado o se omite el login, deja pasar; la sesión
+ *   (o su ausencia) se refleja en el rail de navegación, no en una barra propia.
  */
 
 import { useCallback, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
-import { AlertCircle, Loader2, LogIn, LogOut, ShieldCheck, Mail, Lock, Ghost } from 'lucide-react';
+import { AlertCircle, Loader2, LogIn, ShieldCheck, Mail, Lock, Ghost } from 'lucide-react';
 
 import { isFirebaseConfigured } from '../lib/firebase/env';
 import {
   signInWithGoogle,
   signInWithEmailPassword,
-  signOutUser,
   useFirebaseUser,
 } from '../lib/firebase/auth';
 import { validateSignInCredentials } from '../lib/firebase/authValidators';
@@ -24,17 +23,9 @@ interface AuthGateProps {
   children: ReactNode;
 }
 
-interface UserBadgeProps {
-  displayName: string;
-  email: string;
-  onSignOut: () => void;
-  signingOut: boolean;
-}
-
 export function AuthGate({ children }: AuthGateProps): ReactElement {
   const auth = useFirebaseUser();
   const [signingIn, setSigningIn] = useState<boolean>(false);
-  const [signingOut, setSigningOut] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isBypassed, setIsBypassed] = useState<boolean>(false);
 
@@ -79,26 +70,8 @@ export function AuthGate({ children }: AuthGateProps): ReactElement {
     return { ok: true as const, fieldIssues: [] };
   }, []);
 
-  const handleSignOut = useCallback(async () => {
-    if (isBypassed) {
-      setIsBypassed(false);
-      return;
-    }
-    setSigningOut(true);
-    const result = await signOutUser();
-    setSigningOut(false);
-    if (result.ok === false && result.reason === 'error') {
-      setErrorMessage(result.message ?? 'No fue posible cerrar sesión.');
-    }
-  }, [isBypassed]);
-
   if (isBypassed || !isFirebaseConfigured() || auth.status === 'unavailable') {
-    return (
-      <div className="flex flex-col min-h-screen">
-        <ConfigWarningBanner isBypass={isBypassed} />
-        <div className="grow">{children}</div>
-      </div>
-    );
+    return <>{children}</>;
   }
 
   if (auth.status === 'loading') {
@@ -118,29 +91,15 @@ export function AuthGate({ children }: AuthGateProps): ReactElement {
     );
   }
 
-  const user = auth.user;
-  const displayName = user.displayName ?? user.email ?? 'Usuario';
-  const email = user.email ?? '';
-
-  return (
-    <div className="flex flex-col min-h-screen">
-      <UserBadge
-        displayName={displayName}
-        email={email}
-        onSignOut={() => void handleSignOut()}
-        signingOut={signingOut}
-      />
-      <div className="grow">{children}</div>
-    </div>
-  );
+  return <>{children}</>;
 }
 
 function LoadingScreen(): ReactElement {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#E8E8E8]">
+    <div className="min-h-screen flex items-center justify-center bg-bg bp-grid-lg">
       <div className="flex flex-col items-center gap-3 text-ink">
-        <Loader2 size={32} className="animate-spin" />
-        <p className="text-[11px] font-black uppercase tracking-widest">
+        <Loader2 size={32} className="animate-spin text-accent" />
+        <p className="font-mono text-[11px] font-black uppercase tracking-widest text-ink-dim">
           Cargando sesión…
         </p>
       </div>
@@ -170,7 +129,7 @@ function LoginScreen({
 }: LoginScreenProps): ReactElement {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const [, setFieldErrors] = useState<{ email?: string; password?: string }>({});
 
   const handleSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -191,21 +150,21 @@ function LoginScreen({
   );
 
   return (
-    <div className="min-h-screen bg-[#E8E8E8] flex items-center justify-center p-6 font-sans">
-      <div className="w-full max-w-md border-2 border-ink bg-white shadow-[6px_6px_0px_rgba(0,0,0,1)]">
-        <div className="border-b-2 border-ink px-6 py-4 bg-ink text-bg flex items-center gap-3">
-          <ShieldCheck size={22} />
-          <h1 className="text-[18px] font-black tracking-[-0.5px] uppercase">
-            SMV VISION // AUTH
+    <div className="min-h-screen bg-bg bp-grid-lg flex items-center justify-center p-6 font-sans">
+      <div className="w-full max-w-md border-2 border-line bg-surface shadow-hard-accent corner-ticks">
+        <div className="border-b-2 border-line px-6 py-4 bg-surface-2 text-ink flex items-center gap-3">
+          <ShieldCheck size={22} className="text-accent" />
+          <h1 className="font-display text-[20px] font-black tracking-[-0.5px] uppercase italic">
+            SMV<span className="text-accent">//</span>VISION
           </h1>
         </div>
 
         <div className="p-6 flex flex-col gap-6">
           <div className="space-y-1">
-            <p className="text-[11px] font-black uppercase tracking-widest text-ink/70">
+            <p className="font-mono text-[11px] font-black uppercase tracking-widest text-accent">
               Control de Acceso
             </p>
-            <p className="text-[13px] text-ink/80 leading-snug">
+            <p className="text-[13px] text-ink-dim leading-snug">
               Inicia sesión para auditar planos o usa el modo debug.
             </p>
           </div>
@@ -213,25 +172,25 @@ function LoginScreen({
           <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-4" noValidate>
             <div className="space-y-3 opacity-40 grayscale pointer-events-none">
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-black uppercase tracking-widest text-ink/60 flex items-center gap-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-ink-dim flex items-center gap-1.5">
                   <Mail size={12} /> Correo
                 </label>
                 <input
                   type="email"
                   disabled
                   placeholder="usuario@smv.com"
-                  className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none"
+                  className="w-full border-2 border-line bg-surface-2 text-ink px-3 py-2 text-sm font-bold outline-none"
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-black uppercase tracking-widest text-ink/60 flex items-center gap-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-ink-dim flex items-center gap-1.5">
                   <Lock size={12} /> Contraseña
                 </label>
                 <input
                   type="password"
                   disabled
                   placeholder="••••••••"
-                  className="w-full border-2 border-ink bg-white px-3 py-2 text-sm font-bold outline-none"
+                  className="w-full border-2 border-line bg-surface-2 text-ink px-3 py-2 text-sm font-bold outline-none"
                 />
               </div>
             </div>
@@ -239,88 +198,41 @@ function LoginScreen({
             <button
               type="button"
               onClick={onBypass}
-              className="w-full bg-accent text-bg hover:bg-ink hover:text-white px-4 py-4 text-[14px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-[4px_4px_0px_rgba(0,0,0,0.2)] active:translate-x-0.5 active:translate-y-0.5 transition-all animate-pulse"
+              className="w-full bg-accent text-bg hover:bg-accent/80 px-4 py-4 text-[14px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-hard active:translate-x-0.5 active:translate-y-0.5 transition-all"
             >
               <Ghost size={20} /> Omitir Login (Modo Debug)
             </button>
           </form>
 
-          <div className="relative flex items-center py-1 opacity-30">
-            <div className="grow border-t-2 border-ink/10"></div>
-            <span className="mx-4 text-[10px] font-black text-ink/40 uppercase tracking-widest">Otras opciones</span>
-            <div className="grow border-t-2 border-ink/10"></div>
+          <div className="relative flex items-center py-1 opacity-40">
+            <div className="grow border-t-2 border-line"></div>
+            <span className="mx-4 text-[10px] font-black text-ink-dim uppercase tracking-widest">Otras opciones</span>
+            <div className="grow border-t-2 border-line"></div>
           </div>
 
           <button
             type="button"
             onClick={() => void onSignInGoogle()}
             disabled={signingIn}
-            className="w-full border-2 border-ink bg-white hover:bg-[#F4F4F4] disabled:opacity-30 transition-colors px-4 py-3 text-[12px] font-black uppercase tracking-widest flex items-center justify-center gap-2 opacity-60"
+            className="w-full border-2 border-line bg-surface-2 text-ink hover:border-accent hover:text-accent disabled:opacity-30 transition-colors px-4 py-3 text-[12px] font-black uppercase tracking-widest flex items-center justify-center gap-2"
           >
-            <LogIn size={16} /> Entrar con Google
+            {signingIn ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Entrar con Google
           </button>
 
           {errorMessage && (
-            <div className="border-2 border-ink bg-[#FFF2F2] px-3 py-2 flex items-start gap-2">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" />
-              <span className="text-[11px] text-ink leading-snug font-bold">
+            <div className="border-2 border-danger bg-danger/10 px-3 py-2 flex items-start gap-2">
+              <AlertCircle size={14} className="shrink-0 mt-0.5 text-danger" />
+              <span className="text-[11px] text-danger leading-snug font-bold">
                 {errorMessage}
               </span>
             </div>
           )}
 
-          <p className="text-[9px] text-ink/40 leading-tight italic text-center">
+          <p className="text-[9px] text-ink-dim/70 leading-tight italic text-center">
             Development mode enabled. Authentication is currently optional.
           </p>
         </div>
       </div>
-    </div>
-  );
-}
-
-function UserBadge({ displayName, email, onSignOut, signingOut }: UserBadgeProps): ReactElement {
-  return (
-    <div className="border-b-2 border-ink bg-white px-4 py-2 flex items-center justify-between gap-3">
-      <div className="flex items-center gap-2 min-w-0">
-        <ShieldCheck size={14} className="shrink-0" />
-        <div className="flex flex-col min-w-0">
-          <span className="text-[10px] font-black uppercase tracking-widest text-ink/70">
-            Sesión activa
-          </span>
-          <span className="text-[12px] font-bold text-ink truncate" title={email || displayName}>
-            {displayName}
-          </span>
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={onSignOut}
-        disabled={signingOut}
-        className="shrink-0 border border-ink bg-white px-3 py-1 text-[10px] font-black uppercase tracking-widest hover:bg-ink hover:text-bg disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-      >
-        {signingOut ? (
-          <>
-            <Loader2 size={11} className="animate-spin" /> Saliendo…
-          </>
-        ) : (
-          <>
-            <LogOut size={11} /> Salir
-          </>
-        )}
-      </button>
-    </div>
-  );
-}
-
-function ConfigWarningBanner({ isBypass }: { isBypass?: boolean }): ReactElement {
-  return (
-    <div className={`border-b-2 border-ink px-4 py-2 flex items-center gap-2 ${isBypass ? 'bg-accent text-bg' : 'bg-[#FFF6CC] text-ink'}`}>
-      {isBypass ? <Ghost size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
-      <p className="text-[11px] font-black uppercase tracking-tighter">
-        {isBypass 
-          ? 'MODO DEBUG: Sesión sin autenticar activa. Los registros de auditoría no se guardarán.' 
-          : 'Firebase no configurado: el audit trail está desactivado.'}
-      </p>
     </div>
   );
 }

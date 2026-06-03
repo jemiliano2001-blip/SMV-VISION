@@ -1418,29 +1418,134 @@ Reglas de extracción (ESTILO UT2033):
     }
   };
 
+  const snapshotOriginalOnce = useCallback(() => {
+    setOriginalResults((prev) => prev ?? (results ? [...results] : null));
+  }, [results]);
+
+  const handleEditCantidad = useCallback(
+    (order: Order, nuevaCantidad: string) => {
+      const clean = nuevaCantidad.trim();
+      if (!clean || clean === order.cantidad) return;
+      snapshotOriginalOnce();
+      setResults((prev) => (prev ? prev.map((o) => (o === order ? { ...o, cantidad: clean } : o)) : prev));
+      const woId = findWorkOrderId(order);
+      if (woId) {
+        void (async () => {
+          const res = await updateCantidad(woId, clean);
+          if (res.ok === false) console.warn('[smv-vision][report-edit] updateCantidad no aplicado:', res.reason);
+          else onDataChanged();
+        })();
+      }
+    },
+    [snapshotOriginalOnce, findWorkOrderId, onDataChanged],
+  );
+
+  const handleExcludeOrder = useCallback(
+    (order: Order) => {
+      snapshotOriginalOnce();
+      const woId = findWorkOrderId(order);
+      setExcludedOrders((prev) => [...prev, { order, workOrderId: woId }]);
+      setResults((prev) => (prev ? prev.filter((o) => o !== order) : prev));
+      if (woId) {
+        void (async () => {
+          const res = await archiveWorkOrder(woId, true);
+          if (res.ok === false) console.warn('[smv-vision][report-edit] archive no aplicado:', res.reason);
+          else onDataChanged();
+        })();
+      }
+    },
+    [snapshotOriginalOnce, findWorkOrderId, onDataChanged],
+  );
+
+  const handleRestoreOrder = useCallback(
+    (entry: { order: Order; workOrderId: string | null }) => {
+      setExcludedOrders((prev) => prev.filter((e) => e !== entry));
+      setResults((prev) => (prev ? [...prev, entry.order] : [entry.order]));
+      if (entry.workOrderId) {
+        void (async () => {
+          const res = await archiveWorkOrder(entry.workOrderId!, false);
+          if (res.ok) onDataChanged();
+        })();
+      }
+    },
+    [onDataChanged],
+  );
+
+  const handleRestoreAll = useCallback(() => {
+    const snapshot = originalResults;
+    const current = results ?? [];
+    const excluded = excludedOrders;
+    if (snapshot) setResults(snapshot);
+    setExcludedOrders([]);
+    setOriginalResults(null);
+    void (async () => {
+      let touched = false;
+      for (const e of excluded) {
+        if (e.workOrderId) {
+          await archiveWorkOrder(e.workOrderId, false);
+          touched = true;
+        }
+      }
+      if (snapshot) {
+        const currentByKey = new Map(
+          current.map((o) => [dedupeKeyOfReportOrder(o), o.cantidad] as const),
+        );
+        for (const o of snapshot) {
+          const key = dedupeKeyOfReportOrder(o);
+          if (currentByKey.has(key) && currentByKey.get(key) !== o.cantidad) {
+            const woId = findWorkOrderId(o);
+            if (woId) {
+              await updateCantidad(woId, o.cantidad);
+              touched = true;
+            }
+          }
+        }
+      }
+      if (touched) onDataChanged();
+    })();
+  }, [originalResults, results, excludedOrders, findWorkOrderId, onDataChanged]);
+
+  const auditedCount = useMemo(
+    () => (results ? results.filter((r) => r.haSidoAuditada).length : 0),
+    [results],
+  );
+
+  const filteredResults = useMemo(() => {
+    if (!results) return null;
+    const term = resultsFilter.trim().toLowerCase();
+    return results.filter((order) => {
+      if (filterUrgentOnly && order.prioridad !== 'URGENTE') return false;
+      if (filterMissingOnly && order.isometricView) return false;
+      if (term.length === 0) return true;
+      return [order.pieza, order.numero_parte ?? '', order.orden, order.sourcePdfName ?? '']
+        .join(' ').toLowerCase().includes(term);
+    });
+  }, [results, resultsFilter, filterUrgentOnly, filterMissingOnly]);
+
   return {
+    // File state
     orderPdf, orderPdfName, orderPdfWarning, workshopPdfs,
     orderLoadingState, workshopLoadingStates,
     toolcribPdfToDrawing, attachedToolcribDrawingIds,
+    // Analysis state
     isExtracting, extractingStep, error, results,
     analysisSummary, metricsComparison, copying,
-    editMode, originalResults, excludedOrders,
-    auditedCount: results ? results.filter((r) => r.haSidoAuditada).length : 0,
+    // Edit mode
+    editMode, originalResults, excludedOrders, auditedCount,
+    // Results display
     draggingZone, resultsFilter, filterUrgentOnly, filterMissingOnly,
-    filteredResults: null, // placeholder — Task 5
-    previewOrder,
+    filteredResults, previewOrder,
+    // Refs
     orderFileInputRef,
+    // Actions
     extractInfo, ingestOrderFile, ingestWorkshopFiles,
     handleOrderInputUpload, handleAttachToolcribDrawing,
     removeFile, buildDropHandlers,
     downloadPdf, downloadCsv, downloadJson,
     downloadSingleOrderPdf, copyResults,
-    // edit handlers — Task 5
-    snapshotOriginalOnce: () => {},
-    handleEditCantidad: () => {},
-    handleExcludeOrder: () => {},
-    handleRestoreOrder: () => {},
-    handleRestoreAll: () => {},
+    snapshotOriginalOnce, handleEditCantidad, handleExcludeOrder,
+    handleRestoreOrder, handleRestoreAll,
+    // Setters
     setResultsFilter, setFilterUrgentOnly, setFilterMissingOnly,
     setDraggingZone, setEditMode, setPreviewOrder, setError,
   };

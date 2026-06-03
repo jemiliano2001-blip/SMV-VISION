@@ -499,8 +499,8 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
     // 4b. Merge server-authoritative fields (tornero name confirmed by Firebase)
     setOrders((prev) => prev.map((o) => {
       if (o.id !== order.id) return o;
-      if (newStatus === 'entregada') return { ...o, deliveredToTornero: res.value.deliveredToTornero };
-      if (newStatus === 'en_proceso') return { ...o, assignedToTornero: res.value.deliveredToTornero };
+      if (newStatus === 'entregada') return { ...o, deliveredToTornero: res.value.torneroName };
+      if (newStatus === 'en_proceso') return { ...o, assignedToTornero: res.value.torneroName };
       return o;
     }));
     onDataChanged?.();

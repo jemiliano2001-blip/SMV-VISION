@@ -355,7 +355,7 @@ export async function updateOrderStatus(
   orderId: string,
   status: WorkOrderStatus,
   torneroName?: string,
-): Promise<WorkOrderResult<{ deliveredToTornero: string | null }>> {
+): Promise<WorkOrderResult<{ torneroName: string | null }>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
   const uid = getCurrentUserUid();
@@ -396,7 +396,7 @@ export async function updateOrderStatus(
       ...extra,
       updatedAtUTC: serverTimestamp(),
     });
-    return { ok: true, value: { deliveredToTornero: name } };
+    return { ok: true, value: { torneroName: name } };
   } catch (error) {
     console.warn('[smv-vision][work-orders] updateOrderStatus falló', error);
     return { ok: false, reason: 'write-failed' };

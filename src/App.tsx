@@ -23,7 +23,7 @@ import {
   Order,
   WorkOrder,
 } from './types';
-import { ToolcribLibraryPanel, type ToolcribAttachment } from './components/ToolcribLibraryPanel';
+import { ToolcribLibraryPanel } from './components/ToolcribLibraryPanel';
 import { WorkOrdersPanel } from './components/WorkOrdersPanel';
 import { AppShell, type AppView } from './components/shell/AppShell';
 import { InicioView, type AlertSeverity } from './components/InicioView';

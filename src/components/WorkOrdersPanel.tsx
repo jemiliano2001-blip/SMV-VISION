@@ -100,6 +100,36 @@ function norm(value: string): string {
 
 // ── OrderCard (module scope + React.memo to prevent re-creation on render) ────
 
+function applyOptimisticTransition(
+  orders: WorkOrder[],
+  orderId: string,
+  newStatus: WorkOrderStatus,
+  torneroName?: string,
+): WorkOrder[] {
+  const now = new Date().toISOString();
+  return orders.map((o) => {
+    if (o.id !== orderId) return o;
+    const base = { ...o, status: newStatus, updatedAtUTC: now };
+    if (newStatus === 'en_proceso') {
+      return { ...base, assignedToTornero: torneroName ?? null, assignedAtUTC: now };
+    }
+    if (newStatus === 'terminada') {
+      return { ...base, finishedAtUTC: now };
+    }
+    if (newStatus === 'entregada') {
+      return { ...base, deliveredToTornero: torneroName ?? null, deliveredAtUTC: now };
+    }
+    if (newStatus === 'pendiente') {
+      return {
+        ...base,
+        assignedToTornero: null, assignedAtUTC: null,
+        finishedAtUTC: null, deliveredToTornero: null, deliveredAtUTC: null,
+      };
+    }
+    return base;
+  });
+}
+
 interface OrderCardProps {
   order: WorkOrder;
   busy: string | undefined;
@@ -446,10 +476,18 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
     newStatus: WorkOrderStatus,
     torneroName?: string,
   ) => {
-    setBusy(order.id, 'Guardando');
+    // 1. Snapshot for rollback
+    const snapshot = order;
+
+    // 2. Optimistic update — UI responds instantly
+    setOrders((prev) => applyOptimisticTransition(prev, order.id, newStatus, torneroName));
+
+    // 3. Firebase write (background)
     const res = await updateOrderStatus(order.id, newStatus, torneroName);
-    clearBusy(order.id);
+
     if (res.ok === false) {
+      // 4a. Revert on failure
+      setOrders((prev) => prev.map((o) => (o.id === order.id ? snapshot : o)));
       setErrorMessage(
         res.reason === 'not-authenticated'
           ? 'Inicia sesión para actualizar el estado.'
@@ -457,26 +495,13 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
       );
       return;
     }
+
+    // 4b. Merge server-authoritative fields (tornero name confirmed by Firebase)
     setOrders((prev) => prev.map((o) => {
       if (o.id !== order.id) return o;
-      const now = new Date().toISOString();
-      const base = { ...o, status: newStatus, updatedAtUTC: now };
-      if (newStatus === 'en_proceso') {
-        return { ...base, assignedToTornero: res.value.deliveredToTornero, assignedAtUTC: now };
-      }
-      if (newStatus === 'terminada') {
-        return { ...base, finishedAtUTC: now };
-      }
-      if (newStatus === 'entregada') {
-        return { ...base, deliveredToTornero: res.value.deliveredToTornero, deliveredAtUTC: now };
-      }
-      if (newStatus === 'pendiente') {
-        return {
-          ...base, assignedToTornero: null, assignedAtUTC: null,
-          finishedAtUTC: null, deliveredToTornero: null, deliveredAtUTC: null,
-        };
-      }
-      return base;
+      if (newStatus === 'entregada') return { ...o, deliveredToTornero: res.value.deliveredToTornero };
+      if (newStatus === 'en_proceso') return { ...o, assignedToTornero: res.value.deliveredToTornero };
+      return o;
     }));
     onDataChanged?.();
   }, [onDataChanged]);

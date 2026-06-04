@@ -43,6 +43,12 @@ import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
 import { callWithRetry, preparePdfPart, prepareImagePart } from '../lib/gemini';
+import {
+  isRecord,
+  asString,
+  parseBoundingBox,
+  parseBlueprintResponse,
+} from '../lib/blueprintParsers';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -83,51 +89,7 @@ function dedupeKeyOfReportOrder(order: Order): string {
   });
 }
 
-// ── Pure helper functions (moved verbatim from App.tsx) ───────────────────────
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function parseBoundingBox(value: unknown): BoundingBox | null {
-  if (!Array.isArray(value) || value.length !== 4) {
-    return null;
-  }
-
-  const nums = value.map((entry) => (typeof entry === 'number' ? entry : Number.NaN));
-  if (nums.some((n) => Number.isNaN(n))) {
-    return null;
-  }
-
-  return [nums[0], nums[1], nums[2], nums[3]];
-}
-
-function parseBlueprintResponse(text: string): BlueprintSpec[] {
-  const parsed = JSON.parse(text) as unknown;
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-
-  return parsed
-    .filter(isRecord)
-    .map((item) => {
-      const piece = asString(item.pieza_detectada);
-      const box = parseBoundingBox(item.isometricBoundingBox);
-      if (!piece || !box) {
-        return null;
-      }
-
-      return {
-        pieza_detectada: piece,
-        isometricBoundingBox: box,
-      } satisfies BlueprintSpec;
-    })
-    .filter((item): item is BlueprintSpec => item !== null);
-}
+// ── Pure helper functions ────────────────────────────────────────────────────
 
 function readBaselineMetrics(): AnalysisMetrics | null {
   const raw = localStorage.getItem(METRICS_BASELINE_KEY);

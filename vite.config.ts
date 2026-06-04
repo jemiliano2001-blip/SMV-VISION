@@ -82,5 +82,9 @@ export default defineConfig(({mode}) => {
       },
       chunkSizeWarningLimit: 800,
     },
+    test: {
+      environment: 'node',
+      globals: true,
+    },
   };
 });

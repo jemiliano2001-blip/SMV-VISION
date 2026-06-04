@@ -42,6 +42,7 @@ import { buildDedupeKey } from '../lib/workOrders/dedupe';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
+import { callWithRetry, preparePdfPart, prepareImagePart } from '../lib/gemini';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -83,21 +84,6 @@ function dedupeKeyOfReportOrder(order: Order): string {
 }
 
 // ── Pure helper functions (moved verbatim from App.tsx) ───────────────────────
-
-async function callWithRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (e) {
-      lastError = e;
-      if (attempt < maxAttempts - 1) {
-        await new Promise<void>((r) => setTimeout(r, 1000 * 2 ** attempt));
-      }
-    }
-  }
-  throw lastError;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -203,26 +189,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 // ── Image/crop helpers (module-scope — no state deps) ─────────────────────────
-
-function preparePdfPart(dataUrl: string) {
-  const base64Data = dataUrl.split(';base64,')[1];
-  return {
-    inlineData: {
-      mimeType: "application/pdf",
-      data: base64Data
-    }
-  };
-}
-
-function prepareImagePart(dataUrl: string) {
-  const base64Data = dataUrl.split(';base64,')[1];
-  return {
-    inlineData: {
-      mimeType: "image/jpeg",
-      data: base64Data
-    }
-  };
-}
 
 function isValidBoundingBox(box?: number[]): box is number[] {
   if (!box || box.length !== 4) return false;

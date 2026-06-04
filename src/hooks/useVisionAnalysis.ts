@@ -49,6 +49,11 @@ import {
   parseBoundingBox,
   parseBlueprintResponse,
 } from '../lib/blueprintParsers';
+import {
+  isValidBoundingBox,
+  cropIsometricView,
+  cropToBoxRaw,
+} from '../lib/imageProcessing';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -150,87 +155,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-// ── Image/crop helpers (module-scope — no state deps) ─────────────────────────
-
-function isValidBoundingBox(box?: number[]): box is number[] {
-  if (!box || box.length !== 4) return false;
-  const [ymin, xmin, ymax, xmax] = box;
-  if (![ymin, xmin, ymax, xmax].every((n) => Number.isFinite(n))) return false;
-  const width = xmax - xmin;
-  const height = ymax - ymin;
-  if (width <= 50 || height <= 50) return false; // < 5% of the 0-1000 grid
-  if (width * height > 750 * 750) return false; // > ~56% area => cubre múltiples vistas
-  // Franja/sliver: si el lado corto es < 25% del lado largo, es un strip incorrecto
-  if (Math.min(width, height) / Math.max(width, height) < 0.25) return false;
-  return true;
-}
-
-function cropIsometricView(base64: string, box: number[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const padding = 12;
-      const [ymin, xmin, ymax, xmax] = box;
-      const x = Math.max(0, (xmin / 1000) * img.width - padding);
-      const y = Math.max(0, (ymin / 1000) * img.height - padding);
-      const width = Math.min(img.width - x, ((xmax - xmin) / 1000) * img.width + padding * 2);
-      const height = Math.min(img.height - y, ((ymax - ymin) / 1000) * img.height + padding * 2);
-
-      // Phase 1: crop the rectangular region
-      const cropCanvas = document.createElement('canvas');
-      cropCanvas.width = width;
-      cropCanvas.height = height;
-      const cropCtx = cropCanvas.getContext('2d')!;
-      cropCtx.fillStyle = '#FFFFFF';
-      cropCtx.fillRect(0, 0, width, height);
-      cropCtx.drawImage(img, x, y, width, height, 0, 0, width, height);
-
-      // Phase 2: center the crop on a white square canvas so the aspect ratio
-      // is preserved when the PDF embeds it as a fixed-size square cell.
-      const side = Math.ceil(Math.max(width, height));
-      const squareCanvas = document.createElement('canvas');
-      squareCanvas.width = side;
-      squareCanvas.height = side;
-      const squareCtx = squareCanvas.getContext('2d')!;
-      squareCtx.fillStyle = '#FFFFFF';
-      squareCtx.fillRect(0, 0, side, side);
-      squareCtx.drawImage(
-        cropCanvas,
-        0, 0, width, height,
-        Math.floor((side - width) / 2), Math.floor((side - height) / 2), width, height,
-      );
-
-      resolve(squareCanvas.toDataURL('image/jpeg', 0.9));
-    };
-    // Sin onerror, una imagen corrupta dejaría la promesa colgada para
-    // siempre y bloquearía el pipeline de planos (se hace await de este crop).
-    img.onerror = () => reject(new Error('No se pudo cargar la imagen para recortar la vista isométrica.'));
-    img.src = base64;
-  });
-}
-
-function cropToBoxRaw(base64: string, box: number[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const [ymin, xmin, ymax, xmax] = box;
-      const x = Math.max(0, (xmin / 1000) * img.width);
-      const y = Math.max(0, (ymin / 1000) * img.height);
-      const width = Math.min(img.width - x, ((xmax - xmin) / 1000) * img.width);
-      const height = Math.min(img.height - y, ((ymax - ymin) / 1000) * img.height);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.floor(width));
-      canvas.height = Math.max(1, Math.floor(height));
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, x, y, width, height, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.9));
-    };
-    img.onerror = () => reject(new Error('No se pudo cargar la imagen para el refinamiento del bounding box.'));
-    img.src = base64;
-  });
-}
 
 // ── Hook interfaces ───────────────────────────────────────────────────────────
 

@@ -76,6 +76,10 @@ export default defineConfig(({mode}) => {
               return 'react-vendor';
             }
 
+            if (id.includes('@hello-pangea/dnd') || id.includes('use-latest-ref')) {
+              return 'dnd-vendor';
+            }
+
             return 'vendor';
           },
         },

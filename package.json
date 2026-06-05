@@ -11,10 +11,15 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "toolcrib:bootstrap": "tsx scripts/toolcribBootstrap.ts"
+    "toolcrib:bootstrap": "tsx scripts/toolcribBootstrap.ts",
+    "sync:odoo": "tsx scripts/syncOdoo.ts",
+    "sync:odoo:dry": "tsx scripts/syncOdoo.ts --dry-run",
+    "toolcrib:dedupe": "tsx scripts/toolcribDedupeDrawings.ts",
+    "toolcrib:dedupe:execute": "tsx scripts/toolcribDedupeDrawings.ts --execute"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@hello-pangea/dnd": "^18.0.1",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.0",
     "@tailwindcss/vite": "^4.1.14",

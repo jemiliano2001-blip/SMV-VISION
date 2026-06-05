@@ -66,6 +66,11 @@ describe('resolveKanbanDrop', () => {
       [makeOrder(), makeOrder({ id: 'wo-2', status: 'pendiente' })]
     );
     expect(result.type).toBe('reorder');
+    if (result.type === 'reorder') {
+      expect(result.orderId).toBe('wo-1');
+      expect(result.sourceIndex).toBe(0);
+      expect(result.destinationIndex).toBe(1);
+    }
   });
 
   it('returns transition for valid cross-column drop to terminada', () => {
@@ -125,5 +130,14 @@ describe('resolveKanbanDrop', () => {
       [makeOrder()]
     );
     expect(result.type).toBe('noop');
+  });
+
+  it('returns noop with invalid-stage for unknown droppable', () => {
+    const result = resolveKanbanDrop(
+      makeDropResult({ destination: { droppableId: 'unknown-stage', index: 0 } }),
+      [makeOrder()]
+    );
+    expect(result.type).toBe('noop');
+    if (result.type === 'noop') expect(result.reason).toBe('invalid-stage');
   });
 });

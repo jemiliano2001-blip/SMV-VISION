@@ -3,7 +3,7 @@ import type { WorkOrder, WorkOrderStatus } from '../../types';
 
 const STAGES: WorkOrderStatus[] = ['pendiente', 'en_proceso', 'terminada', 'entregada'];
 
-type KanbanDropNoop = { type: 'noop'; reason: 'no-destination' | 'same-column' | 'invalid-stage' | 'tornero-required' | 'order-not-found' };
+type KanbanDropNoop = { type: 'noop'; reason: 'no-destination' | 'invalid-stage' | 'tornero-required' | 'order-not-found' };
 type KanbanDropReorder = { type: 'reorder'; orderId: string; sourceIndex: number; destinationIndex: number };
 type KanbanDropTransition = { type: 'transition'; orderId: string; newStatus: WorkOrderStatus; torneroName: string | null };
 

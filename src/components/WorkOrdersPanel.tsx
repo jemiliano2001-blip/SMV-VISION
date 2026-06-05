@@ -147,7 +147,6 @@ interface OrderCardProps {
   onArchive: (order: WorkOrder) => void;
   onPrint: (order: WorkOrder) => void;
 
-  // Nuevas props
   workload: Record<string, number>;
   isBulkMode: boolean;
   isSelected: boolean;
@@ -897,7 +896,8 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
             {(['pendiente', 'en_proceso', 'terminada', 'entregada'] as const).map((col) => {
               let cards = filtered.filter((o) => o.status === col);
               if (col === 'pendiente') {
-                if (pendientesSortBy === 'manual') cards = cards.sort((a, b) => (a.sortIndex ?? Date.now()) - (b.sortIndex ?? Date.now()));
+                if (pendientesSortBy === 'manual') cards = cards.sort((a, b) => (a.sortIndex ?? Infinity) - (b.sortIndex ?? Infinity));
+                else if (pendientesSortBy === 'dueDate') cards = cards.sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''));
                 else if (pendientesSortBy === 'po') cards = cards.sort((a, b) => (a.poNumber || '').localeCompare(b.poNumber || ''));
               }
               
@@ -966,7 +966,6 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
                                     {...draggableProvided.dragHandleProps}
                                   >
                                     <OrderCard
-                                      key={o.id}
                                       order={o}
                                       busy={rowBusy[o.id]}
                                       editingDueDateId={editingDueDateId}

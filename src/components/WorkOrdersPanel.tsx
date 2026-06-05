@@ -22,24 +22,28 @@ import {
   getDueDateSeverity, dueDaysLabel, calcMetrics, type DueDateSeverity,
 } from '../lib/workOrders/metrics';
 import {
-  listWorkOrders,
   updateOrderStatus,
   updateDueDate,
   updateNotes,
   archiveWorkOrder,
-  listTorneros,
   addTornero,
   setTorneroActive,
+  updateAssignedTornero,
+  updateSortIndex,
 } from '../lib/firebase/workOrders';
+import { useWorkOrdersContext } from '../contexts/WorkOrdersContext';
 import { getDrawingById } from '../lib/firebase/toolcrib';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { openStampedPlanoOt } from '../lib/planoOt';
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import type { DropResult } from '@hello-pangea/dnd';
+import { resolveKanbanDrop } from '../lib/workOrders/kanbanDrop';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 type StatusFilter = 'todas' | WorkOrderStatus;
-type ViewMode = 'board' | 'list';
+type ViewMode = 'board' | 'list' | 'torneros';
 
 const SEVERITY_CLASSES: Record<DueDateSeverity, string> = {
   overdue:  'bg-danger/20 text-danger border-danger',
@@ -139,8 +143,16 @@ interface OrderCardProps {
   draftNotes: string;
   activeTorneros: Tornero[];
   onTransition: (order: WorkOrder, status: WorkOrderStatus, tornero?: string) => void;
+  onAssignTornero: (orderId: string, torneroName: string) => void;
   onArchive: (order: WorkOrder) => void;
   onPrint: (order: WorkOrder) => void;
+
+  // Nuevas props
+  workload: Record<string, number>;
+  isBulkMode: boolean;
+  isSelected: boolean;
+  onToggleSelect: (id: string) => void;
+
   onSaveDueDate: (id: string, val: string) => void;
   onSaveNotes: (id: string) => void;
   onEditDueDate: (id: string | null) => void;
@@ -158,8 +170,13 @@ const OrderCard = React.memo(function OrderCard({
   draftNotes,
   activeTorneros,
   onTransition,
+  onAssignTornero,
   onArchive,
   onPrint,
+  workload,
+  isBulkMode,
+  isSelected,
+  onToggleSelect,
   onSaveDueDate,
   onSaveNotes,
   onEditDueDate,
@@ -173,9 +190,21 @@ const OrderCard = React.memo(function OrderCard({
 
   return (
     <div
-      className={`relative border-2 border-line bg-surface p-3 ${o.prioridad === 'URGENTE' ? 'border-l-accent border-l-4' : ''} ${o.archived ? 'opacity-50' : ''}`}
+      className={`relative border-2 border-line bg-surface transition-all p-3 ${o.prioridad === 'URGENTE' ? 'border-l-accent border-l-4' : ''} ${o.archived ? 'opacity-50' : ''}`}
     >
       <div className="flex flex-wrap items-start gap-3">
+        {/* Bulk mode checkbox */}
+        {isBulkMode && o.status === 'pendiente' && (
+          <div className="pt-1 pr-1">
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect(o.id)}
+              className="w-4 h-4 cursor-pointer accent-ink"
+            />
+          </div>
+        )}
+
         {/* Info izquierda */}
         <div className="min-w-0 grow space-y-1.5">
           <div className="flex items-center gap-2 flex-wrap">
@@ -224,6 +253,11 @@ const OrderCard = React.memo(function OrderCard({
           </div>
 
           {/* Estado de avance */}
+          {o.status === 'pendiente' && o.assignedToTornero && (
+            <p className="text-[10px] font-mono text-draft flex items-center gap-1">
+              Pre-asignado a <b>{o.assignedToTornero}</b> (en espera)
+            </p>
+          )}
           {o.status === 'en_proceso' && o.assignedToTornero && (
             <p className="text-[10px] font-mono text-draft flex items-center gap-1">
               <span className="w-2 h-2 bg-draft rounded-full inline-block" />
@@ -281,16 +315,29 @@ const OrderCard = React.memo(function OrderCard({
           </button>
 
           {o.status === 'pendiente' && (
-            <select
-              defaultValue=""
-              disabled={!!busy || activeTorneros.length === 0}
-              onChange={(e) => { const v = e.target.value; if (v) void onTransition(o, 'en_proceso', v); e.currentTarget.value = ''; }}
-              className="border border-draft bg-draft text-bg px-2 py-1 text-[9px] font-black uppercase disabled:opacity-40"
-              title={activeTorneros.length === 0 ? 'Agrega torneros primero' : 'Asignar a tornero'}
-            >
-              <option value="" disabled>{busy ?? 'Asignar a ▾'}</option>
-              {activeTorneros.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-            </select>
+            <>
+              <select
+                value={o.assignedToTornero ?? ''}
+                disabled={!!busy || activeTorneros.length === 0}
+                onChange={(e) => { const v = e.target.value; if (v) void onAssignTornero(o.id, v); }}
+                className="border border-line bg-surface-2 text-ink px-2 py-1 text-[9px] font-black uppercase disabled:opacity-40"
+                title={activeTorneros.length === 0 ? 'Agrega torneros primero' : 'Asignar a tornero'}
+              >
+                <option value="" disabled>{busy ?? 'Asignar a ▾'}</option>
+                {activeTorneros.map((t) => (
+                  <option key={t.id} value={t.name}>
+                    {t.name} {workload[t.name] ? `(${workload[t.name]} act)` : ''}
+                  </option>
+                ))}
+              </select>
+              {o.assignedToTornero && (
+                <button type="button" disabled={!!busy}
+                  onClick={() => void onTransition(o, 'en_proceso', o.assignedToTornero!)}
+                  className="border border-draft bg-draft text-bg px-2 py-1 text-[9px] font-black uppercase hover:opacity-80 disabled:opacity-40">
+                  A proceso
+                </button>
+              )}
+            </>
           )}
 
           {o.status === 'en_proceso' && (
@@ -307,7 +354,11 @@ const OrderCard = React.memo(function OrderCard({
                 className="border border-line bg-surface-2 text-ink px-2 py-1 text-[9px] font-black uppercase disabled:opacity-40"
               >
                 <option value="" disabled>Reasignar ▾</option>
-                {activeTorneros.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                {activeTorneros.map((t) => (
+                  <option key={t.id} value={t.name}>
+                    {t.name} {workload[t.name] ? `(${workload[t.name]} act)` : ''}
+                  </option>
+                ))}
               </select>
               <button type="button" disabled={!!busy}
                 onClick={() => void onTransition(o, 'pendiente')}
@@ -365,10 +416,61 @@ export interface WorkOrdersPanelProps {
 }
 
 export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: WorkOrdersPanelProps = {}): ReactElement {
-  const [status, setStatus] = useState<LoadStatus>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [orders, setOrders] = useState<WorkOrder[]>([]);
-  const [torneros, setTorneros] = useState<Tornero[]>([]);
+  // ── Fuente de datos: contexto compartido (onSnapshot, sin doble lectura) ────
+  const {
+    orders: ctxOrders,
+    torneros: ctxTorneros,
+    status: ctxStatus,
+    reason: ctxReason,
+    reloadTorneros,
+  } = useWorkOrdersContext();
+
+  // Estado local para mutaciones optimistas — se inicializa desde el contexto
+  // y se sincroniza en tiempo real cada vez que onSnapshot actualiza el contexto.
+  const [orders, setOrders] = useState<WorkOrder[]>(ctxOrders);
+  const [torneros, setTorneros] = useState<Tornero[]>(ctxTorneros);
+
+  // Convierte el estado del contexto al tipo local
+  const status: LoadStatus =
+    ctxStatus === 'idle'    ? 'idle'    :
+    ctxStatus === 'loading' ? 'loading' :
+    ctxStatus === 'ready'   ? 'ready'   :
+    /* error */               'error';
+
+  const [errorMessage, setErrorMessage] = useState<string | null>(() =>
+    ctxReason === 'not-configured'
+      ? 'Firebase no está configurado. Completa VITE_FIREBASE_* en .env.local.'
+      : ctxReason === 'not-authenticated'
+      ? 'Inicia sesión para ver y registrar órdenes.'
+      : null,
+  );
+
+  // Sincroniza órdenes desde el contexto (onSnapshot = actualizaciones en tiempo real).
+  // Las mutaciones optimistas se aplican sobre este estado; el onSnapshot siguiente
+  // confirma o revierte con los datos autoritativos de Firestore.
+  useEffect(() => {
+    setOrders(ctxOrders);
+  }, [ctxOrders]);
+
+  useEffect(() => {
+    setTorneros(ctxTorneros);
+  }, [ctxTorneros]);
+
+  useEffect(() => {
+    if (ctxReason === 'not-configured') {
+      setErrorMessage('Firebase no está configurado. Completa VITE_FIREBASE_* en .env.local.');
+    } else if (ctxReason === 'not-authenticated') {
+      setErrorMessage('Inicia sesión para ver y registrar órdenes.');
+    } else if (ctxReason === 'error') {
+      setErrorMessage('No fue posible cargar las órdenes. Revisa tu conexión.');
+    }
+  }, [ctxReason]);
+
+  // "Refrescar" ahora recarga torneros (órdenes ya están al día via onSnapshot)
+  const load = useCallback(async () => {
+    await reloadTorneros();
+  }, [reloadTorneros]);
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('todas');
   const [showArchived, setShowArchived] = useState(false);
@@ -385,32 +487,23 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
   const [editingDueDateId, setEditingDueDateId] = useState<string | null>(null);
   const [draftDueDate, setDraftDueDate] = useState('');
 
+  // --- Mejoras: Carga, Masivo y Reordenamiento ---
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [pendientesSortBy, setPendientesSortBy] = useState<'manual' | 'dueDate' | 'po'>('manual');
+
+  const workload = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const o of orders) {
+      if (o.status === 'en_proceso' && o.assignedToTornero) {
+        counts[o.assignedToTornero] = (counts[o.assignedToTornero] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [orders]);
+
   const setBusy = (id: string, label: string) => setRowBusy((p) => ({ ...p, [id]: label }));
   const clearBusy = (id: string) => setRowBusy((p) => { const n = { ...p }; delete n[id]; return n; });
-
-  const load = useCallback(async () => {
-    setStatus('loading');
-    setErrorMessage(null);
-    const [woRes, tRes] = await Promise.all([listWorkOrders(), listTorneros()]);
-    if (woRes.ok === false) {
-      setStatus('error');
-      setErrorMessage(
-        woRes.reason === 'not-configured'
-          ? 'Firebase no está configurado. Completa VITE_FIREBASE_* en .env.local.'
-          : woRes.reason === 'not-authenticated'
-            ? 'Inicia sesión para ver y registrar órdenes.'
-            : 'No fue posible cargar las órdenes. Revisa tu conexión.',
-      );
-      return;
-    }
-    setOrders(woRes.value);
-    if (tRes.ok) setTorneros(tRes.value);
-    setStatus('ready');
-  }, []);
-
-  useEffect(() => {
-    if (status === 'idle') void load();
-  }, [load, status]);
 
   const activeTorneros = useMemo(
     () => torneros.filter((t) => t.active).sort((a, b) => a.name.localeCompare(b.name)),
@@ -506,6 +599,17 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
     onDataChanged?.();
   }, [onDataChanged]);
 
+  const handleAssignTornero = useCallback(async (orderId: string, torneroName: string) => {
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, assignedToTornero: torneroName } : o)));
+    const res = await updateAssignedTornero(orderId, torneroName);
+    if (res.ok === false) {
+      setErrorMessage('No fue posible pre-asignar el tornero.');
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, assignedToTornero: null } : o)));
+    } else {
+      onDataChanged?.();
+    }
+  }, [onDataChanged]);
+
   const handleArchive = useCallback(async (order: WorkOrder) => {
     setBusy(order.id, 'Archivando');
     const res = await archiveWorkOrder(order.id, !order.archived);
@@ -568,15 +672,91 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
       return;
     }
     setNewTornero('');
-    const t = await listTorneros();
-    if (t.ok) setTorneros(t.value);
-  }, [newTornero]);
+    await reloadTorneros();
+  }, [newTornero, reloadTorneros]);
 
   const handleToggleTornero = useCallback(async (t: Tornero) => {
     const res = await setTorneroActive(t.id, !t.active);
     if (res.ok === false) { setErrorMessage('No fue posible actualizar el tornero.'); return; }
     setTorneros((prev) => prev.map((x) => (x.id === t.id ? { ...x, active: !t.active } : x)));
   }, []);
+
+  // --- Handlers de Acciones Masivas ---
+  const handleToggleSelect = useCallback((id: string) => {
+    setSelectedOrders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleBulkAssign = useCallback(async (torneroName: string) => {
+    const ids = Array.from(selectedOrders);
+    if (ids.length === 0) return;
+    setOrders((prev) => prev.map((o) => (ids.includes(o.id) ? { ...o, assignedToTornero: torneroName } : o)));
+    await Promise.all(ids.map((id) => updateAssignedTornero(id, torneroName)));
+    onDataChanged?.();
+  }, [selectedOrders, onDataChanged]);
+
+  const handleBulkTransition = useCallback(async (newStatus: WorkOrderStatus) => {
+    const ids = Array.from(selectedOrders);
+    if (ids.length === 0) return;
+    const toTransition = orders.filter((o) => ids.includes(o.id) && o.assignedToTornero);
+    const skipped = ids.length - toTransition.length;
+    if (skipped > 0) {
+      setErrorMessage(`${skipped} orden(es) sin tornero asignado no fueron procesadas.`);
+    }
+    if (toTransition.length === 0) return;
+    setOrders((prev) => prev.map((o) => (ids.includes(o.id) && o.assignedToTornero ? { ...o, status: newStatus } : o)));
+    await Promise.all(toTransition.map((o) => updateOrderStatus(o.id, newStatus, o.assignedToTornero!)));
+    setIsBulkMode(false);
+    setSelectedOrders(new Set());
+    onDataChanged?.();
+  }, [orders, selectedOrders, onDataChanged]);
+
+  // --- Handler de Drag & Drop (@hello-pangea/dnd) ---
+  const handleKanbanDrop = useCallback((result: DropResult) => {
+    const drop = resolveKanbanDrop(result, orders);
+
+    if (drop.type === 'noop') {
+      if (drop.reason === 'tornero-required') {
+        setErrorMessage('Asigna un tornero a la orden antes de moverla a esta etapa.');
+      }
+      return;
+    }
+
+    if (drop.type === 'reorder') {
+      const pendingOrders = filtered
+        .filter((o) => o.status === 'pendiente')
+        .sort((a, b) => (a.sortIndex ?? Infinity) - (b.sortIndex ?? Infinity))
+        .map((o, i) => ({ ...o, _idx: o.sortIndex ?? i }));
+
+      const sourceItem = pendingOrders[drop.sourceIndex];
+      const insertAfter = drop.sourceIndex < drop.destinationIndex;
+      const prevItem = insertAfter
+        ? pendingOrders[drop.destinationIndex]
+        : pendingOrders[drop.destinationIndex - 1];
+      const nextItem = insertAfter
+        ? pendingOrders[drop.destinationIndex + 1]
+        : pendingOrders[drop.destinationIndex];
+
+      if (!sourceItem) return;
+      const prevIdx = prevItem?._idx ?? (pendingOrders[0]?._idx ?? 0) - 1;
+      const nextIdx = nextItem?._idx ?? (pendingOrders[pendingOrders.length - 1]?._idx ?? 0) + 1;
+      const newIndex = prevIdx + (nextIdx - prevIdx) / 2;
+
+      setOrders((prev) => prev.map((o) => (o.id === drop.orderId ? { ...o, sortIndex: newIndex } : o)));
+      void updateSortIndex(drop.orderId, newIndex);
+      onDataChanged?.();
+      return;
+    }
+
+    // type === 'transition'
+    const order = orders.find((o) => o.id === drop.orderId);
+    if (!order) return;
+    void handleTransition(order, drop.newStatus, drop.torneroName ?? undefined);
+  }, [orders, filtered, handleTransition, onDataChanged]);
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -597,7 +777,7 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
 
           {/* Toggle de vista */}
           <div className="flex border-2 border-line">
-            {([['board', LayoutGrid, 'Tablero'], ['list', List, 'Lista']] as const).map(([mode, Icon, label]) => (
+            {([['board', LayoutGrid, 'Tablero'], ['list', List, 'Lista'], ['torneros', Users, 'Torneros']] as const).map(([mode, Icon, label]) => (
               <button
                 key={mode} type="button" onClick={() => setViewMode(mode)}
                 title={label} aria-pressed={viewMode === mode}
@@ -712,44 +892,116 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
 
         {/* ── Tablero ── */}
         {status === 'ready' && filtered.length > 0 && viewMode === 'board' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <DragDropContext onDragEnd={handleKanbanDrop}>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             {(['pendiente', 'en_proceso', 'terminada', 'entregada'] as const).map((col) => {
-              const cards = filtered.filter((o) => o.status === col);
+              let cards = filtered.filter((o) => o.status === col);
+              if (col === 'pendiente') {
+                if (pendientesSortBy === 'manual') cards = cards.sort((a, b) => (a.sortIndex ?? Date.now()) - (b.sortIndex ?? Date.now()));
+                else if (pendientesSortBy === 'po') cards = cards.sort((a, b) => (a.poNumber || '').localeCompare(b.poNumber || ''));
+              }
+              
               return (
                 <section key={col} className={`bg-surface/40 border-2 border-line border-t-4 ${COLUMN_ACCENT[col]} flex flex-col min-h-[120px]`}>
-                  <header className="flex items-center justify-between px-3 py-2 border-b-2 border-line sticky top-0">
-                    <span className="font-display font-black text-[12px] uppercase tracking-wider">{STATUS_LABELS[col]}</span>
-                    <span className="font-mono text-[11px] text-ink-dim">{cards.length}</span>
+                  <header className="flex flex-col bg-surface z-10 sticky top-0 border-b-2 border-line">
+                    <div className="flex items-center justify-between px-3 py-2">
+                      <span className="font-display font-black text-[12px] uppercase tracking-wider">{STATUS_LABELS[col]}</span>
+                      <span className="font-mono text-[11px] text-ink-dim">{cards.length}</span>
+                    </div>
+                    {col === 'pendiente' && (
+                      <div className="px-2 pb-2 flex flex-col gap-2">
+                        {/* Sorting toolbar */}
+                        <div className="flex flex-wrap gap-1">
+                          <button type="button" onClick={() => setPendientesSortBy('manual')} className={`px-2 py-1 text-[9px] font-black uppercase border-2 transition-colors ${pendientesSortBy === 'manual' ? 'bg-ink text-bg border-ink' : 'border-line text-ink-dim'}`}>Manual</button>
+                          <button type="button" onClick={() => setPendientesSortBy('dueDate')} className={`px-2 py-1 text-[9px] font-black uppercase border-2 transition-colors ${pendientesSortBy === 'dueDate' ? 'bg-ink text-bg border-ink' : 'border-line text-ink-dim'}`}>Fecha</button>
+                          <button type="button" onClick={() => setPendientesSortBy('po')} className={`px-2 py-1 text-[9px] font-black uppercase border-2 transition-colors ${pendientesSortBy === 'po' ? 'bg-ink text-bg border-ink' : 'border-line text-ink-dim'}`}>PO</button>
+                        </div>
+                        {/* Bulk actions trigger */}
+                        <div className="flex justify-between items-center bg-surface-2 px-2 py-1.5 border border-line">
+                          <label className="flex items-center gap-1.5 text-[9px] font-black uppercase cursor-pointer text-ink hover:text-accent transition-colors">
+                            <input type="checkbox" checked={isBulkMode} onChange={(e) => { setIsBulkMode(e.target.checked); if (!e.target.checked) setSelectedOrders(new Set()); }} className="accent-accent" />
+                            Selección Múltiple
+                          </label>
+                          {isBulkMode && selectedOrders.size > 0 && (
+                            <span className="text-[9px] font-black text-accent">{selectedOrders.size} selec.</span>
+                          )}
+                        </div>
+                        {/* Bulk actions bar */}
+                        {isBulkMode && selectedOrders.size > 0 && (
+                          <div className="flex flex-col gap-1 border border-line p-1 bg-surface-2 animate-in fade-in slide-in-from-top-2">
+                            <select
+                              defaultValue=""
+                              onChange={(e) => { const v = e.target.value; if (v) void handleBulkAssign(v); e.currentTarget.value = ''; }}
+                              className="border border-line bg-surface text-ink px-2 py-1 text-[9px] font-black uppercase w-full"
+                            >
+                              <option value="" disabled>Asignar seleccionadas ▾</option>
+                              {activeTorneros.map((t) => <option key={t.id} value={t.name}>{t.name} {workload[t.name] ? `(${workload[t.name]} act)` : ''}</option>)}
+                            </select>
+                            <button type="button" onClick={() => void handleBulkTransition('en_proceso')} className="border border-draft bg-draft text-bg px-2 py-1 text-[9px] font-black uppercase w-full">A Proceso ({selectedOrders.size})</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </header>
-                  <div className="p-2 space-y-2 grow">
-                    {cards.length === 0
-                      ? <p className="text-[10px] font-mono text-ink-dim/60 text-center py-6">—</p>
-                      : cards.map((o) => (
-                        <OrderCard
-                          key={o.id}
-                          order={o}
-                          busy={rowBusy[o.id]}
-                          editingDueDateId={editingDueDateId}
-                          draftDueDate={draftDueDate}
-                          editingNotesId={editingNotesId}
-                          draftNotes={draftNotes}
-                          activeTorneros={activeTorneros}
-                          onTransition={handleTransition}
-                          onArchive={handleArchive}
-                          onPrint={handlePrint}
-                          onSaveDueDate={handleSaveDueDate}
-                          onSaveNotes={handleSaveNotes}
-                          onEditDueDate={setEditingDueDateId}
-                          onEditNotes={setEditingNotesId}
-                          onDraftDueDateChange={setDraftDueDate}
-                          onDraftNotesChange={setDraftNotes}
-                        />
-                      ))}
-                  </div>
+                  <Droppable droppableId={col}>
+                    {(droppableProvided) => (
+                      <div
+                        ref={droppableProvided.innerRef}
+                        {...droppableProvided.droppableProps}
+                        className="p-2 space-y-2 grow min-h-[40px]"
+                      >
+                        {cards.length === 0
+                          ? <p className="text-[10px] font-mono text-ink-dim/60 text-center py-6">—</p>
+                          : cards.map((o, cardIndex) => (
+                              <Draggable
+                                key={o.id}
+                                draggableId={o.id}
+                                index={cardIndex}
+                                isDragDisabled={isBulkMode || (col === 'pendiente' && pendientesSortBy !== 'manual')}
+                              >
+                                {(draggableProvided) => (
+                                  <div
+                                    ref={draggableProvided.innerRef}
+                                    {...draggableProvided.draggableProps}
+                                    {...draggableProvided.dragHandleProps}
+                                  >
+                                    <OrderCard
+                                      key={o.id}
+                                      order={o}
+                                      busy={rowBusy[o.id]}
+                                      editingDueDateId={editingDueDateId}
+                                      draftDueDate={draftDueDate}
+                                      editingNotesId={editingNotesId}
+                                      draftNotes={draftNotes}
+                                      activeTorneros={activeTorneros}
+                                      onTransition={handleTransition}
+                                      onAssignTornero={handleAssignTornero}
+                                      onArchive={handleArchive}
+                                      onPrint={handlePrint}
+                                      onSaveDueDate={handleSaveDueDate}
+                                      onSaveNotes={handleSaveNotes}
+                                      onEditDueDate={setEditingDueDateId}
+                                      onEditNotes={setEditingNotesId}
+                                      onDraftDueDateChange={setDraftDueDate}
+                                      onDraftNotesChange={setDraftNotes}
+                                      workload={workload}
+                                      isBulkMode={isBulkMode}
+                                      isSelected={selectedOrders.has(o.id)}
+                                      onToggleSelect={handleToggleSelect}
+                                    />
+                                  </div>
+                                )}
+                              </Draggable>
+                            ))}
+                        {droppableProvided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
                 </section>
               );
             })}
-          </div>
+            </div>
+          </DragDropContext>
         )}
 
         {/* ── Lista ── */}
@@ -768,6 +1020,7 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
                   draftNotes={draftNotes}
                   activeTorneros={activeTorneros}
                   onTransition={handleTransition}
+                  onAssignTornero={handleAssignTornero}
                   onArchive={handleArchive}
                   onPrint={handlePrint}
                   onSaveDueDate={handleSaveDueDate}
@@ -776,8 +1029,69 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
                   onEditNotes={setEditingNotesId}
                   onDraftDueDateChange={setDraftDueDate}
                   onDraftNotesChange={setDraftNotes}
+                  workload={workload}
+                  isBulkMode={false}
+                  isSelected={false}
+                  onToggleSelect={() => {}}
                 />
               ))}
+          </div>
+        )}
+
+        {/* ── Tab Torneros ── */}
+        {status === 'ready' && viewMode === 'torneros' && (
+          <div className="max-w-2xl mx-auto py-8">
+            <section className="bg-surface border-2 border-line p-6">
+              <header className="flex items-center gap-3 mb-6">
+                <div className="p-3 border-2 border-line bg-accent text-bg">
+                  <Users size={24} />
+                </div>
+                <div>
+                  <h2 className="font-display font-black text-2xl uppercase tracking-tighter">Control de Torneros</h2>
+                  <p className="font-mono text-[11px] text-ink-dim">{activeTorneros.length} torneros activos</p>
+                </div>
+              </header>
+
+              <div className="flex items-center gap-2 mb-6">
+                <input
+                  value={newTornero} onChange={(e) => setNewTornero(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleAddTornero(); }}
+                  placeholder="Nombre del tornero"
+                  className="grow border-2 border-line bg-surface-2 text-ink px-3 py-2 text-[12px] font-mono outline-none placeholder:text-ink-dim/70 focus:border-accent"
+                />
+                <button type="button" onClick={() => void handleAddTornero()}
+                  className="border-2 border-accent bg-accent text-bg px-4 py-2 text-[11px] font-black uppercase flex items-center gap-1.5 hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5">
+                  <Plus size={14} /> Agregar Tornero
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {torneros.map((t) => (
+                  <div key={t.id} className={`flex items-center justify-between p-3 border-2 transition-colors ${
+                    t.active ? 'border-line bg-surface' : 'border-dashed border-line bg-surface-2 opacity-60'
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${t.active ? 'bg-ok' : 'bg-ink-dim'}`} />
+                      <span className={`font-black text-[13px] uppercase tracking-wider ${!t.active && 'line-through text-ink-dim'}`}>
+                        {t.name}
+                      </span>
+                    </div>
+                    <button type="button" onClick={() => void handleToggleTornero(t)}
+                      className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider border-2 transition-colors ${
+                        t.active ? 'border-line text-ink-dim hover:text-ink hover:border-ink' : 'border-ink bg-ink text-bg'
+                      }`}>
+                      {t.active ? 'Desactivar' : 'Reactivar'}
+                    </button>
+                  </div>
+                ))}
+                {torneros.length === 0 && (
+                  <div className="text-center py-10 border-2 border-dashed border-line text-ink-dim">
+                    <p className="font-mono text-[12px] mb-1">Aún no hay torneros registrados.</p>
+                    <p className="text-[10px] uppercase">Agrega el primero usando el campo de arriba.</p>
+                  </div>
+                )}
+              </div>
+            </section>
           </div>
         )}
       </div>

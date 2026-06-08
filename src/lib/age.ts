@@ -126,3 +126,19 @@ export function formatAgeDays(days: number): string {
   if (days === 1) return '1 día';
   return `${days} días`;
 }
+
+/**
+ * Returns a short Spanish relative time string for a past date.
+ * e.g. "hace 5 min", "hace 3h", "hace 2d"
+ * Handles slight clock skew (future dates treated as "hace un momento").
+ */
+export function formatRelativeTime(date: Date): string {
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.max(0, Math.floor(diffMs / 60_000));
+  if (diffMin < 1) return 'hace un momento';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `hace ${diffH}h`;
+  const diffD = Math.floor(diffH / 24);
+  return `hace ${diffD}d`;
+}

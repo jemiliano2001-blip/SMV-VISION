@@ -11,14 +11,14 @@
 import { useCallback, type ReactElement } from 'react';
 import {
   LayoutDashboard, ScanLine, ClipboardList, Library,
-  LogOut, Loader2, Ghost, Boxes, type LucideIcon,
+  LogOut, Loader2, Ghost, Boxes, CloudDownload, type LucideIcon,
 } from 'lucide-react';
 
 import { isFirebaseConfigured } from '../../lib/firebase/env';
 import { signOutUser, useFirebaseUser } from '../../lib/firebase/auth';
 import type { DashboardCounts } from '../../lib/useDashboardSummary';
 
-export type AppView = 'inicio' | 'reporte' | 'control' | 'biblioteca';
+export type AppView = 'inicio' | 'reporte' | 'control' | 'biblioteca' | 'odoo';
 
 interface NavItemDef {
   view: AppView;
@@ -30,6 +30,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: 'inicio', label: 'Inicio', icon: LayoutDashboard },
   { view: 'reporte', label: 'Generar Reporte', icon: ScanLine },
   { view: 'control', label: 'Control de Órdenes', icon: ClipboardList },
+  { view: 'odoo', label: 'Órdenes Odoo', icon: CloudDownload },
   { view: 'biblioteca', label: 'Biblioteca', icon: Library },
 ];
 

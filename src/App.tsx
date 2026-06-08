@@ -25,6 +25,7 @@ import {
 } from './types';
 import { ToolcribLibraryPanel } from './components/ToolcribLibraryPanel';
 import { WorkOrdersPanel } from './components/WorkOrdersPanel';
+import { OdooOrdersPanel } from './components/OdooOrdersPanel';
 import { AppShell, type AppView } from './components/shell/AppShell';
 import { InicioView, type AlertSeverity } from './components/InicioView';
 import { BibliotecaView } from './components/BibliotecaView';
@@ -158,60 +159,14 @@ export default function App() {
 
                 {/* 01 Pedidos */}
                 <div className="space-y-3">
-                  <StepLabel n="01" label="Pedidos" done={!!vision.orderPdf} />
-                  <div
-                    className={`min-h-[150px] border-2 border-dashed flex flex-col items-center justify-center p-6 relative transition-all group ${
-                      vision.draggingZone === 'order'
-                        ? 'border-accent bg-accent/10'
-                        : vision.orderPdf
-                          ? 'border-line bg-surface-2'
-                          : 'border-line bg-surface-2/40 hover:bg-surface-2 hover:border-accent cursor-pointer'
-                    }`}
-                    onClick={() => !vision.orderPdf && vision.orderFileInputRef.current?.click()}
-                    {...vision.buildDropHandlers('order', vision.ingestOrderFile)}
-                  >
-                    <input
-                      type="file"
-                      ref={vision.orderFileInputRef}
-                      className="hidden"
-                      accept="application/pdf"
-                      onChange={(e) => void vision.handleOrderInputUpload(e)}
-                    />
-                    {!vision.orderPdf ? (
-                      <div className="text-center space-y-2 group-hover:scale-105 transition-transform">
-                        <Database className="mx-auto w-10 h-10 text-ink-dim group-hover:text-accent transition-colors" />
-                        <p className="font-display font-black uppercase text-xs tracking-tight text-ink">Subir Reporte de Pedidos</p>
-                        <p className="text-[9px] text-ink-dim font-mono uppercase">PDF de Google Sheets (Suprajit)</p>
-                      </div>
-                    ) : (
-                      <div className="relative w-full flex flex-col items-center justify-center">
-                        <div className="relative">
-                          <FileText className={`w-12 h-12 ${vision.orderLoadingState === 'loading' ? 'text-accent animate-pulse' : 'text-ink'}`} />
-                          {vision.orderLoadingState === 'done' && (
-                            <div className="absolute -bottom-1 -right-1 bg-ok p-1 rounded-full border-2 border-surface">
-                              <CheckCircle2 size={12} className="text-bg" />
-                            </div>
-                          )}
-                        </div>
-                        <p className="mt-3 font-black text-[11px] uppercase tracking-widest truncate max-w-full px-4 text-ink">
-                          {vision.orderPdfName}
-                        </p>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); vision.removeFile('order'); }}
-                          className="absolute -top-3 -right-3 p-1.5 bg-accent text-bg hover:bg-ink border-2 border-surface transition-colors"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {vision.orderPdfWarning && (
-                    <div className="flex items-start gap-2 border border-warn/60 bg-warn/10 px-2 py-1.5 text-[10px] font-mono text-warn leading-snug" role="alert">
-                      <AlertCircle size={12} className="shrink-0 mt-0.5" />
-                      <span>{vision.orderPdfWarning}</span>
+                  <StepLabel n="01" label="Órdenes Odoo" done={true} />
+                  <div className="min-h-[150px] border-2 border-line bg-surface-2 flex flex-col items-center justify-center p-6 relative">
+                    <div className="text-center space-y-2">
+                      <Database className="mx-auto w-10 h-10 text-accent" />
+                      <p className="font-display font-black uppercase text-xs tracking-tight text-ink">Conexión a Odoo Activa</p>
+                      <p className="text-[9px] text-ink-dim font-mono uppercase">Las órdenes pendientes se obtendrán automáticamente al ejecutar la auditoría.</p>
                     </div>
-                  )}
+                  </div>
                 </div>
 
                 {/* 02 Biblioteca */}
@@ -271,7 +226,7 @@ export default function App() {
               <div className="border-t-2 border-line p-4 bg-surface-2">
                 <button
                   onClick={vision.extractInfo}
-                  disabled={vision.isExtracting || !vision.orderPdf}
+                  disabled={vision.isExtracting}
                   className="w-full bg-accent text-bg font-display font-black py-4 text-lg uppercase tracking-[3px] transition-all shadow-hard hover:shadow-none hover:translate-x-1 hover:translate-y-1 active:scale-[0.98] disabled:bg-surface disabled:text-ink-dim disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0 disabled:cursor-not-allowed flex items-center justify-center gap-3"
                 >
                   {vision.isExtracting ? (
@@ -360,7 +315,7 @@ export default function App() {
                     </motion.div>
                   )}
 
-                  {vision.isExtracting && (
+                  {vision.isExtracting && !vision.error && (
                     <motion.div
                       key="extracting"
                       initial={{ opacity: 0 }}
@@ -406,7 +361,7 @@ export default function App() {
                     </motion.div>
                   )}
 
-                  {vision.results && (
+                  {vision.results && !vision.isExtracting && !vision.error && (
                     <motion.div
                       key="results"
                       initial={{ opacity: 0 }}
@@ -709,6 +664,7 @@ export default function App() {
               {activeView === 'control' && (
                 <WorkOrdersPanel initialAlertFilter={controlAlert} onDataChanged={refresh} />
               )}
+              {activeView === 'odoo' && <OdooOrdersPanel />}
               {activeView === 'biblioteca' && <BibliotecaView />}
             </motion.div>
           )}

@@ -36,6 +36,7 @@ import {
   collapseDuplicateOrders,
 } from '../lib/reportFormat';
 import { listActiveDrawingViews } from '../lib/firebase/toolcrib';
+import { listOrdersToInvoice } from '../lib/firebase/odooOrders';
 import { upsertWorkOrders, updateCantidad, archiveWorkOrder } from '../lib/firebase/workOrders';
 import type { IncomingWorkOrder } from '../lib/firebase/workOrders';
 import { buildDedupeKey } from '../lib/workOrders/dedupe';
@@ -61,7 +62,10 @@ const BLUEPRINT_PROMPT_VERSION = 'blueprints-v15-multi-piece-variants';
 const SMV_VISION_APP_VERSION = `smv-vision@${__APP_VERSION__}`;
 const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
 const MAX_BLUEPRINT_CONCURRENCY = 8;
-const REFINEMENT_SKIP_AREA_THRESHOLD = 200_000;
+// Umbral para el segundo pase de refinamiento del bounding box.
+// 400k = ~632×632px: solo recuadros muy grandes disparan el pase adicional.
+// (Antes: 200k — disparaba en la mayoría de planos estándar, doblando llamadas Gemini)
+const REFINEMENT_SKIP_AREA_THRESHOLD = 400_000;
 const GEMINI_ORDER_MODEL = 'gemini-3.5-flash';
 const GEMINI_BLUEPRINT_MODEL = 'gemini-3.5-flash';
 const FALLBACK_CENTER_BOX: number[] = [30, 30, 720, 970];
@@ -165,9 +169,6 @@ export interface UseVisionAnalysisOptions {
 
 export interface VisionAnalysisHook {
   // File state
-  orderPdf: string | null;
-  orderPdfName: string | null;
-  orderPdfWarning: string | null;
   workshopPdfs: WorkshopPdfUpload[];
   orderLoadingState: 'idle' | 'loading' | 'done' | 'error';
   workshopLoadingStates: Record<string, 'idle' | 'loading' | 'done' | 'error'>;
@@ -187,22 +188,19 @@ export interface VisionAnalysisHook {
   excludedOrders: Array<{ order: Order; workOrderId: string | null }>;
   auditedCount: number;
   // Results display
-  draggingZone: 'order' | 'workshop' | null;
+  draggingZone: 'workshop' | null;
   resultsFilter: string;
   filterUrgentOnly: boolean;
   filterMissingOnly: boolean;
   filteredResults: Order[] | null;
   previewOrder: Order | null;
   // Refs
-  orderFileInputRef: React.RefObject<HTMLInputElement>;
   // File actions
-  ingestOrderFile: (files: FileList | File[]) => Promise<void>;
   ingestWorkshopFiles: (files: FileList | File[]) => Promise<void>;
-  handleOrderInputUpload: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleAttachToolcribDrawing: (attachment: ToolcribAttachment) => void;
-  removeFile: (type: 'order' | 'workshop', fileId?: string) => void;
+  removeFile: (type: 'workshop', fileId?: string) => void;
   buildDropHandlers: (
-    zone: 'order' | 'workshop',
+    zone: 'workshop',
     onFiles: (files: FileList) => void | Promise<void>,
   ) => {
     onDragOver: (e: React.DragEvent) => void;
@@ -227,7 +225,7 @@ export interface VisionAnalysisHook {
   setResultsFilter: (v: string) => void;
   setFilterUrgentOnly: (v: boolean) => void;
   setFilterMissingOnly: (v: boolean) => void;
-  setDraggingZone: (zone: 'order' | 'workshop' | null) => void;
+  setDraggingZone: (zone: 'workshop' | null) => void;
   setEditMode: (v: boolean) => void;
   setPreviewOrder: (order: Order | null) => void;
   setError: (msg: string | null) => void;
@@ -239,9 +237,6 @@ export function useVisionAnalysis({
   findWorkOrderId,
   onDataChanged,
 }: UseVisionAnalysisOptions): VisionAnalysisHook {
-  const [orderPdf, setOrderPdf] = useState<string | null>(null);
-  const [orderPdfName, setOrderPdfName] = useState<string | null>(null);
-  const [orderPdfWarning, setOrderPdfWarning] = useState<string | null>(null);
   const [workshopPdfs, setWorkshopPdfs] = useState<WorkshopPdfUpload[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractingStep, setExtractingStep] = useState<string>('');
@@ -256,13 +251,13 @@ export function useVisionAnalysis({
   // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
   const [toolcribPdfToDrawing, setToolcribPdfToDrawing] = useState<Record<string, string>>({});
 
-  const orderFileInputRef = useRef<HTMLInputElement>(null);
+
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
   const workshopStatePatchTimerRef = useRef<number | null>(null);
   const copyingResetTimerRef = useRef<number | null>(null);
   const hotStampRefImageRef = useRef<string | null>(null);
 
-  const [draggingZone, setDraggingZone] = useState<'order' | 'workshop' | null>(null);
+  const [draggingZone, setDraggingZone] = useState<'workshop' | null>(null);
 
   // Filtros aplicados a la tabla de resultados.
   const [resultsFilter, setResultsFilter] = useState('');
@@ -321,45 +316,7 @@ export function useVisionAnalysis({
     workshopStatePatchTimerRef.current = window.setTimeout(flushWorkshopStatePatches, 100);
   }, [flushWorkshopStatePatches]);
 
-  const ingestOrderFile = useCallback(async (files: FileList | File[]) => {
-    const fileArray = Array.from(files);
-    if (fileArray.length === 0) {
-      return;
-    }
 
-    const validFiles = fileArray.filter(isPdfFile);
-    if (validFiles.length === 0) {
-      setError("El archivo seleccionado no es un PDF válido.");
-      return;
-    }
-
-    const file = validFiles[0];
-    try {
-      const dataUrl = await readFileAsDataUrl(file);
-      setOrderPdf(dataUrl);
-      setOrderPdfName(file.name);
-      setOrderPdfWarning(validateOrderPdfName(file.name));
-      // Reset el indicador visual del archivo: si el usuario cambia el PDF
-      // después de una corrida exitosa o fallida, el icono de check/error
-      // anterior quedaba mostrándose sobre el nuevo archivo.
-      setOrderLoadingState('idle');
-      setError(null);
-    } catch {
-      setError(`No fue posible leer ${file.name}.`);
-      setOrderLoadingState('error');
-    }
-  }, []);
-
-  const handleOrderInputUpload = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (files) {
-        await ingestOrderFile(files);
-      }
-      e.target.value = '';
-    },
-    [ingestOrderFile],
-  );
 
   // Procesa una lista de PDFs como planos de taller (manual upload). Cada archivo
   // se lee a dataURL y se agrega a workshopPdfs. Útil cuando un plano todavía no
@@ -386,7 +343,7 @@ export function useVisionAnalysis({
   }, []);
 
   const buildDropHandlers = (
-    zone: 'order' | 'workshop',
+    zone: 'workshop',
     onFiles: (files: FileList) => void | Promise<void>,
   ) => ({
     onDragOver: (e: React.DragEvent) => {
@@ -407,12 +364,8 @@ export function useVisionAnalysis({
     },
   });
 
-  const removeFile = (type: 'order' | 'workshop', fileId?: string) => {
-    if (type === 'order') {
-      setOrderPdf(null);
-      setOrderPdfName(null);
-      setOrderPdfWarning(null);
-    } else {
+  const removeFile = (type: 'workshop', fileId?: string) => {
+    if (type === 'workshop') {
       setWorkshopPdfs((prev) => prev.filter((pdf) => pdf.id !== fileId));
       if (fileId) {
         setWorkshopLoadingStates((prev) => {
@@ -601,11 +554,6 @@ No inventes información.` },
   };
 
   const extractInfo = async (): Promise<void> => {
-    if (!orderPdf) {
-      setError('Sube la tabla de pedidos para comenzar.');
-      return;
-    }
-
     const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? '').trim();
     if (!geminiApiKey) {
       setError('Falta configurar VITE_GEMINI_API_KEY (local) o GEMINI_API_KEY (AI Studio).');
@@ -630,94 +578,69 @@ No inventes información.` },
     const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     const runStart = performance.now();
     let pdfRasterMs = 0;
-    let aiOrderMs = 0;
+    let orderFetchMs = 0;
     let aiBlueprintMs = 0;
     let mergeMs = 0;
 
     try {
-      // 1 + 1.5: Extract orders and fetch Tool Crib library concurrently — they are independent.
-      setExtractingStep('Leyendo pedidos y biblioteca...');
-      const [rawOrders, libResult] = await Promise.all([
-        (async (): Promise<ExtractedOrder[]> => {
-          try {
-            const orderHash = await createDocumentHash(orderPdf);
-            const cachedOrders = await readCachedValue<ExtractedOrder[]>('orders', orderHash, ORDER_PROMPT_VERSION);
-            if (cachedOrders) {
-              setOrderLoadingState('done');
-              return cachedOrders;
-            }
-            const orderAiStart = performance.now();
-            const response = await callWithRetry(() => ai.models.generateContent({
-              model: GEMINI_ORDER_MODEL,
-              contents: [{
-                role: 'user',
-                parts: [
-                  { text: `Analiza esta tabla PDF de órdenes de taller tipo tool crib. El PDF puede tener múltiples páginas — procesa TODAS las páginas.
-Devuelve EXCLUSIVAMENTE un JSON array con objetos que tengan los campos exactos:
-- pieza: descripción completa y ÚNICA de la pieza (incluyendo el número de parte si no tiene columna propia)
-- numero_parte: SOLO el código alfanumérico de parte (ej: "90-1012-05", "PN-12345", "WCD01-1824"). Si no existe o no aplica, devuelve "".
-- cantidad: número con su unidad si aparece (ej: "2.00\\nPieza", "10\\nSet").
-- orden: el número de SO (sales order / orden interna) de la hoja. Si no hay, "".
-- fecha: la fecha de la orden de trabajo (OT) que aparece en la hoja. Si no hay, "".
-- prioridad (solo "URGENTE" o "Normal")
-- poNumber: el número de PO (orden de compra del cliente) de la hoja. Cada hoja del PDF es una PO con sus piezas. PO y SO son DISTINTOS. Si no hay, "".
-
-Reglas de extracción:
-1) Lee TODAS las columnas y filas de TODAS las páginas, manejando celdas fusionadas o descripciones multi-línea.
-2) NO cortes las descripciones. Si una descripción de pieza continúa en la siguiente línea, concaténala.
-3) Si existe una columna "Código de Parte", "Part Number" o similar, coloca ese valor en "numero_parte" y la descripción de la pieza en "pieza". Si ambos están en la misma celda, sepáralos.
-4) Devuelve una fila por cada pieza o variante real. Si hay sub-piezas bajo una cabecera, extrae cada una.
-5) Si una fila tiene dato de fecha, orden o cantidad, procésala.
-6) Excluye filas de totales (ej: "Piezas Requeridas", "Piezas Terminadas", "Restantes a Crear").
-7) Si no hay urgencia explícita, usa "Normal".
-8) NORMALIZA typos evidentes del origen sin cambiar el significado:
-   - "PRESAS" → "PRENSAS"
-   - "PATA" (cuando va seguida de PRENSAS/...) → "PARA"
-   - "3/8HEX" → "3/8 HEX"
-   - Variantes "PRESS-O-MATIC" / "PRESS O -MATIC" / "PRESS O MATIC ." / "PRESS O MATIC" → "PRESS-O-MATIC"
-   - Colapsa espacios múltiples a uno solo.
-9) SUB-LÍNEAS ÚNICAS: si bajo un mismo SO aparecen varias sub-líneas con descripciones aparentemente idénticas (ej: 5 renglones que solo dicen "Fabricación de pieza" bajo SO 2026/S00781), revisa la columna de descripción/detalle/notas y EXTRAE el detalle diferenciador (número de pieza secuencial, código de parte, dimensión, material) para que cada fila tenga una descripción ÚNICA. Si genuinamente no existe diferencia textual, consolida las sub-líneas en UNA SOLA fila sumando la cantidad — no devuelvas 5 filas idénticas.
-10) No devuelvas filas exactamente duplicadas (mismo pieza+numero_parte+orden+fecha+cantidad).
-11) Cada HOJA del PDF corresponde a una PO. Propaga el mismo poNumber (y su SO/fecha) a TODAS las piezas listadas en esa hoja.
-12) No inventes campos ni texto fuera del JSON.` },
-                  preparePdfPart(orderPdf)
-                ]
-              }],
-              config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      pieza: { type: Type.STRING },
-                      numero_parte: { type: Type.STRING },
-                      cantidad: { type: Type.STRING },
-                      orden: { type: Type.STRING },
-                      fecha: { type: Type.STRING },
-                      prioridad: { type: Type.STRING, enum: ["URGENTE", "Normal"] },
-                      poNumber: { type: Type.STRING }
-                    },
-                    required: ["pieza", "numero_parte", "cantidad", "orden", "fecha", "prioridad", "poNumber"]
-                  }
-                }
-              }
-            }));
-            aiOrderMs += performance.now() - orderAiStart;
-            const parsed = parseOrdersResponse(response.text.trim());
-            await writeCachedValue('orders', orderHash, ORDER_PROMPT_VERSION, parsed);
-            setOrderLoadingState('done');
-            return parsed;
-          } catch (e) {
-            setOrderLoadingState('error');
-            throw e;
-          }
-        })(),
+      // 1 + 1.5: Extract orders (from Odoo) and fetch Tool Crib library concurrently — they are independent.
+      setExtractingStep('Leyendo Odoo y biblioteca...');
+      const orderAiStart = performance.now();
+      
+      const [odooResult, libResult] = await Promise.all([
+        listOrdersToInvoice(),
         listActiveDrawingViews({ customer: 'SUPRAJIT' }),
       ]);
+      
+      orderFetchMs += performance.now() - orderAiStart;
 
-      // Merge rows with identical piece descriptions: sum quantities, join SO numbers and dates
-      const ordersList = mergeGroupedOrders(rawOrders);
+      if (!odooResult.ok) {
+        setOrderLoadingState('error');
+        throw new Error('Fallo al obtener órdenes de Odoo');
+      }
+
+      setOrderLoadingState('done');
+      
+      // Mapear órdenes de Odoo a ExtractedOrder, excluyendo líneas completamente entregadas.
+      const rawOrders: ExtractedOrder[] = [];
+      for (const order of odooResult.value) {
+        for (const line of order.order_lines) {
+          const qty = line.qty_pending_from_pickings !== undefined 
+            ? line.qty_pending_from_pickings 
+            : line.qty_pending;
+
+          // Omitir líneas que no tienen piezas pendientes
+          if (qty <= 0) continue;
+
+          // Extraer numero de parte de corchetes "[12345] Item" -> "12345"
+          let numeroParte = '';
+          let piezaName = line.product;
+
+          const bracketMatch = line.product.match(/^\[(.*?)\]\s*(.*)$/);
+          if (bracketMatch) {
+            numeroParte = bracketMatch[1];
+            piezaName = bracketMatch[2];
+          }
+
+          const fullPieza = (line.description && line.description !== piezaName)
+            ? `${piezaName} - ${line.description}`
+            : piezaName;
+
+          rawOrders.push({
+            pieza: fullPieza,
+            numero_parte: numeroParte,
+            // Usar la cantidad pendiente
+            cantidad: qty.toString(),
+            orden: order.name,
+            fecha: order.date_order ? order.date_order.split(' ')[0] : '',
+            prioridad: 'Normal', // Odoo no nos da la prioridad de momento
+            poNumber: order.client_order_ref ?? '',
+          });
+        }
+      }
+
+      // Odoo es la fuente de verdad, no necesitamos consolidar líneas de manera artificial.
+      const ordersList = rawOrders;
 
       // Captura el dibujo de catálogo emparejado por orden, para la capa de control.
       // Declarado aquí (no dentro de `if (libResult.ok)`) para seguir en alcance en el upsert.
@@ -899,7 +822,7 @@ Reglas de extracción:
             matchedDrawingId: m?.drawingId ?? null,
             matchedPartId: m?.partId ?? null,
             matchScore: m?.score ?? null,
-            sourcePdfName: orderPdfName ?? '',
+            sourcePdfName: 'odoo-sync',
           };
         });
         const upsertResult = await upsertWorkOrders(incoming);
@@ -1190,7 +1113,7 @@ Reglas de extracción (ESTILO UT2033):
       const latestMetrics: AnalysisMetrics = {
         totalMs: performance.now() - runStart,
         pdfRasterMs,
-        aiOrderMs,
+        aiOrderMs: orderFetchMs,
         aiBlueprintMs,
         mergeMs,
       };
@@ -1206,7 +1129,7 @@ Reglas de extracción (ESTILO UT2033):
       void (async () => {
         try {
           const [orderReportSha256, blueprintSha256List] = await Promise.all([
-            createDocumentHash(orderPdf),
+            Promise.resolve(null), // órdenes vienen de Odoo — no hay PDF de orden
             Promise.all(currentWorkshopPdfs.map((pdf) => createDocumentHash(pdf.dataUrl))),
           ]);
           recordAnalysisRunFireAndForget({
@@ -1234,7 +1157,7 @@ Reglas de extracción (ESTILO UT2033):
       const errorMessage = err instanceof Error ? err.message : JSON.stringify(err);
       setError(`Error analizando PDFs: ${errorMessage}. Verifique su conexión y permisos de API.`);
 
-      const capturedOrderPdf = orderPdf;
+      const capturedOrderPdf = null; // órdenes vienen de Odoo — no hay PDF de orden
       const capturedWorkshopPdfs = currentWorkshopPdfs;
       void (async () => {
         try {
@@ -1376,7 +1299,7 @@ Reglas de extracción (ESTILO UT2033):
 
   return {
     // File state
-    orderPdf, orderPdfName, orderPdfWarning, workshopPdfs,
+    workshopPdfs,
     orderLoadingState, workshopLoadingStates,
     toolcribPdfToDrawing, attachedToolcribDrawingIds,
     // Analysis state
@@ -1387,11 +1310,10 @@ Reglas de extracción (ESTILO UT2033):
     // Results display
     draggingZone, resultsFilter, filterUrgentOnly, filterMissingOnly,
     filteredResults, previewOrder,
-    // Refs
-    orderFileInputRef,
+
     // Actions
-    extractInfo, ingestOrderFile, ingestWorkshopFiles,
-    handleOrderInputUpload, handleAttachToolcribDrawing,
+    extractInfo, ingestWorkshopFiles,
+    handleAttachToolcribDrawing,
     removeFile, buildDropHandlers,
     downloadPdf, downloadCsv, downloadJson,
     downloadSingleOrderPdf, copyResults,

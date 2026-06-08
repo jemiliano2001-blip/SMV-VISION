@@ -138,6 +138,12 @@ export interface WorkOrder {
   archived: boolean;
   createdAtUTC: string | null;
   updatedAtUTC: string | null;
+  /** true si la OT fue creada automáticamente desde syncOdoo.ts. */
+  odooSource: boolean;
+  /** ID del documento en `odooSaleOrders` vinculado a esta OT (ej. "2026_S00781"). */
+  odooOrderId: string | null;
+  /** Índice para reordenamiento manual en la columna pendiente. */
+  sortIndex: number | null;
 }
 
 /** Tornero al que se le entregan planos. */

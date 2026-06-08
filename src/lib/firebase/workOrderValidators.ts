@@ -84,6 +84,9 @@ export function normalizeWorkOrder(id: string, raw: unknown): WorkOrder | null {
     archived: bool(raw.archived, false),
     createdAtUTC: ts(raw.createdAtUTC),
     updatedAtUTC: ts(raw.updatedAtUTC),
+    odooSource: bool(raw.odooSource, false),
+    odooOrderId: optStr(raw.odooOrderId, ID_MAX),
+    sortIndex: num(raw.sortIndex),
   };
 }
 

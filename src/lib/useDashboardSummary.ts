@@ -1,19 +1,25 @@
 /**
  * useDashboardSummary
  *
- * Lectura ligera y de solo-lectura de las órdenes de trabajo para alimentar:
+ * Agrega las órdenes de trabajo para alimentar:
  *  - los badges del rail de navegación (pendientes, vencidas),
  *  - la portada "Inicio" (KPIs, lista de atención inmediata).
  *
- * Es independiente del estado interactivo de `WorkOrdersPanel` (que mantiene su
- * propia copia autoritativa para las mutaciones). Expone `refresh()` para que
- * Inicio/Control puedan revalidar tras un cambio. Nunca lanza: degrada a 0s.
+ * Desde la introducción de WorkOrdersContext, este hook ya NO hace lecturas
+ * propias a Firestore — consume las órdenes en tiempo real del contexto
+ * compartido (onSnapshot). Esto elimina la doble lectura inicial y permite
+ * que los badges del rail se actualicen automáticamente cuando cualquier OT
+ * cambia de estado en el panel de Control.
+ *
+ * `refresh` se mantiene como no-op para compatibilidad con los callsites que
+ * lo usan como callback de `onDataChanged`; con onSnapshot el estado ya se
+ * actualiza solo.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import type { WorkOrder } from '../types';
-import { listWorkOrders } from './firebase/workOrders';
+import { useWorkOrdersContext } from '../contexts/WorkOrdersContext';
 import { calcMetrics, getDueDateSeverity, type ProdMetrics } from './workOrders/metrics';
 
 export type DashboardStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -51,36 +57,26 @@ const EMPTY_METRICS: ProdMetrics = {
 };
 
 export function useDashboardSummary(): { summary: DashboardSummary; refresh: () => Promise<void> } {
-  const [status, setStatus] = useState<DashboardStatus>('idle');
-  const [reason, setReason] = useState<DashboardSummary['reason']>(null);
-  const [orders, setOrders] = useState<WorkOrder[]>([]);
+  const { orders, status: ctxStatus, reason: ctxReason } = useWorkOrdersContext();
 
-  const refresh = useCallback(async () => {
-    setStatus((prev) => (prev === 'idle' ? 'loading' : prev));
-    const res = await listWorkOrders();
-    if (res.ok === false) {
-      setStatus('error');
-      setReason(res.reason === 'not-configured' || res.reason === 'not-authenticated' ? res.reason : 'error');
-      setOrders([]);
-      return;
-    }
-    setReason(null);
-    setOrders(res.value);
-    setStatus('ready');
-  }, []);
+  // Mapear estado del contexto al tipo DashboardStatus
+  const status: DashboardStatus =
+    ctxStatus === 'idle'    ? 'idle'    :
+    ctxStatus === 'loading' ? 'loading' :
+    ctxStatus === 'ready'   ? 'ready'   :
+    /* error */               'error';
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  // Con onSnapshot el estado se actualiza solo; refresh es no-op para compat.
+  const refresh = useCallback(async () => {}, []);
 
   const counts = useMemo<DashboardCounts>(() => {
     const active = orders.filter((o) => !o.archived);
     const openForAlerts = active.filter((o) => o.status !== 'entregada');
     return {
-      overdue: openForAlerts.filter((o) => getDueDateSeverity(o.dueDate, o.status) === 'overdue').length,
+      overdue:  openForAlerts.filter((o) => getDueDateSeverity(o.dueDate, o.status) === 'overdue').length,
       critical: openForAlerts.filter((o) => getDueDateSeverity(o.dueDate, o.status) === 'critical').length,
-      warning: openForAlerts.filter((o) => getDueDateSeverity(o.dueDate, o.status) === 'warning').length,
-      urgent: openForAlerts.filter((o) => o.prioridad === 'URGENTE').length,
+      warning:  openForAlerts.filter((o) => getDueDateSeverity(o.dueDate, o.status) === 'warning').length,
+      urgent:   openForAlerts.filter((o) => o.prioridad === 'URGENTE').length,
       pendiente: active.filter((o) => o.status === 'pendiente').length,
       enProceso: active.filter((o) => o.status === 'en_proceso').length,
       terminada: active.filter((o) => o.status === 'terminada').length,
@@ -107,13 +103,13 @@ export function useDashboardSummary(): { summary: DashboardSummary; refresh: () 
   const summary = useMemo<DashboardSummary>(
     () => ({
       status,
-      reason,
+      reason: ctxReason,
       orders,
       counts: status === 'ready' ? counts : EMPTY_COUNTS,
       metrics: status === 'ready' ? metrics : EMPTY_METRICS,
       attention: status === 'ready' ? attention : [],
     }),
-    [status, reason, orders, counts, metrics, attention],
+    [status, ctxReason, orders, counts, metrics, attention],
   );
 
   return { summary, refresh };

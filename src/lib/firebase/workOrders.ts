@@ -16,6 +16,7 @@ import {
   serverTimestamp,
   startAfter,
   updateDoc,
+  where,
   writeBatch,
   type Firestore,
   type QueryConstraint,
@@ -96,8 +97,13 @@ function toMutable(o: IncomingWorkOrder): UpsertMutableFields {
 }
 
 /**
- * Lee todas las órdenes (con límite duro) y las normaliza. Sin orderBy para
- * no requerir índices compuestos; el orden/filtrado fino se hace en memoria.
+ * Lee las órdenes ACTIVAS (archived == false) con límite duro y las normaliza.
+ * El equality filter no requiere índice compuesto; el orden/filtrado fino se
+ * hace en memoria.
+ *
+ * NOTA: En la mayoría de los flujos la app consume las órdenes vía
+ * `WorkOrdersContext` (onSnapshot). Esta función se mantiene para scripts,
+ * tests y usos puntuales donde no hay contexto React disponible.
  */
 export async function listWorkOrders(options?: {
   max?: number;
@@ -109,6 +115,7 @@ export async function listWorkOrders(options?: {
   try {
     const q = query(
       collection(database, WORK_ORDERS_COLLECTION),
+      where('archived', '==', false),
       fbLimit(Math.min(options?.max ?? DEFAULT_MAX, DEFAULT_MAX)),
     );
     const snap = await getDocs(q);
@@ -146,7 +153,10 @@ async function loadExistingDedupeKeys(
     if (snap.empty) break;
     snap.forEach((d) => {
       const n = normalizeWorkOrder(d.id, d.data());
-      if (!n) return;
+      // Excluir archivadas del mapa: si una OT fue archivada y vuelve a subirse
+      // la misma PO, debe crearse un doc nuevo (activo) en lugar de actualizar
+      // el archivado.
+      if (!n || n.archived) return;
       const key = buildDedupeKey({
         soNumber: n.soNumber, poNumber: n.poNumber,
         numeroParte: n.numeroParte, pieza: n.pieza,
@@ -426,6 +436,53 @@ export async function updateDueDate(
     return { ok: true, value: undefined };
   } catch (error) {
     console.warn('[smv-vision][work-orders] updateDueDate falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+/** Pre-asigna un tornero a una orden sin cambiar su estado. */
+export async function updateAssignedTornero(
+  orderId: string,
+  torneroName: string | null,
+): Promise<WorkOrderResult<void>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
+  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  const cleanName = torneroName ? sanitizeTorneroName(torneroName) : null;
+  try {
+    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
+      assignedToTornero: cleanName,
+      updatedAtUTC: serverTimestamp(),
+    });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] updateAssignedTornero falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+/** Actualiza el índice de ordenamiento (Drag&Drop). */
+export async function updateSortIndex(
+  orderId: string,
+  sortIndex: number,
+): Promise<WorkOrderResult<void>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
+  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  try {
+    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
+      sortIndex,
+      updatedAtUTC: serverTimestamp(),
+    });
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][work-orders] updateSortIndex falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

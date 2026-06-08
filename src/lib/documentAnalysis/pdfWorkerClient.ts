@@ -79,6 +79,7 @@ function getWorkerInstance(): Worker {
     const err = new Error(event.message || 'PDF worker failed');
     pendingRequests.forEach(({ reject }) => reject(err));
     pendingRequests.clear();
+    workerInstance = null; // Allow re-creation on the next request
   };
 
   return workerInstance;

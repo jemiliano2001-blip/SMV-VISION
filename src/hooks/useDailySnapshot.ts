@@ -13,12 +13,16 @@ export function useDailySnapshot(orders: WorkOrder[], isReady: boolean): void {
 
   useEffect(() => {
     if (!isReady || orders.length === 0 || hasCaptured.current) return;
-    hasCaptured.current = true;
 
     void (async () => {
       const existing = await getTodaySnapshot();
-      if (!existing.ok || existing.value !== null) {
-        // Already captured today (or Firestore unavailable) — skip
+      if (!existing.ok) {
+        // Transient error — allow retry on next render
+        return;
+      }
+      hasCaptured.current = true;
+      if (existing.value !== null) {
+        // Already captured today — skip
         return;
       }
       const data = buildSnapshotData(orders);

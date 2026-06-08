@@ -35,8 +35,11 @@ export function subscribeToOdooSyncMeta(
         return;
       }
       const data = snap.data();
+      // serverTimestamp() resolves to null locally before the write completes
+      const ts = data.lastSyncAt as Timestamp | null;
+      if (!ts) { cb(null); return; }
       cb({
-        lastSyncAt: (data.lastSyncAt as Timestamp).toDate(),
+        lastSyncAt: ts.toDate(),
         ordersProcessed: data.ordersProcessed as number,
         status: data.status as 'ok' | 'error',
         errorMessage: data.errorMessage as string | undefined,

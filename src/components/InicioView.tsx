@@ -7,7 +7,7 @@
  *  - accesos rápidos a las demás vistas.
  */
 
-import type { ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { motion } from 'motion/react';
 import {
   AlertTriangle, Clock, Flame, Cog, Inbox, Gauge,
@@ -19,6 +19,10 @@ import type { DueDateSeverity } from '../lib/workOrders/metrics';
 import { getDueDateSeverity, dueDaysLabel } from '../lib/workOrders/metrics';
 import type { AnalysisRunSummary } from '../types';
 import type { AppView } from './shell/AppShell';
+import { BarChart } from './charts/BarChart';
+import { LineChart } from './charts/LineChart';
+import type { DailyMetricSnapshot } from '../lib/firebase/metricsSnapshots';
+import { getSnapshotsLastWeeks } from '../lib/firebase/metricsSnapshots';
 
 export type AlertSeverity = 'overdue' | 'critical' | 'warning';
 
@@ -63,7 +67,7 @@ const SEV_CHIP: Record<AlertSeverity, string> = {
 };
 
 export function InicioView({ summary, onNavigate, onFocusAlert, analysisSummary }: InicioViewProps): ReactElement {
-  const { counts, metrics, attention, status, reason } = summary;
+  const { counts, metrics, attention, status, reason, orders } = summary;
 
   const kpis: KpiDef[] = [
     { key: 'overdue', label: 'Vencidas', value: counts.overdue, icon: AlertTriangle, tone: 'danger', onClick: () => onFocusAlert('overdue') },
@@ -75,6 +79,34 @@ export function InicioView({ summary, onNavigate, onFocusAlert, analysisSummary 
   ];
 
   const now = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+  const [snapshots, setSnapshots] = useState<DailyMetricSnapshot[]>([]);
+
+  useEffect(() => {
+    void getSnapshotsLastWeeks(8).then((res) => {
+      if (res.ok) setSnapshots(res.value);
+    });
+  }, []);
+
+  const stageData = [
+    { label: 'Pendiente', value: counts.pendiente },
+    { label: 'En proceso', value: counts.enProceso },
+    { label: 'Terminada', value: counts.terminada },
+    { label: 'Entregada', value: counts.entregada },
+  ];
+
+  const torneroData = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const o of orders.filter((o) => !o.archived && o.status !== 'entregada')) {
+      const key = o.assignedToTornero ?? 'Sin asignar';
+      map[key] = (map[key] ?? 0) + 1;
+    }
+    return Object.entries(map)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [orders]);
+
+  const trendData = snapshots.map((s) => ({ date: s.date, value: s.onTimePercent }));
 
   return (
     <motion.div
@@ -206,6 +238,37 @@ export function InicioView({ summary, onNavigate, onFocusAlert, analysisSummary 
           )}
         </motion.section>
       </div>
+
+      {/* ── Analytics ── */}
+      {status === 'ready' && (
+        <>
+          <motion.div variants={item} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+            <div className="bg-surface border-2 border-line p-4">
+              <BarChart
+                data={stageData}
+                title="Órdenes por etapa"
+                colorVar="--color-accent"
+              />
+            </div>
+            <div className="bg-surface border-2 border-line p-4">
+              <BarChart
+                data={torneroData}
+                title="Carga por tornero"
+                colorVar="--color-draft"
+                emptyMessage="Sin asignaciones activas"
+              />
+            </div>
+          </motion.div>
+
+          <motion.div variants={item} className="mt-4 bg-surface border-2 border-line p-4">
+            <LineChart
+              data={trendData}
+              title="% A tiempo — últimas 8 semanas"
+              unit="%"
+            />
+          </motion.div>
+        </>
+      )}
     </motion.div>
   );
 }

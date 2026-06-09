@@ -39,68 +39,22 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import type { DropResult } from '@hello-pangea/dnd';
 import { resolveKanbanDrop } from '../lib/workOrders/kanbanDrop';
 
+import { WorkOrdersSidebar } from './WorkOrders/WorkOrdersSidebar';
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 type StatusFilter = 'todas' | WorkOrderStatus;
 type ViewMode = 'board' | 'list' | 'torneros';
 
-const SEVERITY_CLASSES: Record<DueDateSeverity, string> = {
-  overdue:  'bg-danger/20 text-danger border-danger',
-  critical: 'bg-accent/20 text-accent border-accent',
-  warning:  'bg-warn/20 text-warn border-warn',
-  ok:       'bg-ok/15 text-ok border-ok/60',
-  done:     'bg-surface-2 text-ink-dim border-line',
-  unknown:  'bg-surface-2 text-ink-dim border-line',
-};
-
-const STATUS_LABELS: Record<WorkOrderStatus, string> = {
-  pendiente:  'PENDIENTE',
-  en_proceso: 'EN PROCESO',
-  terminada:  'TERMINADA',
-  entregada:  'ENTREGADA',
-};
-const STATUS_CHIP_CLASSES: Record<WorkOrderStatus, string> = {
-  pendiente:  'bg-surface-2 text-ink-dim border border-line',
-  en_proceso: 'bg-draft/20 text-draft border border-draft',
-  terminada:  'bg-ok/20 text-ok border border-ok',
-  entregada:  'bg-ink text-bg',
-};
-const COLUMN_ACCENT: Record<WorkOrderStatus, string> = {
-  pendiente:  'border-t-ink-dim',
-  en_proceso: 'border-t-draft',
-  terminada:  'border-t-ok',
-  entregada:  'border-t-ink',
-};
-
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
-}
-function fmtDateOnly(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-MX');
-}
-/**
- * Formatea una fecha de SOLO-FECHA (`YYYY-MM-DD`, ej. dueDate) sin desfase de
- * huso. `new Date("2025-06-15")` se interpreta como medianoche UTC y en MX
- * (UTC-6) se mostraría como el 14; por eso parseamos los componentes y los
- * tratamos como fecha local.
- */
-function fmtCalendarDate(iso: string | null): string {
-  if (!iso) return '—';
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return fmtDateOnly(iso);
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString('es-MX');
-}
-function oneLine(value: string): string {
-  return (value ?? '').replace(/[\r\n]+/g, ' / ').replace(/\s+/g, ' ').trim();
-}
-function norm(value: string): string {
-  return value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-}
+import { WorkOrderCard } from './WorkOrders/WorkOrderCard';
+import { WorkOrdersBoard } from './WorkOrders/WorkOrdersBoard';
+import { WorkOrdersList } from './WorkOrders/WorkOrdersList';
+import {
+  STATUS_LABELS,
+  COLUMN_ACCENT,
+  norm,
+} from './WorkOrders/utils';
 
 // ── OrderCard (module scope + React.memo to prevent re-creation on render) ────
 
@@ -133,277 +87,6 @@ function applyOptimisticTransition(
     return base;
   });
 }
-
-interface OrderCardProps {
-  order: WorkOrder;
-  busy: string | undefined;
-  editingDueDateId: string | null;
-  draftDueDate: string;
-  editingNotesId: string | null;
-  draftNotes: string;
-  activeTorneros: Tornero[];
-  onTransition: (order: WorkOrder, status: WorkOrderStatus, tornero?: string) => void;
-  onAssignTornero: (orderId: string, torneroName: string) => void;
-  onArchive: (order: WorkOrder) => void;
-  onPrint: (order: WorkOrder) => void;
-
-  workload: Record<string, number>;
-  isBulkMode: boolean;
-  isSelected: boolean;
-  onToggleSelect: (id: string) => void;
-
-  onSaveDueDate: (id: string, val: string) => void;
-  onSaveNotes: (id: string) => void;
-  onEditDueDate: (id: string | null) => void;
-  onEditNotes: (id: string | null) => void;
-  onDraftDueDateChange: (val: string) => void;
-  onDraftNotesChange: (val: string) => void;
-}
-
-const OrderCard = React.memo(function OrderCard({
-  order: o,
-  busy,
-  editingDueDateId,
-  draftDueDate,
-  editingNotesId,
-  draftNotes,
-  activeTorneros,
-  onTransition,
-  onAssignTornero,
-  onArchive,
-  onPrint,
-  workload,
-  isBulkMode,
-  isSelected,
-  onToggleSelect,
-  onSaveDueDate,
-  onSaveNotes,
-  onEditDueDate,
-  onEditNotes,
-  onDraftDueDateChange,
-  onDraftNotesChange,
-}: OrderCardProps): ReactElement {
-  const severity = getDueDateSeverity(o.dueDate, o.status);
-  const isEditingNotes = editingNotesId === o.id;
-  const isEditingDueDate = editingDueDateId === o.id;
-
-  return (
-    <div
-      className={`relative border-2 border-line bg-surface transition-all p-3 ${o.prioridad === 'URGENTE' ? 'border-l-accent border-l-4' : ''} ${o.archived ? 'opacity-50' : ''}`}
-    >
-      <div className="flex flex-wrap items-start gap-3">
-        {/* Bulk mode checkbox */}
-        {isBulkMode && o.status === 'pendiente' && (
-          <div className="pt-1 pr-1">
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={() => onToggleSelect(o.id)}
-              className="w-4 h-4 cursor-pointer accent-ink"
-            />
-          </div>
-        )}
-
-        {/* Info izquierda */}
-        <div className="min-w-0 grow space-y-1.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            {o.prioridad === 'URGENTE' && (
-              <span className="bg-accent text-bg px-1.5 py-0.5 text-[9px] font-black uppercase shrink-0">Urgente</span>
-            )}
-            <span className={`px-1.5 py-0.5 text-[9px] font-black uppercase shrink-0 ${STATUS_CHIP_CLASSES[o.status]}`}>
-              {STATUS_LABELS[o.status]}
-            </span>
-            <p className="text-[14px] font-black uppercase tracking-tight truncate text-ink" title={o.pieza}>
-              {o.pieza}
-            </p>
-          </div>
-
-          <p className="text-[10px] font-mono text-ink-dim">
-            PARTE: {o.numeroParte || '—'} · SO: {oneLine(o.soNumber) || '—'} · PO: {oneLine(o.poNumber) || '—'} · CANT: {oneLine(o.cantidad) || '—'} · OT: {oneLine(o.otDate) || '—'}
-          </p>
-
-          {/* Fecha límite */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {isEditingDueDate ? (
-              <form
-                className="flex items-center gap-1"
-                onSubmit={(e) => { e.preventDefault(); void onSaveDueDate(o.id, draftDueDate); }}
-              >
-                <input
-                  type="date"
-                  value={draftDueDate}
-                  onChange={(e) => onDraftDueDateChange(e.target.value)}
-                  className="border border-line bg-surface-2 text-ink px-1 py-0.5 text-[11px] font-mono outline-none"
-                />
-                <button type="submit" className="px-2 py-0.5 bg-ink text-bg text-[9px] font-black uppercase">OK</button>
-                <button type="button" onClick={() => onEditDueDate(null)} className="px-2 py-0.5 border border-line text-[9px] font-black uppercase text-ink-dim">✕</button>
-              </form>
-            ) : (
-              <button
-                type="button"
-                onClick={() => { onEditDueDate(o.id); onDraftDueDateChange(o.dueDate ?? ''); }}
-                className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-black uppercase border ${SEVERITY_CLASSES[severity]} hover:opacity-80 transition-opacity`}
-                title="Click para editar fecha límite"
-              >
-                <Clock size={10} />
-                {o.dueDate ? `${fmtCalendarDate(o.dueDate)} · ${dueDaysLabel(o.dueDate)}` : 'Sin fecha límite — click para fijar'}
-              </button>
-            )}
-          </div>
-
-          {/* Estado de avance */}
-          {o.status === 'pendiente' && o.assignedToTornero && (
-            <p className="text-[10px] font-mono text-draft flex items-center gap-1">
-              Pre-asignado a <b>{o.assignedToTornero}</b> (en espera)
-            </p>
-          )}
-          {o.status === 'en_proceso' && o.assignedToTornero && (
-            <p className="text-[10px] font-mono text-draft flex items-center gap-1">
-              <span className="w-2 h-2 bg-draft rounded-full inline-block" />
-              En proceso con <b>{o.assignedToTornero}</b>
-              {o.assignedAtUTC && <span className="text-ink-dim"> · desde {fmtDate(o.assignedAtUTC)}</span>}
-            </p>
-          )}
-          {o.status === 'terminada' && (
-            <p className="text-[10px] font-mono text-ok flex items-center gap-1">
-              <CheckCircle2 size={11} />
-              Terminada{o.finishedAtUTC ? ` el ${fmtDate(o.finishedAtUTC)}` : ''}
-              {o.assignedToTornero && <span> · hecha por <b>{o.assignedToTornero}</b></span>}
-            </p>
-          )}
-          {o.status === 'entregada' && (
-            <p className="text-[10px] font-mono text-ink-dim flex items-center gap-1">
-              <CheckCircle2 size={11} className="text-ok" />
-              Entregada a <b>{o.deliveredToTornero ?? '—'}</b> el {fmtDate(o.deliveredAtUTC)}
-            </p>
-          )}
-
-          {/* Notas */}
-          {isEditingNotes ? (
-            <div className="space-y-1 mt-1">
-              <textarea
-                rows={2}
-                value={draftNotes}
-                onChange={(e) => onDraftNotesChange(e.target.value)}
-                placeholder="Notas para esta orden…"
-                className="w-full border border-line bg-surface-2 text-ink px-2 py-1 text-[11px] font-mono outline-none resize-none placeholder:text-ink-dim/70"
-              />
-              <div className="flex gap-1">
-                <button type="button" onClick={() => void onSaveNotes(o.id)}
-                  className="px-2 py-0.5 bg-ink text-bg text-[9px] font-black uppercase">Guardar</button>
-                <button type="button" onClick={() => onEditNotes(null)}
-                  className="px-2 py-0.5 border border-line text-[9px] font-black uppercase text-ink-dim">Cancelar</button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => { onEditNotes(o.id); onDraftNotesChange(o.notes); }}
-              className="text-[10px] font-mono text-ink-dim hover:text-ink text-left"
-            >
-              {o.notes ? o.notes : '+ Agregar nota…'}
-            </button>
-          )}
-        </div>
-
-        {/* Acciones derecha */}
-        <div className="flex flex-col items-stretch gap-1.5 shrink-0">
-          <button type="button" onClick={() => void onPrint(o)} disabled={!!busy}
-            className="border border-line bg-surface-2 px-2 py-1 text-[9px] font-black uppercase text-ink hover:border-accent hover:text-accent disabled:opacity-40 flex items-center gap-1 transition-colors">
-            <Printer size={11} /> Plano-OT
-          </button>
-
-          {o.status === 'pendiente' && (
-            <>
-              <select
-                value={o.assignedToTornero ?? ''}
-                disabled={!!busy || activeTorneros.length === 0}
-                onChange={(e) => { const v = e.target.value; if (v) void onAssignTornero(o.id, v); }}
-                className="border border-line bg-surface-2 text-ink px-2 py-1 text-[9px] font-black uppercase disabled:opacity-40"
-                title={activeTorneros.length === 0 ? 'Agrega torneros primero' : 'Asignar a tornero'}
-              >
-                <option value="" disabled>{busy ?? 'Asignar a ▾'}</option>
-                {activeTorneros.map((t) => (
-                  <option key={t.id} value={t.name}>
-                    {t.name} {workload[t.name] ? `(${workload[t.name]} act)` : ''}
-                  </option>
-                ))}
-              </select>
-              {o.assignedToTornero && (
-                <button type="button" disabled={!!busy}
-                  onClick={() => void onTransition(o, 'en_proceso', o.assignedToTornero!)}
-                  className="border border-draft bg-draft text-bg px-2 py-1 text-[9px] font-black uppercase hover:opacity-80 disabled:opacity-40">
-                  A proceso
-                </button>
-              )}
-            </>
-          )}
-
-          {o.status === 'en_proceso' && (
-            <>
-              <button type="button" disabled={!!busy}
-                onClick={() => void onTransition(o, 'terminada')}
-                className="border border-ok bg-ok text-bg px-2 py-1 text-[9px] font-black uppercase hover:opacity-80 disabled:opacity-40 flex items-center gap-1">
-                <CheckCircle2 size={11} /> Terminada
-              </button>
-              <select
-                defaultValue=""
-                disabled={!!busy || activeTorneros.length === 0}
-                onChange={(e) => { const v = e.target.value; if (v) void onTransition(o, 'en_proceso', v); e.currentTarget.value = ''; }}
-                className="border border-line bg-surface-2 text-ink px-2 py-1 text-[9px] font-black uppercase disabled:opacity-40"
-              >
-                <option value="" disabled>Reasignar ▾</option>
-                {activeTorneros.map((t) => (
-                  <option key={t.id} value={t.name}>
-                    {t.name} {workload[t.name] ? `(${workload[t.name]} act)` : ''}
-                  </option>
-                ))}
-              </select>
-              <button type="button" disabled={!!busy}
-                onClick={() => void onTransition(o, 'pendiente')}
-                className="border border-line bg-surface-2 px-2 py-1 text-[9px] font-black uppercase text-ink-dim hover:text-ink disabled:opacity-40">
-                Revertir
-              </button>
-            </>
-          )}
-
-          {o.status === 'terminada' && (
-            <>
-              <select
-                defaultValue=""
-                disabled={!!busy || activeTorneros.length === 0}
-                onChange={(e) => { const v = e.target.value; if (v) void onTransition(o, 'entregada', v); e.currentTarget.value = ''; }}
-                className="border border-accent bg-accent text-bg px-2 py-1 text-[9px] font-black uppercase disabled:opacity-40"
-                title={activeTorneros.length === 0 ? 'Agrega torneros primero' : 'Entregar a Suprajit…'}
-              >
-                <option value="" disabled>{busy ?? 'Entregar a ▾'}</option>
-                {activeTorneros.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-              </select>
-              <button type="button" disabled={!!busy}
-                onClick={() => void onTransition(o, 'en_proceso', o.assignedToTornero ?? activeTorneros[0]?.name)}
-                className="border border-line bg-surface-2 px-2 py-1 text-[9px] font-black uppercase text-ink-dim hover:text-ink disabled:opacity-40">
-                Volver a proceso
-              </button>
-            </>
-          )}
-
-          {o.status === 'entregada' && (
-            <button type="button" disabled={!!busy}
-              onClick={() => void onTransition(o, 'pendiente')}
-              className="border border-line bg-surface-2 px-2 py-1 text-[9px] font-black uppercase text-ink-dim hover:text-ink disabled:opacity-40">
-              Revertir
-            </button>
-          )}
-
-          <button type="button" onClick={() => void onArchive(o)} disabled={!!busy}
-            className="text-ink-dim hover:text-ink text-[9px] font-black uppercase flex items-center gap-1 justify-center">
-            <Archive size={10} /> {o.archived ? 'Desarchivar' : 'Archivar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-});
 
 // ── componente principal ──────────────────────────────────────────────────────
 
@@ -891,150 +574,60 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
 
         {/* ── Tablero ── */}
         {status === 'ready' && filtered.length > 0 && viewMode === 'board' && (
-          <DragDropContext onDragEnd={handleKanbanDrop}>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-            {(['pendiente', 'en_proceso', 'terminada', 'entregada'] as const).map((col) => {
-              let cards = filtered.filter((o) => o.status === col);
-              if (col === 'pendiente') {
-                if (pendientesSortBy === 'manual') cards = cards.sort((a, b) => (a.sortIndex ?? Infinity) - (b.sortIndex ?? Infinity));
-                else if (pendientesSortBy === 'dueDate') cards = cards.sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''));
-                else if (pendientesSortBy === 'po') cards = cards.sort((a, b) => (a.poNumber || '').localeCompare(b.poNumber || ''));
-              }
-              
-              return (
-                <section key={col} className={`bg-surface/40 border-2 border-line border-t-4 ${COLUMN_ACCENT[col]} flex flex-col min-h-[120px]`}>
-                  <header className="flex flex-col bg-surface z-10 sticky top-0 border-b-2 border-line">
-                    <div className="flex items-center justify-between px-3 py-2">
-                      <span className="font-display font-black text-[12px] uppercase tracking-wider">{STATUS_LABELS[col]}</span>
-                      <span className="font-mono text-[11px] text-ink-dim">{cards.length}</span>
-                    </div>
-                    {col === 'pendiente' && (
-                      <div className="px-2 pb-2 flex flex-col gap-2">
-                        {/* Sorting toolbar */}
-                        <div className="flex flex-wrap gap-1">
-                          <button type="button" onClick={() => setPendientesSortBy('manual')} className={`px-2 py-1 text-[9px] font-black uppercase border-2 transition-colors ${pendientesSortBy === 'manual' ? 'bg-ink text-bg border-ink' : 'border-line text-ink-dim'}`}>Manual</button>
-                          <button type="button" onClick={() => setPendientesSortBy('dueDate')} className={`px-2 py-1 text-[9px] font-black uppercase border-2 transition-colors ${pendientesSortBy === 'dueDate' ? 'bg-ink text-bg border-ink' : 'border-line text-ink-dim'}`}>Fecha</button>
-                          <button type="button" onClick={() => setPendientesSortBy('po')} className={`px-2 py-1 text-[9px] font-black uppercase border-2 transition-colors ${pendientesSortBy === 'po' ? 'bg-ink text-bg border-ink' : 'border-line text-ink-dim'}`}>PO</button>
-                        </div>
-                        {/* Bulk actions trigger */}
-                        <div className="flex justify-between items-center bg-surface-2 px-2 py-1.5 border border-line">
-                          <label className="flex items-center gap-1.5 text-[9px] font-black uppercase cursor-pointer text-ink hover:text-accent transition-colors">
-                            <input type="checkbox" checked={isBulkMode} onChange={(e) => { setIsBulkMode(e.target.checked); if (!e.target.checked) setSelectedOrders(new Set()); }} className="accent-accent" />
-                            Selección Múltiple
-                          </label>
-                          {isBulkMode && selectedOrders.size > 0 && (
-                            <span className="text-[9px] font-black text-accent">{selectedOrders.size} selec.</span>
-                          )}
-                        </div>
-                        {/* Bulk actions bar */}
-                        {isBulkMode && selectedOrders.size > 0 && (
-                          <div className="flex flex-col gap-1 border border-line p-1 bg-surface-2 animate-in fade-in slide-in-from-top-2">
-                            <select
-                              defaultValue=""
-                              onChange={(e) => { const v = e.target.value; if (v) void handleBulkAssign(v); e.currentTarget.value = ''; }}
-                              className="border border-line bg-surface text-ink px-2 py-1 text-[9px] font-black uppercase w-full"
-                            >
-                              <option value="" disabled>Asignar seleccionadas ▾</option>
-                              {activeTorneros.map((t) => <option key={t.id} value={t.name}>{t.name} {workload[t.name] ? `(${workload[t.name]} act)` : ''}</option>)}
-                            </select>
-                            <button type="button" onClick={() => void handleBulkTransition('en_proceso')} className="border border-draft bg-draft text-bg px-2 py-1 text-[9px] font-black uppercase w-full">A Proceso ({selectedOrders.size})</button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </header>
-                  <Droppable droppableId={col}>
-                    {(droppableProvided) => (
-                      <div
-                        ref={droppableProvided.innerRef}
-                        {...droppableProvided.droppableProps}
-                        className="p-2 space-y-2 grow min-h-[40px]"
-                      >
-                        {cards.length === 0
-                          ? <p className="text-[10px] font-mono text-ink-dim/60 text-center py-6">—</p>
-                          : cards.map((o, cardIndex) => (
-                              <Draggable
-                                key={o.id}
-                                draggableId={o.id}
-                                index={cardIndex}
-                                isDragDisabled={isBulkMode || (col === 'pendiente' && pendientesSortBy !== 'manual')}
-                              >
-                                {(draggableProvided) => (
-                                  <div
-                                    ref={draggableProvided.innerRef}
-                                    {...draggableProvided.draggableProps}
-                                    {...draggableProvided.dragHandleProps}
-                                  >
-                                    <OrderCard
-                                      order={o}
-                                      busy={rowBusy[o.id]}
-                                      editingDueDateId={editingDueDateId}
-                                      draftDueDate={draftDueDate}
-                                      editingNotesId={editingNotesId}
-                                      draftNotes={draftNotes}
-                                      activeTorneros={activeTorneros}
-                                      onTransition={handleTransition}
-                                      onAssignTornero={handleAssignTornero}
-                                      onArchive={handleArchive}
-                                      onPrint={handlePrint}
-                                      onSaveDueDate={handleSaveDueDate}
-                                      onSaveNotes={handleSaveNotes}
-                                      onEditDueDate={setEditingDueDateId}
-                                      onEditNotes={setEditingNotesId}
-                                      onDraftDueDateChange={setDraftDueDate}
-                                      onDraftNotesChange={setDraftNotes}
-                                      workload={workload}
-                                      isBulkMode={isBulkMode}
-                                      isSelected={selectedOrders.has(o.id)}
-                                      onToggleSelect={handleToggleSelect}
-                                    />
-                                  </div>
-                                )}
-                              </Draggable>
-                            ))}
-                        {droppableProvided.placeholder}
-                      </div>
-                    )}
-                  </Droppable>
-                </section>
-              );
-            })}
-            </div>
-          </DragDropContext>
+          <WorkOrdersBoard
+            filteredOrders={filtered}
+            pendientesSortBy={pendientesSortBy}
+            setPendientesSortBy={setPendientesSortBy}
+            isBulkMode={isBulkMode}
+            setIsBulkMode={setIsBulkMode}
+            selectedOrders={selectedOrders}
+            setSelectedOrders={setSelectedOrders}
+            activeTorneros={activeTorneros}
+            workload={workload}
+            rowBusy={rowBusy}
+            editingDueDateId={editingDueDateId}
+            draftDueDate={draftDueDate}
+            editingNotesId={editingNotesId}
+            draftNotes={draftNotes}
+            onDragEnd={handleKanbanDrop}
+            onBulkAssign={handleBulkAssign}
+            onBulkTransition={handleBulkTransition}
+            onTransition={handleTransition}
+            onAssignTornero={handleAssignTornero}
+            onArchive={handleArchive}
+            onPrint={handlePrint}
+            onSaveDueDate={handleSaveDueDate}
+            onSaveNotes={handleSaveNotes}
+            onEditDueDate={setEditingDueDateId}
+            onEditNotes={setEditingNotesId}
+            onDraftDueDateChange={setDraftDueDate}
+            onDraftNotesChange={setDraftNotes}
+            onToggleSelect={handleToggleSelect}
+          />
         )}
 
         {/* ── Lista ── */}
         {status === 'ready' && filtered.length > 0 && viewMode === 'list' && (
-          <div className="space-y-2">
-            {listVisible.length === 0
-              ? <p className="text-[11px] font-mono text-ink-dim py-4">Ninguna orden en este estado.</p>
-              : listVisible.map((o) => (
-                <OrderCard
-                  key={o.id}
-                  order={o}
-                  busy={rowBusy[o.id]}
-                  editingDueDateId={editingDueDateId}
-                  draftDueDate={draftDueDate}
-                  editingNotesId={editingNotesId}
-                  draftNotes={draftNotes}
-                  activeTorneros={activeTorneros}
-                  onTransition={handleTransition}
-                  onAssignTornero={handleAssignTornero}
-                  onArchive={handleArchive}
-                  onPrint={handlePrint}
-                  onSaveDueDate={handleSaveDueDate}
-                  onSaveNotes={handleSaveNotes}
-                  onEditDueDate={setEditingDueDateId}
-                  onEditNotes={setEditingNotesId}
-                  onDraftDueDateChange={setDraftDueDate}
-                  onDraftNotesChange={setDraftNotes}
-                  workload={workload}
-                  isBulkMode={false}
-                  isSelected={false}
-                  onToggleSelect={() => {}}
-                />
-              ))}
-          </div>
+          <WorkOrdersList
+            orders={listVisible}
+            rowBusy={rowBusy}
+            editingDueDateId={editingDueDateId}
+            draftDueDate={draftDueDate}
+            editingNotesId={editingNotesId}
+            draftNotes={draftNotes}
+            activeTorneros={activeTorneros}
+            workload={workload}
+            onTransition={handleTransition}
+            onAssignTornero={handleAssignTornero}
+            onArchive={handleArchive}
+            onPrint={handlePrint}
+            onSaveDueDate={handleSaveDueDate}
+            onSaveNotes={handleSaveNotes}
+            onEditDueDate={setEditingDueDateId}
+            onEditNotes={setEditingNotesId}
+            onDraftDueDateChange={setDraftDueDate}
+            onDraftNotesChange={setDraftNotes}
+          />
         )}
 
         {/* ── Tab Torneros ── */}
@@ -1095,74 +688,17 @@ export function WorkOrdersPanel({ initialAlertFilter = null, onDataChanged }: Wo
         )}
       </div>
 
-      {/* ── Cajón lateral: métricas + torneros ── */}
-      {showPanel && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/60" onClick={() => setShowPanel(false)} aria-hidden />
-          <aside
-            className="fixed inset-y-0 right-0 z-50 w-[360px] max-w-[88vw] bg-surface border-l-2 border-line flex flex-col"
-            role="dialog" aria-label="Panel de métricas y torneros"
-          >
-            <header className="flex items-center justify-between px-4 py-3 border-b-2 border-line">
-              <h2 className="font-display font-black text-[15px] uppercase tracking-wide">Panel</h2>
-              <button type="button" onClick={() => setShowPanel(false)}
-                className="p-1.5 text-ink-dim hover:text-accent transition-colors" aria-label="Cerrar panel">
-                <X size={18} />
-              </button>
-            </header>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
-              {/* Métricas */}
-              <section>
-                <h3 className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-3 flex items-center gap-2">
-                  <BarChart2 size={13} className="text-accent" /> Métricas de producción
-                </h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <Metric label="Ciclo promedio" value={metrics.avgCycleDays !== null ? `${metrics.avgCycleDays}d` : '—'} tone="text-ink" />
-                  <Metric label="A tiempo" value={metrics.onTimePct !== null ? `${metrics.onTimePct}%` : '—'} tone="text-ok" />
-                  <Metric label="Con retraso" value={metrics.latePct !== null ? `${metrics.latePct}%` : '—'} tone="text-danger" />
-                  <Metric label="En proceso hoy" value={String(metrics.inProgressCount)} tone="text-draft" />
-                </div>
-                <p className="text-[9px] font-mono text-ink-dim/70 mt-3 leading-snug">
-                  Basado en {metrics.deliveredCount} órdenes entregadas con fecha registrada. Las órdenes sin dueDate no cuentan en % a tiempo.
-                </p>
-              </section>
-
-              {/* Torneros */}
-              <section>
-                <h3 className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-3 flex items-center gap-2">
-                  <Users size={13} className="text-accent" /> Torneros ({activeTorneros.length} activos)
-                </h3>
-                <div className="flex items-center gap-2 mb-3">
-                  <input
-                    value={newTornero} onChange={(e) => setNewTornero(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAddTornero(); }}
-                    placeholder="Nombre del tornero"
-                    className="grow border border-line bg-surface-2 text-ink px-2 py-1.5 text-[12px] font-mono outline-none placeholder:text-ink-dim/70"
-                  />
-                  <button type="button" onClick={() => void handleAddTornero()}
-                    className="border-2 border-accent bg-accent text-bg px-3 py-1.5 text-[10px] font-black uppercase flex items-center gap-1 hover:bg-accent/80 transition-colors">
-                    <Plus size={12} /> Agregar
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {torneros.map((t) => (
-                    <button key={t.id} type="button" onClick={() => void handleToggleTornero(t)}
-                      className={`px-2 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors ${
-                        t.active ? 'bg-ink text-bg border-ink' : 'bg-surface text-ink-dim border-line line-through'
-                      }`} title={t.active ? 'Click para desactivar' : 'Click para activar'}>
-                      {t.name}
-                    </button>
-                  ))}
-                  {torneros.length === 0 && (
-                    <span className="text-[10px] font-mono text-ink-dim">Aún no hay torneros. Agrega el primero.</span>
-                  )}
-                </div>
-              </section>
-            </div>
-          </aside>
-        </>
-      )}
+      <WorkOrdersSidebar
+        showPanel={showPanel}
+        setShowPanel={setShowPanel}
+        metrics={metrics}
+        activeTorneros={activeTorneros}
+        torneros={torneros}
+        newTornero={newTornero}
+        setNewTornero={setNewTornero}
+        onAddTornero={handleAddTornero}
+        onToggleTornero={handleToggleTornero}
+      />
     </div>
   );
 }
@@ -1195,11 +731,3 @@ function AlertChip({
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone: string }): ReactElement {
-  return (
-    <div className="border border-line bg-surface-2 p-2.5">
-      <p className="text-[9px] font-mono uppercase tracking-wider text-ink-dim mb-1">{label}</p>
-      <p className={`font-display font-black text-2xl italic leading-none ${tone}`}>{value}</p>
-    </div>
-  );
-}

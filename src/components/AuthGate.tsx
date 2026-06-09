@@ -195,13 +195,15 @@ function LoginScreen({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={onBypass}
-              className="w-full bg-accent text-bg hover:bg-accent/80 px-4 py-4 text-[14px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-hard active:translate-x-0.5 active:translate-y-0.5 transition-all"
-            >
-              <Ghost size={20} /> Omitir Login (Modo Debug)
-            </button>
+            {import.meta.env.DEV && (
+              <button
+                type="button"
+                onClick={onBypass}
+                className="w-full bg-accent text-bg hover:bg-accent/80 px-4 py-4 text-[14px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-hard active:translate-x-0.5 active:translate-y-0.5 transition-all"
+              >
+                <Ghost size={20} /> Omitir Login (Modo Debug)
+              </button>
+            )}
           </form>
 
           <div className="relative flex items-center py-1 opacity-40">
@@ -228,9 +230,11 @@ function LoginScreen({
             </div>
           )}
 
-          <p className="text-[9px] text-ink-dim/70 leading-tight italic text-center">
-            Development mode enabled. Authentication is currently optional.
-          </p>
+          {import.meta.env.DEV && (
+            <p className="text-[9px] text-ink-dim/70 leading-tight italic text-center">
+              Development mode enabled. Authentication is currently optional.
+            </p>
+          )}
         </div>
       </div>
     </div>

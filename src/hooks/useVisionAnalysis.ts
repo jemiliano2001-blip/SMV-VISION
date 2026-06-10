@@ -10,7 +10,6 @@ import type {
   BoundingBox,
   ExtractedOrder,
   Order,
-  WorkOrder,
   WorkshopPdfUpload,
   ToolcribActiveDrawingView,
 } from '../types';
@@ -19,7 +18,6 @@ import { runWithConcurrencyLimit } from '../lib/documentAnalysis/concurrency';
 import { rasterizeAndNormalizePdf } from '../lib/documentAnalysis/pdfWorkerClient';
 import { recordAnalysisRunFireAndForget } from '../lib/firebase/analysisRuns';
 import { log } from '../lib/log';
-import { formatAgeDays, getOrderAgeDays } from '../lib/age';
 import {
   MIN_BLUEPRINT_MATCH_SCORE,
   extractBlueprintSignals,
@@ -28,13 +26,7 @@ import {
   scorePieceMatch,
   selectBestBlueprintMatch,
 } from '../lib/matching';
-import { mergeGroupedOrders, parseOrdersResponse, validateOrderPdfName } from '../lib/orderMerge';
-import { consolidateHotStamps, isHotStampCatalogEntry, isHotStampPiece } from '../lib/hotStamp';
-import {
-  cleanPieceName,
-  withPartNumber,
-  collapseDuplicateOrders,
-} from '../lib/reportFormat';
+import { isHotStampCatalogEntry, isHotStampPiece } from '../lib/hotStamp';
 import { listActiveDrawingViews } from '../lib/firebase/toolcrib';
 import { listOrdersToInvoice } from '../lib/firebase/odooOrders';
 import { upsertWorkOrders, updateCantidad, archiveWorkOrder } from '../lib/firebase/workOrders';
@@ -43,10 +35,8 @@ import { buildDedupeKey } from '../lib/workOrders/dedupe';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
-import { callWithRetry, preparePdfPart, prepareImagePart } from '../lib/gemini';
+import { callWithRetry, prepareImagePart } from '../lib/gemini';
 import {
-  isRecord,
-  asString,
   parseBoundingBox,
   parseBlueprintResponse,
 } from '../lib/blueprintParsers';
@@ -66,7 +56,6 @@ const MAX_BLUEPRINT_CONCURRENCY = 8;
 // 400k = ~632×632px: solo recuadros muy grandes disparan el pase adicional.
 // (Antes: 200k — disparaba en la mayoría de planos estándar, doblando llamadas Gemini)
 const REFINEMENT_SKIP_AREA_THRESHOLD = 400_000;
-const GEMINI_ORDER_MODEL = 'gemini-3.5-flash';
 const GEMINI_BLUEPRINT_MODEL = 'gemini-3.5-flash';
 const FALLBACK_CENTER_BOX: number[] = [30, 30, 720, 970];
 
@@ -464,7 +453,9 @@ export function useVisionAnalysis({
     a.href = url;
     a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Revocar en diferido: hacerlo síncrono tras click() puede abortar la
+    // descarga en navegadores que resuelven la URL de forma asíncrona.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadJson = () => {
@@ -475,6 +466,7 @@ export function useVisionAnalysis({
     a.href = url;
     a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadPdf = useCallback(() => {

@@ -63,6 +63,18 @@ function validDateParts(y: number, m: number, d: number): { y: number; m: number
 }
 
 /**
+ * Fecha-calendario de HOY en huso local como `YYYY-MM-DD`.
+ *
+ * NO usar `toISOString().slice(0, 10)` para esto: devuelve la fecha UTC, que
+ * en México (UTC-6) ya es "mañana" a partir de las 6pm. Las llaves de día
+ * (snapshots, comparaciones contra dueDate) deben usar el día del taller.
+ */
+export function todayLocalISO(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+}
+
+/**
  * Parsea una fecha en los formatos que puede traer el PDF (DD/MM/YYYY,
  * DD-MM-YYYY, YYYY-MM-DD) y devuelve un string de solo fecha `YYYY-MM-DD`,
  * o `null` si el formato no es reconocido.

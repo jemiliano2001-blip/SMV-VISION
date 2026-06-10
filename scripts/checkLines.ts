@@ -13,7 +13,6 @@ async function run() {
   console.log(`Found ${snap.size} active orders.`);
   let totalLines = 0;
   let totalQty = 0;
-  let skippedService = 0;
   let noPart = 0;
   let validLines = 0;
   snap.forEach(doc => {

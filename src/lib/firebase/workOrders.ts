@@ -102,8 +102,9 @@ function toMutable(o: IncomingWorkOrder): UpsertMutableFields {
  * hace en memoria.
  *
  * NOTA: En la mayoría de los flujos la app consume las órdenes vía
- * `WorkOrdersContext` (onSnapshot). Esta función se mantiene para scripts,
- * tests y usos puntuales donde no hay contexto React disponible.
+ * `WorkOrdersContext` (onSnapshot). Esta función se mantiene como utilidad de
+ * lectura puntual fuera de React (no tiene callers en la app hoy; los scripts
+ * usan firebase-admin directamente).
  */
 export async function listWorkOrders(options?: {
   max?: number;
@@ -271,60 +272,6 @@ export async function upsertWorkOrders(
     return { ok: true, value: { created: diff.toCreate.length, updated: diff.toUpdate.length } };
   } catch (error) {
     console.warn('[smv-vision][work-orders] upsertWorkOrders falló', error);
-    return { ok: false, reason: 'write-failed' };
-  }
-}
-
-/**
- * Marca una orden como entregada. El uid lo fija el writer desde Auth.
- * Devuelve el nombre ya saneado que quedó persistido para que la UI haga
- * su update optimista con el MISMO valor (evita que el nombre mostrado
- * difiera del guardado hasta el siguiente refresh).
- */
-export async function markDelivered(
-  orderId: string,
-  torneroName: string,
-): Promise<WorkOrderResult<{ deliveredToTornero: string }>> {
-  const database = db();
-  if (!database) return { ok: false, reason: 'not-configured' };
-  const uid = getCurrentUserUid();
-  if (!uid && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
-  const name = sanitizeTorneroName(torneroName);
-  if (typeof orderId !== 'string' || orderId.trim().length === 0 || !name) {
-    return { ok: false, reason: 'invalid-input' };
-  }
-  try {
-    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
-      status: 'entregada',
-      deliveredToTornero: name,
-      deliveredAtUTC: serverTimestamp(),
-      deliveredByUid: uid,
-      updatedAtUTC: serverTimestamp(),
-    });
-    return { ok: true, value: { deliveredToTornero: name } };
-  } catch (error) {
-    console.warn('[smv-vision][work-orders] markDelivered falló', error);
-    return { ok: false, reason: 'write-failed' };
-  }
-}
-
-/** Revierte a pendiente (por si se marcó por error). */
-export async function markPending(orderId: string): Promise<WorkOrderResult<void>> {
-  const database = db();
-  if (!database) return { ok: false, reason: 'not-configured' };
-  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) return { ok: false, reason: 'not-authenticated' };
-  if (typeof orderId !== 'string' || orderId.trim().length === 0) {
-    return { ok: false, reason: 'invalid-input' };
-  }
-  try {
-    await updateDoc(doc(database, WORK_ORDERS_COLLECTION, orderId.trim()), {
-      status: 'pendiente',
-      deliveredToTornero: null, deliveredAtUTC: null, deliveredByUid: null,
-      updatedAtUTC: serverTimestamp(),
-    });
-    return { ok: true, value: undefined };
-  } catch (error) {
-    console.warn('[smv-vision][work-orders] markPending falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

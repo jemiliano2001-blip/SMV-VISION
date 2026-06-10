@@ -52,7 +52,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { resolve as resolvePath, join as joinPath } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 import { argv, exit } from 'node:process';
 import {
   applicationDefault,

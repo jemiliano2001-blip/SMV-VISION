@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: resolvePath(process.cwd(), '.env.local') });

@@ -13,6 +13,7 @@ import {
 import type { WorkOrder } from '../../types';
 import { getFirestoreClient } from './client';
 import { calcMetrics, getDueDateSeverity } from '../workOrders/metrics';
+import { todayLocalISO } from '../age';
 import { log } from '../log';
 
 const COLLECTION = 'dailyMetricSnapshots';
@@ -31,7 +32,7 @@ type SnapshotResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 /** Pure — computes snapshot data from current orders. No Firebase I/O. */
 export function buildSnapshotData(orders: WorkOrder[]): DailyMetricSnapshot {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalISO();
   const active = orders.filter((o) => !o.archived);
   const metrics = calcMetrics(orders);
 
@@ -70,7 +71,7 @@ export function buildSnapshotData(orders: WorkOrder[]): DailyMetricSnapshot {
 export async function getTodaySnapshot(): Promise<SnapshotResult<DailyMetricSnapshot | null>> {
   const database = getFirestoreClient();
   if (!database) return { ok: false, reason: 'not-configured' };
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalISO();
   try {
     const snap = await getDoc(doc(database, COLLECTION, today));
     if (!snap.exists()) return { ok: true, value: null };

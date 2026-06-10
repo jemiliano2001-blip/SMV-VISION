@@ -186,15 +186,15 @@ describe('calcMetrics', () => {
   });
 
   it('calculates onTimePct 100% when delivered on dueDate (before end of day local)', () => {
-    // The implementation compares deliveredAtUTC against dueDate 23:59:59 local
-    // This is a quirk: it uses local time for the due date boundary
-    // For the test to be predictable, we use an early morning UTC time
-    // which is before end of day in any reasonable timezone
+    // The implementation compares deliveredAtUTC against dueDate 23:59:59 LOCAL.
+    // Build the timestamp with the local-time Date constructor so the test is
+    // deterministic in any timezone (CI runs in UTC, the shop runs in UTC-6).
     const orders = [
       makeWorkOrder({
         status: 'entregada',
         createdAtUTC: '2025-06-01T00:00:00Z',
-        deliveredAtUTC: '2025-06-10T12:00:00Z', // Noon UTC on the due date
+        // 23:59:59 local on the due date — exactly at the on-time boundary.
+        deliveredAtUTC: new Date(2025, 5, 10, 23, 59, 59).toISOString(),
         dueDate: '2025-06-10',
       }),
     ];
@@ -204,27 +204,21 @@ describe('calcMetrics', () => {
     expect(metrics.latePct).toBe(0);
   });
 
-  it('calculates onTimePct considering local time boundary', () => {
-    // The implementation compares UTC timestamp against local time 23:59:59
-    // When deliveredAtUTC is after the calculated local dueEndLocal, it's late
-    // This test demonstrates the actual behavior: the cutoff is based on
-    // when new Date(year, month, day, 23, 59, 59).getTime() is reached
+  it('calculates onTimePct 0% when delivered after the local end-of-day boundary', () => {
+    // Same local-time construction: one second past midnight local on June 11
+    // is after the June 10 local cutoff, so the order is late in any timezone.
     const orders = [
       makeWorkOrder({
         status: 'entregada',
         createdAtUTC: '2025-06-01T00:00:00Z',
-        // This is after the local end-of-day for June 10
-        // Even though it's June 11 in UTC, compared to local 23:59:59 it's late
-        deliveredAtUTC: '2025-06-11T00:00:01Z',
+        deliveredAtUTC: new Date(2025, 5, 11, 0, 0, 1).toISOString(),
         dueDate: '2025-06-10',
       }),
     ];
     const metrics = calcMetrics(orders);
 
-    // Depending on timezone, this could be late
-    // The implementation's intent is to check against local day boundary
-    // For a deterministic test, we check that the behavior is consistent
-    expect(metrics.onTimePct).toBe(100); // This test documents actual behavior
+    expect(metrics.onTimePct).toBe(0);
+    expect(metrics.latePct).toBe(100);
   });
 
   it('calculates onTimePct as percentage of on-time delivered orders', () => {

@@ -109,22 +109,6 @@ interface OdooStockMove {
   sale_line_id: number | null;
 }
 
-/** Respuesta genérica de la API JSON-RPC de Odoo. */
-interface OdooJsonRpcResponse<T = unknown> {
-  jsonrpc: '2.0';
-  id: number | null;
-  result?: T;
-  error?: {
-    code: number;
-    message: string;
-    data?: {
-      name?: string;
-      message?: string;
-      debug?: string;
-    };
-  };
-}
-
 /**
  * Objeto XML-RPC: clave → valor. Separado como interface para romper
  * la referencia circular que TypeScript no tolera dentro de un `type` alias.

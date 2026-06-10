@@ -122,22 +122,24 @@ export function ToolcribLibraryPanel({
     }
   }, [loadLibrary, status]);
 
+  // El índice solo depende del catálogo — construirlo dentro del memo de
+  // filtrado lo reconstruía en cada tecleo del buscador.
+  const fuse = useMemo(() => new Fuse(views, {
+    keys: [
+      { name: 'partNumber', weight: 2 },
+      { name: 'description', weight: 1 },
+      { name: 'sourcePath', weight: 1 },
+    ],
+    threshold: 0.4,
+    ignoreLocation: true,
+    includeScore: true,
+  }), [views]);
+
   const filteredViews = useMemo(() => {
     const term = normalizeSearchTerm(searchTerm);
     if (term.length === 0) {
       return views;
     }
-
-    const fuse = new Fuse(views, {
-      keys: [
-        { name: 'partNumber', weight: 2 },
-        { name: 'description', weight: 1 },
-        { name: 'sourcePath', weight: 1 },
-      ],
-      threshold: 0.4,
-      ignoreLocation: true,
-      includeScore: true,
-    });
 
     // Sort logic to prioritize exact matches or `.iso` files for identical scores
     return fuse.search(term).sort((a, b) => {
@@ -150,7 +152,7 @@ export function ToolcribLibraryPanel({
 
       return (a.score || 0) - (b.score || 0);
     }).map(result => result.item);
-  }, [searchTerm, views]);
+  }, [searchTerm, fuse, views]);
 
   const handlePrint = useCallback(
     async (view: ToolcribActiveDrawingView) => {

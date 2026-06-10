@@ -47,7 +47,7 @@ export interface UpsertMutableFields {
   soNumber: string;
 }
 
-export interface MergeUpsertResult<TExisting> {
+export interface MergeUpsertResult {
   /** Llaves nuevas (no existían): hay que crearlas. */
   toCreate: string[];
   /** Existentes a refrescar: id del doc + campos mutables. */
@@ -64,7 +64,7 @@ export interface MergeUpsertResult<TExisting> {
 export function mergeUpsert<TExisting extends { id: string }>(
   existingByKey: ReadonlyMap<string, TExisting>,
   incoming: ReadonlyArray<{ key: string; fields: UpsertMutableFields }>,
-): MergeUpsertResult<TExisting> {
+): MergeUpsertResult {
   const toCreate: string[] = [];
   const toUpdate: Array<{ id: string; key: string; fields: UpsertMutableFields }> = [];
   const seen = new Set<string>();

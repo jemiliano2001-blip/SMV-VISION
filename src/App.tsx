@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from "motion/react";
 import {
   Database,
@@ -452,8 +452,8 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {(vision.filteredResults ?? vision.results).map((order, idx) => (
-                              <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
+                            {(vision.filteredResults ?? vision.results).map((order) => (
+                              <tr key={dedupeKeyOfReportOrder(order)} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
                                 <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
                                   <div className="grow">
                                     <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -567,8 +567,8 @@ export default function App() {
                             </button>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            {vision.excludedOrders.map((entry, i) => (
-                              <div key={i} className="inline-flex items-center gap-2 bg-surface-2 border-2 border-line px-2 py-1.5">
+                            {vision.excludedOrders.map((entry) => (
+                              <div key={dedupeKeyOfReportOrder(entry.order)} className="inline-flex items-center gap-2 bg-surface-2 border-2 border-line px-2 py-1.5">
                                 <div className="min-w-0">
                                   <p className="text-[11px] font-bold text-ink truncate max-w-[200px]" title={entry.order.pieza}>
                                     {entry.order.pieza}

@@ -127,8 +127,11 @@ function LoginScreen({
   errorMessage,
   onClearError,
 }: LoginScreenProps): ReactElement {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  // El formulario de correo/contraseña está deshabilitado a propósito (modo
+  // debug); los valores quedan vacíos hasta que se reactive y se cableen los
+  // inputs con sus setters.
+  const [email] = useState('');
+  const [password] = useState('');
   const [, setFieldErrors] = useState<{ email?: string; password?: string }>({});
 
   const handleSubmit = useCallback(

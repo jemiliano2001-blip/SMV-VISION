@@ -48,6 +48,22 @@ function dedupeKeyOfReportOrder(order: Order): string {
 }
 
 /**
+ * Asigna una key de React estable y ÚNICA a cada elemento de una lista usando
+ * la llave de dedup como base. Si una misma SO trae la misma parte en varias
+ * líneas, las llaves de dedup colisionan; el sufijo de ocurrencia (`::2`, …)
+ * desambigua sin depender de un id de línea de Odoo (que el sync no persiste).
+ */
+function withRowKeys<T>(items: T[], keyOf: (item: T) => string): Array<{ item: T; rowKey: string }> {
+  const seen = new Map<string, number>();
+  return items.map((item) => {
+    const base = keyOf(item);
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return { item, rowKey: n === 1 ? base : `${base}::${n}` };
+  });
+}
+
+/**
  * Celda de cantidad editable (modo edición del reporte). Mantiene un borrador
  * local y confirma en blur/Enter; Esc cancela. Se re-sincroniza si la orden
  * cambia desde fuera (p. ej. "Restaurar todo").
@@ -452,8 +468,8 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {(vision.filteredResults ?? vision.results).map((order) => (
-                              <tr key={dedupeKeyOfReportOrder(order)} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
+                            {withRowKeys(vision.filteredResults ?? vision.results, dedupeKeyOfReportOrder).map(({ item: order, rowKey }) => (
+                              <tr key={rowKey} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
                                 <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
                                   <div className="grow">
                                     <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -567,8 +583,8 @@ export default function App() {
                             </button>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            {vision.excludedOrders.map((entry) => (
-                              <div key={dedupeKeyOfReportOrder(entry.order)} className="inline-flex items-center gap-2 bg-surface-2 border-2 border-line px-2 py-1.5">
+                            {withRowKeys(vision.excludedOrders, (e) => dedupeKeyOfReportOrder(e.order)).map(({ item: entry, rowKey }) => (
+                              <div key={rowKey} className="inline-flex items-center gap-2 bg-surface-2 border-2 border-line px-2 py-1.5">
                                 <div className="min-w-0">
                                   <p className="text-[11px] font-bold text-ink truncate max-w-[200px]" title={entry.order.pieza}>
                                     {entry.order.pieza}

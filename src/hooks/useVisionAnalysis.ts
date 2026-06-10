@@ -453,7 +453,9 @@ export function useVisionAnalysis({
     a.href = url;
     a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Revocar en diferido: hacerlo síncrono tras click() puede abortar la
+    // descarga en navegadores que resuelven la URL de forma asíncrona.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadJson = () => {
@@ -464,7 +466,7 @@ export function useVisionAnalysis({
     a.href = url;
     a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadPdf = useCallback(() => {

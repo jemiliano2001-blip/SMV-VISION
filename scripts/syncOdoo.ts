@@ -29,6 +29,17 @@ import { resolve as resolvePath } from 'node:path';
 import { argv, exit } from 'node:process';
 
 import { buildDedupeKey } from '../src/lib/workOrders/dedupe';
+import { addDaysToISODate } from '../src/lib/age';
+import {
+  MIN_BLUEPRINT_MATCH_SCORE,
+  extractLibrarySignals,
+  extractOrderSignals,
+  isIsoDrawingView,
+  selectLibraryDrawingMatch,
+  type PieceMatchSignals,
+} from '../src/lib/matching';
+import { isHotStampCatalogEntry, isHotStampPiece } from '../src/lib/hotStamp';
+import type { ToolcribActiveDrawingView } from '../src/types';
 
 // Carga .env.local antes de leer variables (tsx no lo carga automáticamente)
 import { config as loadEnv } from 'dotenv';
@@ -147,6 +158,10 @@ type XmlRpcValue = string | number | boolean | null | XmlRpcValue[] | XmlRpcObje
 const ODOO_COLLECTION = 'odooSaleOrders';
 const WORK_ORDERS_COLLECTION = 'workOrders';
 const SYNC_SOURCE_UID = 'syncOdoo-v1';
+
+/** Espejo de DEFAULT_CYCLE_DAYS en src/lib/firebase/workOrders.ts (no se
+ *  importa de ahí para no arrastrar el SDK cliente de Firebase al script). */
+const DEFAULT_CYCLE_DAYS = 14;
 
 /** Devuelve el valor de una variable de entorno o lanza si no existe. */
 function requireEnv(key: string): string {
@@ -674,6 +689,147 @@ function initFirebaseAdmin(serviceAccountPath: string): void {
 }
 
 // ─────────────────────────────────────────────
+//  Catálogo Tool Crib (matching de planos)
+// ─────────────────────────────────────────────
+
+/** Convierte Timestamp de Firestore o string a ISO string ('' si no hay valor). */
+function timestampToIso(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v && typeof (v as { toDate?: () => Date }).toDate === 'function') {
+    return (v as { toDate: () => Date }).toDate().toISOString();
+  }
+  return '';
+}
+
+/**
+ * Espejo Admin-SDK de `listActiveDrawingViews` (src/lib/firebase/toolcrib.ts):
+ * dos queries (parts de SUPRAJIT + drawings activos) y join en memoria por
+ * partId, quedándose con el drawing más reciente ante estado inconsistente.
+ */
+async function fetchToolcribLibrary(
+  db: ReturnType<typeof getFirestore>,
+): Promise<ToolcribActiveDrawingView[]> {
+  const [partsSnap, drawingsSnap] = await Promise.all([
+    db.collection('toolcribParts').where('customer', '==', 'SUPRAJIT').get(),
+    db.collection('toolcribDrawings').where('isActive', '==', true).get(),
+  ]);
+
+  const drawingByPartId = new Map<string, { id: string; data: Record<string, unknown> }>();
+  for (const docSnap of drawingsSnap.docs) {
+    const data = docSnap.data();
+    const partId = typeof data['partId'] === 'string' ? data['partId'] : null;
+    if (!partId) continue;
+    const existing = drawingByPartId.get(partId);
+    if (
+      !existing ||
+      timestampToIso(data['createdAtUTC']) > timestampToIso(existing.data['createdAtUTC'])
+    ) {
+      drawingByPartId.set(partId, { id: docSnap.id, data });
+    }
+  }
+
+  const views: ToolcribActiveDrawingView[] = [];
+  for (const docSnap of partsSnap.docs) {
+    const part = docSnap.data();
+    const partNumber = typeof part['partNumber'] === 'string' ? part['partNumber'].trim() : '';
+    if (!partNumber) continue;
+    const drawing = drawingByPartId.get(docSnap.id);
+    if (!drawing) continue;
+    views.push({
+      partId: docSnap.id,
+      partNumber,
+      customer: typeof part['customer'] === 'string' ? part['customer'] : 'SUPRAJIT',
+      description: typeof part['description'] === 'string' ? part['description'] : '',
+      drawingId: drawing.id,
+      revision: typeof drawing.data['revision'] === 'string' ? drawing.data['revision'] : '',
+      sourceType: drawing.data['sourceType'] === 'storage' ? 'storage' : 'network',
+      sourcePath: typeof drawing.data['sourcePath'] === 'string' ? drawing.data['sourcePath'] : '',
+      pdfUrl: typeof drawing.data['pdfUrl'] === 'string' ? drawing.data['pdfUrl'] : null,
+      effectiveFromUTC: timestampToIso(drawing.data['effectiveFromUTC']) || null,
+    });
+  }
+  return views;
+}
+
+interface LineDrawingMatch {
+  partId: string;
+  drawingId: string;
+  score: number;
+}
+
+/**
+ * Match de plano para una línea de Odoo: fuzzy ISO-first y, si no alcanza el
+ * umbral y la pieza es hot stamp, búsqueda por keyword en el catálogo (el
+ * fuzzy no conecta "HOT STAMP LETRA M" con "PUNZONES DE MARCA").
+ */
+function matchDrawingForLine(
+  pieza: string,
+  numeroParte: string,
+  library: readonly ToolcribActiveDrawingView[],
+  signalsByDrawingId: ReadonlyMap<string, PieceMatchSignals>,
+): LineDrawingMatch | null {
+  if (library.length === 0) return null;
+
+  const orderSignals = extractOrderSignals(pieza, numeroParte || undefined);
+  const { view, score } = selectLibraryDrawingMatch(orderSignals, library, signalsByDrawingId);
+  if (view && score >= MIN_BLUEPRINT_MATCH_SCORE) {
+    return { partId: view.partId, drawingId: view.drawingId, score };
+  }
+
+  if (isHotStampPiece(pieza)) {
+    const hotStampEntry =
+      library.find((v) => isHotStampCatalogEntry(v) && isIsoDrawingView(v)) ??
+      library.find((v) => isHotStampCatalogEntry(v));
+    if (hotStampEntry) {
+      return {
+        partId: hotStampEntry.partId,
+        drawingId: hotStampEntry.drawingId,
+        score: MIN_BLUEPRINT_MATCH_SCORE,
+      };
+    }
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────
+//  syncMeta/odoo — estado del último sync
+// ─────────────────────────────────────────────
+
+const SYNC_META_COLLECTION = 'syncMeta';
+const SYNC_META_DOC = 'odoo';
+
+/**
+ * Sobrescribe el doc `syncMeta/odoo` que lee el chip de estado de la app
+ * (src/lib/firebase/syncMeta.ts). Se escribe con set() completo (sin merge)
+ * para que un run exitoso no arrastre el errorMessage de un run anterior.
+ * Nunca lanza — un fallo al escribir el estado no debe tumbar el sync.
+ */
+async function writeSyncMeta(
+  db: ReturnType<typeof getFirestore> | null,
+  meta: {
+    ordersProcessed: number;
+    status: 'ok' | 'error';
+    errorMessage?: string;
+    otsCreated?: number;
+    otsUpdated?: number;
+    otsArchived?: number;
+    otsMatched?: number;
+  },
+): Promise<void> {
+  if (!db) return; // dry run o Firebase no inicializado
+  try {
+    await db.collection(SYNC_META_COLLECTION).doc(SYNC_META_DOC).set({
+      lastSyncAt: FieldValue.serverTimestamp(),
+      ...meta,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[syncOdoo] No se pudo escribir ${SYNC_META_COLLECTION}/${SYNC_META_DOC}: ${msg}`);
+  }
+}
+
+// ─────────────────────────────────────────────
 //  Upsert en Firestore
 // ─────────────────────────────────────────────
 
@@ -825,8 +981,13 @@ function parseOdooProduct(product: string): { numeroParte: string; pieza: string
 async function upsertWorkOrdersFromOdoo(
   db: ReturnType<typeof getFirestore> | null,
   orders: OdooSaleOrder[],
+  library: ToolcribActiveDrawingView[],
   dryRun: boolean,
-): Promise<{ created: number; updated: number; skipped: number; archived: number }> {
+): Promise<{ created: number; updated: number; skipped: number; archived: number; matched: number }> {
+  // Señales del catálogo precomputadas una vez por corrida.
+  const librarySignals = new Map(
+    library.map((view) => [view.drawingId, extractLibrarySignals(view)]),
+  );
   // LÓGICA ESTRICTA: Solo las órdenes que Odoo marca como 'A facturar'.
   // Las facturadas ('invoiced') o sin factura ('no') ya no se muestran en el tablero.
   // Esto reduce las órdenes exactamente a las ~21 que salen en la captura de Odoo.
@@ -836,7 +997,9 @@ async function upsertWorkOrdersFromOdoo(
 
   console.info(`  [syncOdoo] Órdenes con líneas pendientes: ${pendingOrders.length} / ${orders.length}`);
 
-  if (pendingOrders.length === 0) return { created: 0, updated: 0, skipped: 0, archived: 0 };
+  if (pendingOrders.length === 0) {
+    return { created: 0, updated: 0, skipped: 0, archived: 0, matched: 0 };
+  }
 
   // En dry run sin Firebase, solo contamos líneas sin consultar Firestore
   if (dryRun && !db) {
@@ -864,7 +1027,7 @@ async function upsertWorkOrdersFromOdoo(
       }
     }
     console.info(`  [dryRun] workOrders → procesaría ~${total} OTs (sin consultar Firestore en dry run)`);
-    return { created: 0, updated: 0, skipped: total, archived: 0 };
+    return { created: 0, updated: 0, skipped: total, archived: 0, matched: 0 };
   }
 
   if (!db) throw new Error('Firestore no inicializado');
@@ -917,11 +1080,6 @@ async function upsertWorkOrdersFromOdoo(
       pieza: pieza ?? '',
     });
     
-    if (so === '2026/S00662') {
-      console.log(`Checking 662 key: ${key}`);
-      console.log(`  in validDedupeKeys? ${validDedupeKeys.has(key)}`);
-    }
-
     if (!validDedupeKeys.has(key)) return true;
 
     return false;
@@ -970,10 +1128,14 @@ async function upsertWorkOrdersFromOdoo(
   const toCreate: Array<{ key: string; payload: Record<string, unknown> }> = [];
   const toUpdate: Array<{ id: string; payload: Record<string, unknown> }> = [];
   const seenKeys = new Set<string>();
+  let matched = 0;
 
   for (const order of pendingOrders) {
     const odooOrderId = order.name.replace(/\//g, '_');
     const otDate = order.date_order !== false ? order.date_order.split(' ')[0] : '';
+    // Fecha compromiso default: otDate + ciclo de 14 días, igual que el
+    // upsert de la app (src/lib/firebase/workOrders.ts).
+    const dueDate = otDate ? addDaysToISODate(otDate, DEFAULT_CYCLE_DAYS) : null;
     const validLines = order.order_lines.filter((l) => (l as any).qty_pending_from_pickings > 0);
 
     for (const line of validLines) {
@@ -1007,6 +1169,8 @@ async function upsertWorkOrdersFromOdoo(
           },
         });
       } else {
+        const lineMatch = matchDrawingForLine(pieza, numeroParte, library, librarySignals);
+        if (lineMatch) matched++;
         toCreate.push({
           key,
           payload: {
@@ -1019,13 +1183,13 @@ async function upsertWorkOrdersFromOdoo(
             cantidad: String((line as any).qty_pending_from_pickings),
             prioridad: 'Normal',
             status: 'pendiente',
-            matchedPartId: null,
-            matchedDrawingId: null,
-            matchScore: null,
+            matchedPartId: lineMatch?.partId ?? null,
+            matchedDrawingId: lineMatch?.drawingId ?? null,
+            matchScore: lineMatch?.score ?? null,
             deliveredToTornero: null,
             deliveredAtUTC: null,
             deliveredByUid: null,
-            dueDate: null,
+            dueDate,
             assignedToTornero: null,
             assignedAtUTC: null,
             finishedAtUTC: null,
@@ -1044,13 +1208,13 @@ async function upsertWorkOrdersFromOdoo(
 
   if (dryRun) {
     console.info(
-      `  [dryRun] workOrders → crear: ${toCreate.length}, actualizar: ${toUpdate.length}, colapsados: ${seenKeys.size - toCreate.length - toUpdate.length}`,
+      `  [dryRun] workOrders → crear: ${toCreate.length} (con plano: ${matched}), actualizar: ${toUpdate.length}, colapsados: ${seenKeys.size - toCreate.length - toUpdate.length}`,
     );
     for (const op of toCreate.slice(0, 5)) {
       console.info(`    [dryRun] create key=${op.key}`);
     }
     if (toCreate.length > 5) console.info(`    [dryRun] …y ${toCreate.length - 5} más`);
-    return { created: 0, updated: 0, skipped: toCreate.length + toUpdate.length, archived: 0 };
+    return { created: 0, updated: 0, skipped: toCreate.length + toUpdate.length, archived: 0, matched };
   }
 
   // 4. Ejecutar create/update en batches de 450
@@ -1079,7 +1243,7 @@ async function upsertWorkOrdersFromOdoo(
     await batch.commit();
   }
 
-  return { created, updated, skipped: 0, archived };
+  return { created, updated, skipped: 0, archived, matched };
 }
 
 // ─────────────────────────────────────────────
@@ -1099,32 +1263,56 @@ async function run(): Promise<void> {
   const odooApiKey = requireEnv('ODOO_API_KEY');
   const serviceAccountPath = requireEnv('FIREBASE_SERVICE_ACCOUNT_PATH');
 
+  // 2. Inicializar Firebase Admin ANTES de llamar a Odoo, para que un fallo
+  //    de autenticación/red con Odoo también quede registrado en syncMeta
+  //    y el chip de la app lo muestre. (Omitido en dry run.)
+  let db: ReturnType<typeof getFirestore> | null = null;
+  if (!dryRun) {
+    try {
+      initFirebaseAdmin(serviceAccountPath);
+      db = getFirestore();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[syncOdoo] ✗ Error inicializando Firebase Admin:', msg);
+      exit(1);
+    }
+  }
+
+  /** Registra el fallo en syncMeta y termina el proceso. */
+  const failSync = async (context: string, err: unknown): Promise<never> => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[syncOdoo] ✗ ${context}:`, msg);
+    await writeSyncMeta(db, {
+      ordersProcessed: 0,
+      status: 'error',
+      errorMessage: `${context}: ${msg}`,
+    });
+    exit(1);
+  };
+
   console.info(`[syncOdoo] Conectando a Odoo: ${odooUrl} / DB: ${odooDB}`);
 
-  // 2. Autenticar en Odoo
-  let uid: number;
+  // 3. Autenticar en Odoo
+  let uid = 0;
   try {
     uid = await odooAuthenticate(odooUrl, odooDB, odooUser, odooApiKey);
     console.info(`[syncOdoo] Autenticado en Odoo. uid=${uid}`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[syncOdoo] ✗ Error de autenticación:', msg);
-    exit(1);
+    await failSync('Error de autenticación', err);
   }
 
-  // 3. Obtener órdenes de venta de SUPRAJIT
-  let orders: OdooSaleOrder[];
+  // 4. Obtener órdenes de venta de SUPRAJIT
+  let orders: OdooSaleOrder[] = [];
   try {
     orders = await fetchOdooSaleOrders(odooUrl, odooDB, uid, odooApiKey);
     console.info(`[syncOdoo] ${orders.length} órdenes encontradas con partner "SUPRAJIT".`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[syncOdoo] ✗ Error al consultar sale.order:', msg);
-    exit(1);
+    await failSync('Error al consultar sale.order', err);
   }
 
   if (orders.length === 0) {
     console.warn('[syncOdoo] No hay órdenes para sincronizar. Fin.');
+    await writeSyncMeta(db, { ordersProcessed: 0, status: 'ok' });
     return;
   }
 
@@ -1158,22 +1346,7 @@ async function run(): Promise<void> {
       order.deliveries = pickingsMap.get(order.name) ?? [];
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[syncOdoo] ✗ Error al consultar sale.order.line:', msg);
-    exit(1);
-  }
-
-  // 5. Inicializar Firebase Admin (omitido en dry run)
-  let db: ReturnType<typeof getFirestore> | null = null;
-  if (!dryRun) {
-    try {
-      initFirebaseAdmin(serviceAccountPath);
-      db = getFirestore();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[syncOdoo] ✗ Error inicializando Firebase Admin:', msg);
-      exit(1);
-    }
+    await failSync('Error al consultar sale.order.line', err);
   }
 
   // 6. Upsert en Firestore (en lotes para respetar límites)
@@ -1201,34 +1374,62 @@ async function run(): Promise<void> {
     );
   }
 
-  // 7. Upsert WorkOrders desde las líneas de cada orden
+  // 7. Cargar catálogo Tool Crib para matching de planos (no fatal si falla)
+  let library: ToolcribActiveDrawingView[] = [];
+  if (db) {
+    try {
+      library = await fetchToolcribLibrary(db);
+      console.info(`[syncOdoo] Catálogo Tool Crib: ${library.length} planos activos para matching.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[syncOdoo] No se pudo cargar el catálogo Tool Crib (OTs sin plano): ${msg}`);
+    }
+  }
+
+  // 8. Upsert WorkOrders desde las líneas de cada orden
   console.info('\n[syncOdoo] Sincronizando WorkOrders desde líneas de Odoo…');
   let woCreated = 0;
   let woUpdated = 0;
   let woArchived = 0;
+  let woMatched = 0;
+  let woError: string | null = null;
   try {
-    const woResult = await upsertWorkOrdersFromOdoo(db, orders, dryRun);
+    const woResult = await upsertWorkOrdersFromOdoo(db, orders, library, dryRun);
     woCreated = woResult.created;
     woUpdated = woResult.updated;
     woArchived = woResult.archived;
+    woMatched = woResult.matched;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[syncOdoo] ✗ Error sincronizando WorkOrders:', msg);
+    woError = err instanceof Error ? err.message : String(err);
+    console.error('[syncOdoo] ✗ Error sincronizando WorkOrders:', woError);
     // No es fatal — el sync de odooSaleOrders ya completó
   }
 
-  // 8. Resumen final
+  // 9. Resumen final + registro en syncMeta
   const status = dryRun ? '[dryRun] ' : '';
   console.info(
     `\n[syncOdoo] ${status}Sincronización completada.\n` +
       `  ✓ Exitosos (odooSaleOrders) : ${synced}\n` +
       `  ✗ Fallidos (odooSaleOrders) : ${failed}\n` +
       `  ✓ OTs creadas               : ${woCreated}\n` +
+      `  ✓ OTs con plano matcheado   : ${woMatched}\n` +
       `  ✓ OTs actualizadas          : ${woUpdated}\n` +
       `  ✓ OTs archivadas            : ${woArchived}\n` +
       `  Colección Odoo              : ${ODOO_COLLECTION}\n` +
       `  Colección WorkOrders        : ${WORK_ORDERS_COLLECTION}`,
   );
+
+  const partialError =
+    woError ?? (failed > 0 ? `${failed} órdenes fallaron al escribir en odooSaleOrders` : null);
+  await writeSyncMeta(db, {
+    ordersProcessed: synced,
+    status: partialError ? 'error' : 'ok',
+    ...(partialError ? { errorMessage: partialError } : {}),
+    otsCreated: woCreated,
+    otsUpdated: woUpdated,
+    otsArchived: woArchived,
+    otsMatched: woMatched,
+  });
 
   if (failed > 0) {
     exit(1);

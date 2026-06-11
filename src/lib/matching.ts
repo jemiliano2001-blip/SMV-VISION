@@ -219,6 +219,59 @@ export function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignal
   return Math.max(0, score - penalty);
 }
 
+/** True si la entrada de catálogo es un plano ISO (por nombre de parte o path). */
+export function isIsoDrawingView(view: ToolcribActiveDrawingView): boolean {
+  return (
+    view.partNumber.toLowerCase().includes('.iso') ||
+    (view.sourcePath ?? '').toLowerCase().includes('.iso')
+  );
+}
+
+export interface LibraryDrawingMatch {
+  view: ToolcribActiveDrawingView | null;
+  score: number;
+}
+
+/**
+ * Selecciona el mejor plano del catálogo para una orden, con regla ISO-first:
+ * si algún plano ISO alcanza `MIN_BLUEPRINT_MATCH_SCORE`, gana sobre cualquier
+ * plano CAD aunque el CAD tenga score mayor (los ISO traen las dimensiones
+ * correctas para producción).
+ *
+ * El caller decide qué hacer con el resultado — un match solo es utilizable
+ * si `score >= MIN_BLUEPRINT_MATCH_SCORE`.
+ *
+ * @param signalsByDrawingId señales precomputadas por entrada de catálogo
+ *        (una vez por corrida) para evitar re-tokenizar al evaluar muchas
+ *        órdenes; si se omite, se calculan aquí.
+ */
+export function selectLibraryDrawingMatch(
+  orderSignals: PieceMatchSignals,
+  library: readonly ToolcribActiveDrawingView[],
+  signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
+): LibraryDrawingMatch {
+  let bestIsoView: ToolcribActiveDrawingView | null = null;
+  let bestIsoScore = 0;
+  let bestNonIsoView: ToolcribActiveDrawingView | null = null;
+  let bestNonIsoScore = 0;
+
+  for (const view of library) {
+    const signals = signalsByDrawingId?.get(view.drawingId) ?? extractLibrarySignals(view);
+    const score = scorePieceMatch(orderSignals, signals);
+    if (isIsoDrawingView(view)) {
+      if (score > bestIsoScore) { bestIsoScore = score; bestIsoView = view; }
+    } else {
+      if (score > bestNonIsoScore) { bestNonIsoScore = score; bestNonIsoView = view; }
+    }
+  }
+
+  const isoWins = bestIsoView !== null && bestIsoScore >= MIN_BLUEPRINT_MATCH_SCORE;
+  return {
+    view: isoWins ? bestIsoView : (bestNonIsoView ?? bestIsoView),
+    score: isoWins ? bestIsoScore : (bestNonIsoView ? bestNonIsoScore : bestIsoScore),
+  };
+}
+
 function calculatePieceMatchScore(orderPiece: string, blueprintPiece: string): number {
   const normalizedOrder = normalizePieceLabel(orderPiece);
   const normalizedBlueprint = normalizePieceLabel(blueprintPiece);

@@ -7,6 +7,8 @@ import {
   extractLibrarySignals,
   scorePieceMatch,
   selectBestBlueprintMatch,
+  isIsoDrawingView,
+  selectLibraryDrawingMatch,
   MIN_BLUEPRINT_MATCH_SCORE,
 } from '../matching';
 import type { ToolcribActiveDrawingView, BlueprintSpec } from '../../types';
@@ -366,5 +368,81 @@ describe('selectBestBlueprintMatch', () => {
       specs: [],
     });
     expect(result.spec).toBeNull();
+  });
+});
+
+describe('isIsoDrawingView / selectLibraryDrawingMatch', () => {
+  const makeView = (overrides: Partial<ToolcribActiveDrawingView>): ToolcribActiveDrawingView => ({
+    partId: 'p1',
+    partNumber: 'PART',
+    customer: 'SUPRAJIT',
+    description: '',
+    drawingId: 'd1',
+    revision: '01',
+    sourceType: 'network',
+    sourcePath: '',
+    pdfUrl: null,
+    effectiveFromUTC: null,
+    ...overrides,
+  });
+
+  it('detects ISO drawings by partNumber or sourcePath, case-insensitive', () => {
+    expect(isIsoDrawingView(makeView({ partNumber: 'PIVOT PIN.iso' }))).toBe(true);
+    expect(isIsoDrawingView(makeView({ sourcePath: '/planos/PIVOT PIN.ISO.pdf' }))).toBe(true);
+    expect(isIsoDrawingView(makeView({ partNumber: 'PIVOT PIN', sourcePath: '/planos/cad.pdf' }))).toBe(false);
+  });
+
+  it('prefers an ISO drawing at/above threshold over a higher-scoring CAD drawing', () => {
+    const cad = makeView({ drawingId: 'cad', partNumber: '90-1012-05' });
+    const iso = makeView({ drawingId: 'iso', partNumber: 'PIVOT PIN.iso' });
+    const orderSignals = extractOrderSignals('PIVOT PIN', '90-1012-05');
+
+    // Sanity: CAD scores higher than ISO on its own
+    const cadScore = scorePieceMatch(orderSignals, extractLibrarySignals(cad));
+    const isoScore = scorePieceMatch(orderSignals, extractLibrarySignals(iso));
+    expect(cadScore).toBeGreaterThan(isoScore);
+    expect(isoScore).toBeGreaterThanOrEqual(MIN_BLUEPRINT_MATCH_SCORE);
+
+    const result = selectLibraryDrawingMatch(orderSignals, [cad, iso]);
+    expect(result.view?.drawingId).toBe('iso');
+    expect(result.score).toBe(isoScore);
+  });
+
+  it('falls back to the best CAD drawing when no ISO reaches the threshold', () => {
+    const cad = makeView({ drawingId: 'cad', partNumber: '90-1012-05' });
+    const iso = makeView({ drawingId: 'iso', partNumber: 'UNRELATED THING.iso' });
+    const orderSignals = extractOrderSignals('PIVOT PIN', '90-1012-05');
+
+    const result = selectLibraryDrawingMatch(orderSignals, [cad, iso]);
+    expect(result.view?.drawingId).toBe('cad');
+    expect(result.score).toBeGreaterThanOrEqual(MIN_BLUEPRINT_MATCH_SCORE);
+  });
+
+  it('returns null view and score 0 for an empty library', () => {
+    const orderSignals = extractOrderSignals('PIVOT PIN', '90-1012-05');
+    const result = selectLibraryDrawingMatch(orderSignals, []);
+    expect(result.view).toBeNull();
+    expect(result.score).toBe(0);
+  });
+
+  it('returns the best candidate even below threshold (caller enforces the cutoff)', () => {
+    const weak = makeView({ drawingId: 'weak', partNumber: 'TUERCA HEXAGONAL' });
+    const orderSignals = extractOrderSignals('PIEZA TOTALMENTE DISTINTA');
+    const result = selectLibraryDrawingMatch(orderSignals, [weak]);
+    expect(result.score).toBeLessThan(MIN_BLUEPRINT_MATCH_SCORE);
+  });
+
+  it('produces identical results with and without precomputed signals', () => {
+    const views = [
+      makeView({ drawingId: 'a', partNumber: '90-1012-05' }),
+      makeView({ drawingId: 'b', partNumber: 'PIVOT PIN.iso' }),
+    ];
+    const signalsById = new Map(views.map((v) => [v.drawingId, extractLibrarySignals(v)]));
+    const orderSignals = extractOrderSignals('PIVOT PIN', '90-1012-05');
+
+    const withMap = selectLibraryDrawingMatch(orderSignals, views, signalsById);
+    const withoutMap = selectLibraryDrawingMatch(orderSignals, views);
+    expect(withMap.view?.drawingId).toBe(withoutMap.view?.drawingId);
+    expect(withMap.score).toBe(withoutMap.score);
   });
 });

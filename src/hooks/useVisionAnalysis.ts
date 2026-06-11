@@ -27,6 +27,7 @@ import {
   extractOrderSignals,
   scorePieceMatch,
   selectBestBlueprintMatch,
+  selectLibraryDrawingMatch,
 } from '../lib/matching';
 import { mergeGroupedOrders, parseOrdersResponse, validateOrderPdfName } from '../lib/orderMerge';
 import { consolidateHotStamps, isHotStampCatalogEntry, isHotStampPiece } from '../lib/hotStamp';
@@ -677,29 +678,8 @@ No inventes información.` },
           if (hasManualMatch) continue;
 
           // ISO-first: si algún ISO supera el umbral, gana sobre cualquier plano CAD.
-          let bestIsoView: ToolcribActiveDrawingView | null = null;
-          let bestIsoScore = 0;
-          let bestNonIsoView: ToolcribActiveDrawingView | null = null;
-          let bestNonIsoScore = 0;
-
-          for (const view of library) {
-            const score = scorePieceMatch(orderSignals, librarySignals.get(view.drawingId)!);
-            const isIso =
-              view.partNumber.toLowerCase().includes('.iso') ||
-              (view.sourcePath ?? '').toLowerCase().includes('.iso');
-            if (isIso) {
-              if (score > bestIsoScore) { bestIsoScore = score; bestIsoView = view; }
-            } else {
-              if (score > bestNonIsoScore) { bestNonIsoScore = score; bestNonIsoView = view; }
-            }
-          }
-
-          const bestView = (bestIsoView && bestIsoScore >= MIN_BLUEPRINT_MATCH_SCORE)
-            ? bestIsoView
-            : (bestNonIsoView ?? bestIsoView);
-          const bestScore = (bestIsoView && bestIsoScore >= MIN_BLUEPRINT_MATCH_SCORE)
-            ? bestIsoScore
-            : (bestNonIsoView ? bestNonIsoScore : bestIsoScore);
+          const { view: bestView, score: bestScore } =
+            selectLibraryDrawingMatch(orderSignals, library, librarySignals);
 
           log.debug(
             '[smv-vision][match]',

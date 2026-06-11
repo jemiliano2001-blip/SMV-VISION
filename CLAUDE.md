@@ -11,8 +11,9 @@ npm run lint         # Type-check with tsc --noEmit
 npm test             # Run Vitest (single pass)
 npm run test:watch   # Vitest in watch mode
 npm run toolcrib:bootstrap  # Populate Firestore catalog (see script docs below)
-npm run sync:odoo    # Sync Odoo sale orders → Firestore (odooSaleOrders)
+npm run sync:odoo    # Sync Odoo sale orders → Firestore (odooSaleOrders + workOrders + syncMeta)
 npm run sync:odoo:dry  # Dry-run of the Odoo sync (no writes)
+npm run sync:odoo:install-task  # Register Windows scheduled task "SMV Odoo Sync" (hourly 7:00–19:00 weekdays)
 npm run toolcrib:dedupe          # Detect duplicate drawings (dry-run)
 npm run toolcrib:dedupe:execute  # Remove duplicate drawings (writes to Firestore)
 npm test -- matching             # Run a single test file by name pattern
@@ -29,6 +30,8 @@ npx tsx scripts/toolcribBootstrap.ts --scan=./TOOL\ CRIB --customer=SUPRAJIT
 # Production write (requires GOOGLE_APPLICATION_CREDENTIALS or --credentials=)
 npx tsx scripts/toolcribBootstrap.ts --inventory=./inventory.json --credentials=./serviceAccount.json
 ```
+
+**Odoo sync** (`scripts/syncOdoo.ts`): the single source of truth for Odoo data. Each run upserts `odooSaleOrders`, creates/updates/archives `workOrders` from the order lines (new OTs are born with `dueDate = otDate + 14 días` and a Tool Crib drawing matched via `selectLibraryDrawingMatch` — no Gemini involved), and overwrites `syncMeta/odoo` with the run status. Scheduled execution: `scripts/runOdooSync.ps1` (wrapper, logs to `logs/syncOdoo.log`) registered by `npm run sync:odoo:install-task` as the Windows task "SMV Odoo Sync". There is **no** Cloud Function for this — `syncSuprajitOrders` was retired on 2026-06-11 (see `docs/superpowers/specs/2026-06-11-odoo-sync-scheduled-design.md`).
 
 ## Environment variables
 
@@ -118,6 +121,7 @@ Key modules:
 | `workOrders` | Production work orders — deduped by `SO::parte` key |
 | `torneros` | Lathe operators (`name`, `active`) |
 | `odooSaleOrders` | Odoo sale orders synced by `scripts/syncOdoo.ts` — read-only from the app |
+| `syncMeta` | Single doc `odoo` with last-sync status (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage?`), written by `scripts/syncOdoo.ts` on every run (success and failure); read by the status chip in `OdooOrdersPanel` via `useSyncMeta` |
 | `dailyMetricSnapshots` | One document per day keyed by ISO date; written by `useDailySnapshot` on first app load |
 
 Security rules (`firestore.rules`): any authenticated user can read/write. Data validation lives in TypeScript validators, not in rules.

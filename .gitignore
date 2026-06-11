@@ -9,3 +9,4 @@ coverage/
 .secrets/
 *serviceAccount*.json
 public/pdfjs-wasm/
+.claude/

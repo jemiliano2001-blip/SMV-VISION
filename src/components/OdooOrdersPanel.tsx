@@ -8,7 +8,8 @@ import {
   type OdooOrderView,
   type ProductionStatus,
 } from '../lib/firebase/odooOrders';
-import { formatAgeDays, getOrderAgeDays } from '../lib/age';
+import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
+import { useSyncMeta } from '../hooks/useSyncMeta';
 
 function exportPdf(orders: OdooOrderView[], productionMap: Map<string, ProductionStatus>): void {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
@@ -113,6 +114,8 @@ export function OdooOrdersPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { meta } = useSyncMeta();
+
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -163,6 +166,20 @@ export function OdooOrdersPanel() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {meta && (
+            <div
+              className={`font-mono text-[10px] uppercase tracking-widest px-3 py-2 border-2 ${
+                meta.status === 'error'
+                  ? 'border-danger/50 text-danger'
+                  : 'border-line text-ink-dim'
+              }`}
+              title={meta.status === 'error' ? meta.errorMessage : undefined}
+            >
+              {meta.status === 'error'
+                ? `ERROR SYNC · ${formatRelativeTime(meta.lastSyncAt)}`
+                : `SYNC · ${formatRelativeTime(meta.lastSyncAt)} · ${meta.ordersProcessed} ÓRDENES`}
+            </div>
+          )}
           <button
             onClick={() => exportPdf(orders, productionMap)}
             disabled={loading || orders.length === 0}

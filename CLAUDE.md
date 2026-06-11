@@ -30,6 +30,15 @@ npx tsx scripts/toolcribBootstrap.ts --scan=./TOOL\ CRIB --customer=SUPRAJIT
 npx tsx scripts/toolcribBootstrap.ts --inventory=./inventory.json --credentials=./serviceAccount.json
 ```
 
+**Cloud Functions** (`functions/` — a separate npm package, Node 24, with its own `package.json`/`tsconfig`/eslint; do not run these from the repo root):
+```bash
+npm --prefix functions run build    # tsc → functions/lib
+npm --prefix functions run lint     # eslint (google config) — also runs in predeploy
+npm --prefix functions run serve    # build + firebase emulators (functions only)
+npm --prefix functions run deploy   # firebase deploy --only functions
+npm --prefix functions run logs     # firebase functions:log
+```
+
 ## Environment variables
 
 Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all Firebase vars are optional (their absence disables audit trail and Tool Crib library without breaking the main flow).
@@ -44,6 +53,8 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
 | `DISABLE_HMR` | No | Set to `true` to disable Vite HMR (used in AI Studio) |
 | `ODOO_URL` / `ODOO_DB` / `ODOO_USER` / `ODOO_API_KEY` | Scripts only | Odoo 15 JSON-RPC sync — never exposed to the browser |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Scripts only | Firebase Admin SDK for `syncOdoo.ts` |
+| `ODOO_URL` / `ODOO_DB` / `ODOO_USER` | Functions only | Non-secret Odoo config for the `syncSuprajitOrders` Cloud Function — `functions/.env` (git-ignored, baked into the deployed env at deploy time). Same var names as the script. |
+| `ODOO_API_KEY` (secret) | Functions only | Odoo API key as a **Secret Manager** secret via `defineSecret` (set with `firebase functions:secrets:set ODOO_API_KEY`) — never in `.env`, never committed |
 
 ## Architecture
 
@@ -88,6 +99,8 @@ Key modules:
 
 **Torneros** (lathe operators): managed via the `torneros` Firestore collection. `WorkOrdersPanel` exposes a side drawer for CRUD. Assignment tracked per order via `assignedToTornero` / `deliveredToTornero`.
 
+**UI decomposition** (`src/components/WorkOrders/`): `WorkOrdersPanel.tsx` is the orchestrator (state + handlers) and delegates rendering to presentational children — `WorkOrdersBoard` (kanban, drag-and-drop via `@hello-pangea/dnd`), `WorkOrdersList` (list mode), `WorkOrderCard` (single order), `WorkOrdersSidebar` (tornero/metrics drawer). Shared labels/colors live in `WorkOrders/utils.ts` (`STATUS_LABELS`, `COLUMN_ACCENT`). The children are stateless — every mutation is a callback prop back into the panel. Kanban drag is disabled when bulk-select mode is on or the `pendiente` column is sorted by anything other than `manual` (which reorders via `sortIndex`).
+
 ### Firebase layer (`src/lib/firebase/`)
 
 All Firebase functions use a **result type** — they never throw:
@@ -101,11 +114,21 @@ Key modules:
 - `toolcrib.ts` — Read-only catalog queries (`listActiveDrawingViews`, `getActiveDrawingForPart`, `getDrawingById`) and `recordToolcribPrintLog` (write). Auth UID is resolved inside the writer — callers cannot spoof it.
 - `workOrders.ts` — Full CRUD for `workOrders` and `torneros` collections.
 - `odooOrders.ts` — Read-only queries for `odooSaleOrders` (`listOrdersToInvoice`). Same result-type contract; writing is done only by `scripts/syncOdoo.ts`.
+- `syncMeta.ts` — `subscribeToOdooSyncMeta(cb)` is a live `onSnapshot` on `syncMeta/odoo` (lastSyncAt / ordersProcessed / status). Calls `cb(null)` when Firebase is unconfigured, the doc is missing, or `serverTimestamp()` hasn't resolved yet. Consumed by the `useSyncMeta` hook to render the sync-status chip in `OdooOrdersPanel`'s header.
 - `metricsSnapshots.ts` — Reads/writes `dailyMetricSnapshots` collection. `buildSnapshotData` is pure; `writeSnapshot` / `getTodaySnapshot` hit Firestore. Called by `useDailySnapshot` (fire-and-forget, errors never surfaced to UI).
 - `analysisRuns.ts` — Fire-and-forget audit log for each analysis run.
 - `auth.ts` — Google and email/password sign-in; `useFirebaseUser()` hook (backed by `useSyncExternalStore`). Google sign-in uses redirect flow on localhost in DEV, popup flow in production.
 - `env.ts` — Reads and caches Firebase config from `import.meta.env`. `isToolcribDebugUnauthAllowed()` is gated to `DEV` only.
 - `toolcribValidators.ts` / `workOrderValidators.ts` / `validators.ts` — Runtime shape normalization for all Firestore documents.
+
+### Cloud Functions (`functions/`)
+
+A standalone Firebase Functions package (Gen-2, Node 24) deployed separately from the Vite app. It uses `firebase-admin` (server SDK) and `odoo-xmlrpc`, not the client SDK — its code never ships to the browser.
+
+- `syncSuprajitOrders` (`functions/src/index.ts`) — Scheduled (`onSchedule`, every 30 min, `retryCount: 0`, 300s timeout, 512MiB, `secrets: [ODOO_API_KEY]`). It is the **automatic equivalent of the manual `scripts/syncOdoo.ts`** and replicates its proven logic: `search_read` on `sale.order` (partner `ilike "SUPRAJIT"`), then bulk-fetch `sale.order.line` + `stock.picking` + `stock.move`, compute pending qty per line from the deliveries, and write **both** collections — headers to `odooSaleOrders` (doc id = order name with `/`→`_`, `toInvoice` flag, prices stripped) and one work order per pending line to `workOrders` (full schema, deduped by `SO::parte`, archiving OTs whose SO is no longer to-invoice / generic / fully delivered). After each run it writes a heartbeat to `syncMeta/odoo` (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage`); the error handler also writes that doc and swallows its own failure so the function never hard-crashes.
+- The `odoo-xmlrpc` library's `execute_kw(model, method, params, cb)` takes only **4 args** and prepends `[db, uid, password, model, method]` then spreads `params`. For `search_read`, `params` must be `[[domain], {fields, limit, order}]` (positional args list + kwargs). See `executeKw` in the function. The dedup helper (`buildDedupeKey`/`normalizePieceLabel`) is **copied** into the function because `functions/` is a separate package and can't import from `src/`.
+
+**Two Odoo sync paths, same shape now**: `scripts/syncOdoo.ts` (manual, `npm run sync:odoo`, Firebase Admin via service-account JSON) and the `syncSuprajitOrders` Cloud Function (automatic) write the same data to `odooSaleOrders` + `workOrders`. Both read `ODOO_USER` (unified). Keep their write shapes in sync — if you change the OT payload or dedup logic in one, change the other. The function gets its creds from `functions/.env` (URL/DB/USER) + Secret Manager (`ODOO_API_KEY`); the script reads everything from root `.env.local` plus `FIREBASE_SERVICE_ACCOUNT_PATH`.
 
 ### Firestore collections
 
@@ -119,6 +142,7 @@ Key modules:
 | `torneros` | Lathe operators (`name`, `active`) |
 | `odooSaleOrders` | Odoo sale orders synced by `scripts/syncOdoo.ts` — read-only from the app |
 | `dailyMetricSnapshots` | One document per day keyed by ISO date; written by `useDailySnapshot` on first app load |
+| `syncMeta` | Sync heartbeats. `syncMeta/odoo` is written by the `syncSuprajitOrders` Cloud Function each run; read live by `subscribeToOdooSyncMeta` |
 
 Security rules (`firestore.rules`): any authenticated user can read/write. Data validation lives in TypeScript validators, not in rules.
 
@@ -132,8 +156,9 @@ Receives `rasterize-normalize` messages. Uses `pdfjsLib` with `disableWorker: tr
 
 - `main.tsx` wraps `<App>` in `<AuthGate>` and `<WorkOrdersProvider>`.
 - `WorkOrdersProvider` (`src/contexts/WorkOrdersContext.tsx`) — Holds a single `onSnapshot` subscription to `workOrders` (archived == false), shared by `useDashboardSummary` and `WorkOrdersPanel`. Eliminates the double read that previously occurred when both components called `listWorkOrders()` independently. Exposes work orders and torneros via `useWorkOrdersContext()`. Also calls `useDailySnapshot` to write one metric snapshot per day. Must be placed inside `<AuthGate>` so the listener always starts with an active session.
-- `AuthGate` (`src/components/AuthGate.tsx`) — Shows login screen if Firebase is configured and user is not authenticated. Passes through if Firebase is unconfigured or `isBypassed`. The "bypass" button enables unauthenticated access (audit logs will not be recorded).
+- `AuthGate` (`src/components/AuthGate.tsx`) — Shows login screen if Firebase is configured and user is not authenticated. Passes through if Firebase is unconfigured or `isBypassed`. The "Omitir Login (Modo Debug)" bypass button (and its dev-mode notice) renders **only when `import.meta.env.DEV`** — in production builds there is no way to skip auth.
 - `AppShell` + `NavRail` (`src/components/shell/`) — Fixed left rail + full-viewport content area. `NavRail` receives `DashboardCounts` from `useDashboardSummary` for badge display.
+- `ReportView.tsx` — The **Reporte** (analysis) view. Renders the matched-order list with inline editing (cantidad), blueprint preview modal, PDF export, and the Tool Crib attach panel. Extracted from `App.tsx`; receives the full `useVisionAnalysis` return value and `DashboardSummary` as props. Stays mounted (hidden) in `App.tsx` so cached analysis state is preserved across tab switches.
 - `WorkOrdersPanel` (`src/components/WorkOrdersPanel.tsx`) — Kanban/list board with alert-bar filters, search, and a side drawer for tornero management + production metrics.
 - `ToolcribLibraryPanel` (`src/components/ToolcribLibraryPanel.tsx`) — Reads `listActiveDrawingViews` on mount, renders a searchable list with Print and Attach actions. Deduplication via `attachedDrawingIds` prop (Set of `drawingId`).
 
@@ -167,6 +192,10 @@ The Vite build splits vendor code into named chunks to avoid one giant bundle: `
 - `src/lib/log.ts` — Dev-gated logger. `log.debug`/`log.info` only emit when `import.meta.env.DEV` is true; `log.warn`/`log.error` always emit. Use `log.*` instead of `console.*` for match/pipeline traces.
 - `src/lib/imageProcessing.ts` — `isValidBoundingBox`, `cropIsometricView`, `cropToBoxRaw`. Bounding-box validation is pure (testable in Node); the crop functions require a browser Canvas (not testable in Node without jsdom).
 - `src/components/charts/BarChart.tsx` / `LineChart.tsx` — Pure SVG chart components used by `InicioView`. No external charting library; they accept typed data props and apply the project's CSS token colors.
+- `src/lib/gemini.ts` — Low-level Gemini utilities shared across the pipeline: `callWithRetry` (3 attempts, 1s/2s exponential backoff), `preparePdfPart` (PDF → inline `application/pdf` part), `prepareImagePart` (JPEG data URL → inline `image/jpeg` part). All Gemini API calls in `useVisionAnalysis` go through `callWithRetry` from here.
+- `src/lib/blueprintParsers.ts` — Parses raw Gemini Vision JSON into typed `BlueprintSpec[]`. `parseBoundingBox` validates the 4-element array; `parseBlueprintResponse` handles both single-object and array responses and skips malformed entries.
+- `src/lib/workOrders/kanbanDrop.ts` — Pure function `resolveKanbanDrop(result, orders)` that converts a `@hello-pangea/dnd` `DropResult` into a typed `KanbanDropResult` union (`noop | reorder | transition`). No side effects — `WorkOrdersBoard` calls this and dispatches the appropriate mutation.
+- `src/lib/metricsBaseline.ts` — Persists and compares `AnalysisMetrics` snapshots in `localStorage` (key `smvVisionMetricsBaselineV2`). Used by the dev-mode metrics panel to flag performance regressions between analysis runs.
 
 ### Path alias
 

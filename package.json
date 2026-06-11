@@ -14,6 +14,7 @@
     "toolcrib:bootstrap": "tsx scripts/toolcribBootstrap.ts",
     "sync:odoo": "tsx scripts/syncOdoo.ts",
     "sync:odoo:dry": "tsx scripts/syncOdoo.ts --dry-run",
+    "sync:odoo:install-task": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installSyncTask.ps1",
     "toolcrib:dedupe": "tsx scripts/toolcribDedupeDrawings.ts",
     "toolcrib:dedupe:execute": "tsx scripts/toolcribDedupeDrawings.ts --execute"
   },

@@ -1,4 +1,4 @@
-# Upgrade Cloud Functions: firebase-functions v4→v7, firebase-admin v11→v14, Node 20→22 — 2026-07-07
+# Upgrade Cloud Functions: firebase-functions v4→v7, firebase-admin v11→v13, Node 20→22 — 2026-07-07
 
 ## Contexto
 
@@ -16,9 +16,17 @@ de Odoo, ni las reglas de Firestore/Storage.
 ## Decisiones (confirmadas por el usuario)
 
 - **Versión objetivo**: directo a la última — `firebase-functions ^7.2.5`,
-  `firebase-admin ^14.1.0`, `engines.node: "22"`. Se descarta el paso intermedio
-  conservador (v5/v6) porque el único breaking change real que nos afecta (namespace
-  legacy de Admin SDK) es el mismo cambio requerido en cualquier punto intermedio.
+  `engines.node: "22"`. Se descarta el paso intermedio conservador (v5/v6) porque el
+  único breaking change real que nos afecta (namespace legacy de Admin SDK) es el mismo
+  cambio requerido en cualquier punto intermedio.
+- **firebase-admin: `^13.10.0`, no v14.** Corrección post-implementación (descubierta en
+  Task 1 al correr `npm install`): `firebase-functions@7.2.5` (y su release candidate
+  `7.2.6-rc.0`, la última versión publicada) declaran
+  `peerDependencies: { "firebase-admin": "^11.10.0 || ^12.0.0 || ^13.0.0" }` — v14 está
+  fuera de rango. No existe ninguna versión de `firebase-functions` publicada que soporte
+  `firebase-admin` v14 todavía. `^13.10.0` es la última v13 disponible; sigue siendo un
+  salto grande desde v11.11.1 (misma migración de API modular descrita abajo), corre sin
+  problema bajo Node 22, y evita el conflicto de peer dependencies por completo.
 - **Verificación antes de producción**: emulador local (`firebase emulators:start
   --only functions`) invocando `triggerOdooSync` contra el emulador, además de
   `build`/`npm ci`. Se prefiere esto sobre "solo build" porque el rewrite de

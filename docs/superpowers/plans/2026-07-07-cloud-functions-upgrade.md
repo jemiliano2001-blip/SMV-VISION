@@ -2,15 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade `functions/` from firebase-functions v4.9.0 / firebase-admin v11.11.1 / Node 20 to firebase-functions ^7.2.5 / firebase-admin ^14.1.0 / Node 22, migrating the Admin SDK initialization off the legacy namespace API that v14 removes, and verify the result locally before deploying.
+**Goal:** Upgrade `functions/` from firebase-functions v4.9.0 / firebase-admin v11.11.1 / Node 20 to firebase-functions ^7.2.5 / firebase-admin ^13.10.0 / Node 22, migrating the Admin SDK initialization off the legacy namespace API that admin v12+ deprecates and v14 (not reachable yet — see Global Constraints) removes outright, and verify the result locally before deploying.
 
 **Architecture:** No new components. Three coupled edits to existing files (`functions/package.json`, `functions/src/index.ts`, `functions/tsconfig.json`), each verified by a build/install check, followed by a runtime smoke test against a local Firestore emulator, an `npm audit` pass, and a confirmation-gated production deploy.
 
-**Tech Stack:** firebase-functions v7, firebase-admin v14 (modular `firebase-admin/app` / `firebase-admin/firestore` API), TypeScript 5.8, Node 22, Firebase CLI emulators.
+**Tech Stack:** firebase-functions v7, firebase-admin v13 (modular `firebase-admin/app` / `firebase-admin/firestore` API), TypeScript 5.8, Node 22, Firebase CLI emulators.
 
 ## Global Constraints
 
-- Target versions (exact, from spec): `firebase-functions: "^7.2.5"`, `firebase-admin: "^14.1.0"`, `engines.node: "22"`.
+- Target versions (exact, from spec): `firebase-functions: "^7.2.5"`, `firebase-admin: "^13.10.0"`, `engines.node: "22"`.
+- **Do not use firebase-admin v14.** `firebase-functions@7.2.5` (the latest published version — confirmed no `8.x` and no newer `7.x` exists beyond the `7.2.6-rc.0` release candidate, which carries the same constraint) declares `peerDependencies: { "firebase-admin": "^11.10.0 || ^12.0.0 || ^13.0.0" }`. Installing v14 alongside it produces an `ERESOLVE` conflict that also fails `npm ci` — this was hit and confirmed during Task 1's first attempt. `^13.10.0` is the newest compatible version.
 - `odoo-xmlrpc` stays at `^1.0.8` — it has no Node engine restriction; do not touch it.
 - No changes outside `functions/` — do not touch root `package.json`, `src/`, `firestore.rules`, `storage.rules`, or any other module.
 - No changes to sync business logic (dedup keys, batching, `GENERIC_SERVICE_CODE`, work-order archiving rules, etc.) — this is a dependency/runtime migration only.
@@ -27,7 +28,7 @@
 - Modify (generated): `functions/package-lock.json`
 
 **Interfaces:**
-- Produces: `functions/node_modules` containing `firebase-admin@14.1.x` and `firebase-functions@7.2.x`, with `functions/package-lock.json` in sync (verified via `npm ci`). Task 2 depends on these packages being installed so `tsc` can type-check against the new modular API surface.
+- Produces: `functions/node_modules` containing `firebase-admin@13.10.x` and `firebase-functions@7.2.x`, with `functions/package-lock.json` in sync (verified via `npm ci`). Task 2 depends on these packages being installed so `tsc` can type-check against the new modular API surface.
 
 - [ ] **Step 1: Edit `functions/package.json`**
 
@@ -39,7 +40,7 @@ Change the `engines` and `dependencies` blocks (leave `scripts`, `devDependencie
   },
   "main": "lib/index.js",
   "dependencies": {
-    "firebase-admin": "^14.1.0",
+    "firebase-admin": "^13.10.0",
     "firebase-functions": "^7.2.5",
     "odoo-xmlrpc": "^1.0.8"
   },
@@ -56,9 +57,9 @@ Run: `npm ls --prefix functions firebase-admin firebase-functions`
 Expected output shows the new majors, e.g.:
 ```
 smv-vision-functions@ D:\proyectos_code\SMV\SMV-VISION\functions
-+-- firebase-admin@14.1.x
++-- firebase-admin@13.10.x
 `-- firebase-functions@7.2.x
-  `-- firebase-admin@14.1.x deduped
+  `-- firebase-admin@13.10.x deduped
 ```
 
 - [ ] **Step 4: Clean-install check (mirrors what Cloud Build runs on deploy)**
@@ -87,7 +88,7 @@ git commit -m "chore(functions): bump firebase-functions to v7, firebase-admin t
 - Modify: `functions/src/index.ts:831` (inside `triggerOdooSync`)
 
 **Interfaces:**
-- Consumes: `firebase-admin@14.1.x` installed by Task 1 (the legacy `admin.firestore()` namespace call this task removes no longer exists in v14 — this task is not optional).
+- Consumes: `firebase-admin@13.10.x` installed by Task 1. The legacy namespace API (`admin.firestore()`) this task removes is deprecated as of firebase-admin v12+ (still functional in v13, but Firebase's own migration guidance is to move to the modular API now — it's removed outright in v14, which this project will adopt once firebase-functions supports it).
 - Produces: `db: Firestore` obtained via `getFirestore()` in both handlers, same type (`Firestore` from `firebase-admin/firestore`, already imported) and same usage as before — no change to any call site that uses `db` afterward (`upsertSaleOrders`, `upsertWorkOrders`, `writeSyncMeta` all keep their existing `Firestore` parameter type).
 
 - [ ] **Step 1: Replace the import block**
@@ -219,7 +220,7 @@ git commit -m "chore(functions): bump tsconfig target to es2022 for Node 22"
 
 **Interfaces:**
 - Consumes: `functions/lib/index.js` built by Task 2/3 (specifically its module-scope `if (getApps().length === 0) { initializeApp(); }` line, and the `getFirestore()` call now used inside both handlers).
-- Produces: a pass/fail confirmation that `initializeApp()`/`getFirestore()` work at runtime under firebase-admin v14, without needing real Odoo credentials or touching production Firestore. No other task depends on this task's output — it's a verification gate before Task 5/6.
+- Produces: a pass/fail confirmation that `initializeApp()`/`getFirestore()` work at runtime under firebase-admin v13's modular API, without needing real Odoo credentials or touching production Firestore. No other task depends on this task's output — it's a verification gate before Task 5/6.
 
 This does **not** invoke Odoo or the real `runSync` pipeline — per the spec, that's out of scope for this check. It only exercises the exact two API calls this migration changed: `initializeApp()`/`getApps()` (executed automatically when the compiled module is `require`d, since that line runs at module scope) and `getFirestore()` (called explicitly below, the same call both handlers now make).
 
@@ -341,7 +342,7 @@ If nothing changed, skip the commit.
 
 - [ ] **Step 1: Present the deploy summary and ask for confirmation**
 
-Tell the user: which versions are being deployed (firebase-functions ^7.2.5, firebase-admin ^14.1.0, Node 22), that the emulator smoke test passed, and the final `npm audit` count. Ask them to confirm before deploying.
+Tell the user: which versions are being deployed (firebase-functions ^7.2.5, firebase-admin ^13.10.0, Node 22), that the emulator smoke test passed, and the final `npm audit` count. Ask them to confirm before deploying.
 
 - [ ] **Step 2: Deploy**
 

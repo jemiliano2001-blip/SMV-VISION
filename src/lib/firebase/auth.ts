@@ -7,21 +7,19 @@
  * - El hook `useFirebaseUser` es la única forma permitida de que la UI
  *   consuma estado de autenticación: centraliza el suscriptor a
  *   `onAuthStateChanged` y evita múltiples listeners en paralelo.
- * - Errores de red o de cancelación de pop-up NO deben romper la app:
- *   se normalizan a un tipo de retorno `{ ok, error? }` para que el UI
- *   pueda mostrar feedback constructivo sin throws que escapen a React.
+ * - Errores de red NO deben romper la app: se normalizan a un tipo de
+ *   retorno `{ ok, error? }` para que el UI pueda mostrar feedback
+ *   constructivo sin throws que escapen a React.
+ * - Único proveedor: Email/Password. El flujo de Google se eliminó a
+ *   propósito (app privada sin allowlist de dominios).
  */
 
 import { useEffect, useSyncExternalStore } from 'react';
 import {
-  GoogleAuthProvider,
   browserLocalPersistence,
   getAuth,
-  getRedirectResult,
   onAuthStateChanged,
   setPersistence,
-  signInWithRedirect,
-  signInWithPopup,
   signInWithEmailAndPassword,
   signOut,
   type Auth,
@@ -39,40 +37,13 @@ export interface AuthState {
 
 export type SignInResult =
   | { ok: true; user: User }
-  | { ok: false; reason: 'redirecting' }
-  | { ok: false; reason: 'not-configured' | 'cancelled' | 'error'; message?: string };
+  | { ok: false; reason: 'not-configured' | 'error'; message?: string };
 
 export type SignOutResult =
   | { ok: true }
   | { ok: false; reason: 'not-configured' | 'error'; message?: string };
 
 let cachedAuth: Auth | null | undefined;
-
-let redirectResultConsumed = false;
-
-function consumeRedirectResult(auth: Auth): void {
-  if (redirectResultConsumed || typeof window === 'undefined') {
-    return;
-  }
-  redirectResultConsumed = true;
-
-  void getRedirectResult(auth)
-    .then((result) => {
-      if (result?.user) {
-        console.info('[smv-vision][auth] redirect result recibido', {
-          uid: result.user.uid,
-          email: result.user.email,
-        });
-      } else if (import.meta.env.DEV) {
-        console.info('[smv-vision][auth] sin redirect result pendiente');
-      }
-    })
-    .catch((error: unknown) => {
-      const code = extractErrorCode(error);
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[smv-vision][auth] getRedirectResult falló', { code, message, error });
-    });
-}
 
 function resolveAuth(): Auth | null {
   if (cachedAuth !== undefined) {
@@ -94,7 +65,6 @@ function resolveAuth(): Auth | null {
     setPersistence(cachedAuth, browserLocalPersistence).catch((error: unknown) => {
       console.warn('[smv-vision][auth] setPersistence falló', error);
     });
-    consumeRedirectResult(cachedAuth);
   }
 
   return cachedAuth;
@@ -178,59 +148,6 @@ export async function signInWithEmailPassword(
       reason: 'error',
       message: code ? `${code}: ${message}` : message,
     };
-  }
-}
-
-export async function signInWithGoogle(): Promise<SignInResult> {
-  const auth = resolveAuth();
-  if (!auth) {
-    return { ok: false, reason: 'not-configured' };
-  }
-
-  const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: 'select_account' });
-
-  const useRedirectFlow =
-    typeof window !== 'undefined'
-    && import.meta.env.DEV
-    && (
-      window.location.hostname === 'localhost'
-      || window.location.hostname === '127.0.0.1'
-      || window.location.hostname === '::1'
-    );
-
-  if (useRedirectFlow) {
-    try {
-      console.info('[smv-vision][auth] iniciando signInWithRedirect', {
-        authDomain: auth.config.authDomain,
-        origin: window.location.origin,
-      });
-      await signInWithRedirect(auth, provider);
-      return { ok: false, reason: 'redirecting' };
-    } catch (error: unknown) {
-      const code = extractErrorCode(error);
-      const message = error instanceof Error ? error.message : 'Error desconocido';
-      console.error('[smv-vision][auth] signInWithRedirect falló', { code, message, error });
-      return { ok: false, reason: 'error', message: code ? `${code}: ${message}` : message };
-    }
-  }
-
-  try {
-    console.info('[smv-vision][auth] iniciando signInWithPopup');
-    const credential = await signInWithPopup(auth, provider);
-    return { ok: true, user: credential.user };
-  } catch (error: unknown) {
-    const code = extractErrorCode(error);
-    if (
-      code === 'auth/popup-closed-by-user' ||
-      code === 'auth/cancelled-popup-request' ||
-      code === 'auth/user-cancelled'
-    ) {
-      return { ok: false, reason: 'cancelled' };
-    }
-    const message = error instanceof Error ? error.message : 'Error desconocido';
-    console.error('[smv-vision][auth] signInWithPopup falló', { code, message, error });
-    return { ok: false, reason: 'error', message: code ? `${code}: ${message}` : message };
   }
 }
 

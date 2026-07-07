@@ -11,6 +11,7 @@ export interface PlanoOtStamp {
   soNumber: string;
   cantidad: string;
   fecha: string;
+  notas?: string;
 }
 
 function dataUrlToUint8Array(dataUrl: string): Uint8Array {
@@ -41,33 +42,74 @@ export async function stampPlanoOt(
   const page = pages[0];
   const { height } = page.getSize();
 
-  const lines = [
-    `SO: ${oneLine(stamp.soNumber) || '—'}`,
-    `CANT: ${oneLine(stamp.cantidad) || '—'}`,
-    `FECHA: ${oneLine(stamp.fecha) || '—'}`,
-  ];
-  const fontSize = 11;
-  const padding = 6;
-  const lineHeight = fontSize + 4;
-  const boxW = Math.max(
-    ...lines.map((l) => font.widthOfTextAtSize(l, fontSize)),
-  ) + padding * 2;
-  const boxH = lineHeight * lines.length + padding;
+  const fontSize = 16;
+  const padding = 10;
   const margin = 12;
-  const top = height - margin;
+  const availableWidth = page.getWidth() - margin * 2;
+  
+  const soText = `SO: ${oneLine(stamp.soNumber) || '—'}`;
+  const cantText = `CANT: ${oneLine(stamp.cantidad) || '—'}`;
+  const fechaText = `FECHA: ${oneLine(stamp.fecha) || '—'}`;
+  const notasText = stamp.notas && stamp.notas.trim() !== '' ? `NOTAS: ${oneLine(stamp.notas)}` : null;
 
-  // Fondo blanco con borde negro para legibilidad sobre el dibujo.
+  const lineHeight = fontSize + 6;
+  // Si hay notas, usamos 2 líneas de alto, si no, 1.
+  const linesCount = notasText ? 2 : 1;
+  const boxH = (lineHeight * linesCount) + padding * 2;
+
+  // Ampliar el tamaño de la página para que el recuadro NUNCA obstruya el dibujo
+  const extraHeight = boxH + margin * 2;
+  page.setSize(page.getWidth(), height + extraHeight);
+  
+  const newHeight = height + extraHeight;
+  const top = newHeight - margin;
+
+  // Fondo blanco para TODA la franja nueva
   page.drawRectangle({
-    x: margin, y: top - boxH, width: boxW, height: boxH,
-    color: rgb(1, 1, 1), borderColor: rgb(0, 0, 0), borderWidth: 1.5,
+    x: 0, y: height, width: page.getWidth(), height: extraHeight,
+    color: rgb(1, 1, 1),
   });
-  lines.forEach((line, i) => {
-    page.drawText(line, {
+
+  // Fondo del recuadro a lo ancho de toda la página
+  page.drawRectangle({
+    x: margin, y: top - boxH, width: availableWidth, height: boxH,
+    color: rgb(1, 1, 1), borderColor: rgb(0, 0, 0), borderWidth: 2,
+  });
+
+  // Dibujar Línea 1: SO (Izquierda), CANT (Centro), FECHA (Derecha)
+  const line1Y = top - padding - fontSize;
+  
+  // SO a la izquierda
+  page.drawText(soText, {
+    x: margin + padding,
+    y: line1Y,
+    size: fontSize, font, color: rgb(0, 0, 0),
+  });
+
+  // CANT al centro
+  const cantWidth = font.widthOfTextAtSize(cantText, fontSize);
+  page.drawText(cantText, {
+    x: margin + (availableWidth / 2) - (cantWidth / 2),
+    y: line1Y,
+    size: fontSize, font, color: rgb(0, 0, 0),
+  });
+
+  // FECHA a la derecha
+  const fechaWidth = font.widthOfTextAtSize(fechaText, fontSize);
+  page.drawText(fechaText, {
+    x: margin + availableWidth - padding - fechaWidth,
+    y: line1Y,
+    size: fontSize, font, color: rgb(0, 0, 0),
+  });
+
+  // Dibujar Línea 2: NOTAS (si existen)
+  if (notasText) {
+    page.drawText(notasText, {
       x: margin + padding,
-      y: top - padding - fontSize - i * lineHeight,
-      size: fontSize, font, color: rgb(0, 0, 0),
+      y: line1Y - lineHeight,
+      size: fontSize, font, color: rgb(0.8, 0.1, 0.1), // Color rojo para resaltar las notas
     });
-  });
+  }
 
   return pdfDoc.save();
 }

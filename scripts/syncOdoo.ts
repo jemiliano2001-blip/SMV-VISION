@@ -28,18 +28,7 @@ import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { argv, exit } from 'node:process';
 
-import { buildDedupeKey } from '../src/lib/workOrders/dedupe';
-import { addDaysToISODate } from '../src/lib/age';
-import {
-  MIN_BLUEPRINT_MATCH_SCORE,
-  extractLibrarySignals,
-  extractOrderSignals,
-  isIsoDrawingView,
-  selectLibraryDrawingMatch,
-  type PieceMatchSignals,
-} from '../src/lib/matching';
-import { isHotStampCatalogEntry, isHotStampPiece } from '../src/lib/hotStamp';
-import type { ToolcribActiveDrawingView } from '../src/types';
+
 
 // Carga .env.local antes de leer variables (tsx no lo carga automáticamente)
 import { config as loadEnv } from 'dotenv';
@@ -72,6 +61,8 @@ interface OdooSaleOrder {
    *   'no'          → Nada que facturar
    */
   invoice_status: string;
+  /** Estado de la orden ('draft', 'sent', 'sale', 'done', 'cancel') */
+  state: string;
   delivery_count?: number;
   picking_ids?: number[];
   order_lines: OdooOrderLine[];
@@ -156,12 +147,7 @@ type XmlRpcValue = string | number | boolean | null | XmlRpcValue[] | XmlRpcObje
 // ─────────────────────────────────────────────
 
 const ODOO_COLLECTION = 'odooSaleOrders';
-const WORK_ORDERS_COLLECTION = 'workOrders';
 const SYNC_SOURCE_UID = 'syncOdoo-v1';
-
-/** Espejo de DEFAULT_CYCLE_DAYS en src/lib/firebase/workOrders.ts (no se
- *  importa de ahí para no arrastrar el SDK cliente de Firebase al script). */
-const DEFAULT_CYCLE_DAYS = 14;
 
 /** Devuelve el valor de una variable de entorno o lanza si no existe. */
 function requireEnv(key: string): string {
@@ -458,6 +444,7 @@ async function fetchOdooSaleOrders(
     'partner_id',
     'client_order_ref',
     'invoice_status',   // 'to invoice' | 'invoiced' | 'upselling' | 'no'
+    'state',            // 'draft' | 'sent' | 'sale' | 'done' | 'cancel'
     'delivery_count',
     'picking_ids',
   ];
@@ -492,6 +479,7 @@ async function fetchOdooSaleOrders(
       partner: partnerName,
       client_order_ref: clientOrderRef,
       invoice_status: typeof row['invoice_status'] === 'string' ? row['invoice_status'] : 'no',
+      state: typeof row['state'] === 'string' ? row['state'] : 'unknown',
       delivery_count: typeof row['delivery_count'] === 'number' ? row['delivery_count'] : 0,
       picking_ids: Array.isArray(row['picking_ids']) ? row['picking_ids'] as number[] : [],
       order_lines: [],
@@ -688,109 +676,7 @@ function initFirebaseAdmin(serviceAccountPath: string): void {
   console.info(`[syncOdoo] Firebase Admin inicializado (${resolved})`);
 }
 
-// ─────────────────────────────────────────────
-//  Catálogo Tool Crib (matching de planos)
-// ─────────────────────────────────────────────
 
-/** Convierte Timestamp de Firestore o string a ISO string ('' si no hay valor). */
-function timestampToIso(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v && typeof (v as { toDate?: () => Date }).toDate === 'function') {
-    return (v as { toDate: () => Date }).toDate().toISOString();
-  }
-  return '';
-}
-
-/**
- * Espejo Admin-SDK de `listActiveDrawingViews` (src/lib/firebase/toolcrib.ts):
- * dos queries (parts de SUPRAJIT + drawings activos) y join en memoria por
- * partId, quedándose con el drawing más reciente ante estado inconsistente.
- */
-async function fetchToolcribLibrary(
-  db: ReturnType<typeof getFirestore>,
-): Promise<ToolcribActiveDrawingView[]> {
-  const [partsSnap, drawingsSnap] = await Promise.all([
-    db.collection('toolcribParts').where('customer', '==', 'SUPRAJIT').get(),
-    db.collection('toolcribDrawings').where('isActive', '==', true).get(),
-  ]);
-
-  const drawingByPartId = new Map<string, { id: string; data: Record<string, unknown> }>();
-  for (const docSnap of drawingsSnap.docs) {
-    const data = docSnap.data();
-    const partId = typeof data['partId'] === 'string' ? data['partId'] : null;
-    if (!partId) continue;
-    const existing = drawingByPartId.get(partId);
-    if (
-      !existing ||
-      timestampToIso(data['createdAtUTC']) > timestampToIso(existing.data['createdAtUTC'])
-    ) {
-      drawingByPartId.set(partId, { id: docSnap.id, data });
-    }
-  }
-
-  const views: ToolcribActiveDrawingView[] = [];
-  for (const docSnap of partsSnap.docs) {
-    const part = docSnap.data();
-    const partNumber = typeof part['partNumber'] === 'string' ? part['partNumber'].trim() : '';
-    if (!partNumber) continue;
-    const drawing = drawingByPartId.get(docSnap.id);
-    if (!drawing) continue;
-    views.push({
-      partId: docSnap.id,
-      partNumber,
-      customer: typeof part['customer'] === 'string' ? part['customer'] : 'SUPRAJIT',
-      description: typeof part['description'] === 'string' ? part['description'] : '',
-      drawingId: drawing.id,
-      revision: typeof drawing.data['revision'] === 'string' ? drawing.data['revision'] : '',
-      sourceType: drawing.data['sourceType'] === 'storage' ? 'storage' : 'network',
-      sourcePath: typeof drawing.data['sourcePath'] === 'string' ? drawing.data['sourcePath'] : '',
-      pdfUrl: typeof drawing.data['pdfUrl'] === 'string' ? drawing.data['pdfUrl'] : null,
-      effectiveFromUTC: timestampToIso(drawing.data['effectiveFromUTC']) || null,
-    });
-  }
-  return views;
-}
-
-interface LineDrawingMatch {
-  partId: string;
-  drawingId: string;
-  score: number;
-}
-
-/**
- * Match de plano para una línea de Odoo: fuzzy ISO-first y, si no alcanza el
- * umbral y la pieza es hot stamp, búsqueda por keyword en el catálogo (el
- * fuzzy no conecta "HOT STAMP LETRA M" con "PUNZONES DE MARCA").
- */
-function matchDrawingForLine(
-  pieza: string,
-  numeroParte: string,
-  library: readonly ToolcribActiveDrawingView[],
-  signalsByDrawingId: ReadonlyMap<string, PieceMatchSignals>,
-): LineDrawingMatch | null {
-  if (library.length === 0) return null;
-
-  const orderSignals = extractOrderSignals(pieza, numeroParte || undefined);
-  const { view, score } = selectLibraryDrawingMatch(orderSignals, library, signalsByDrawingId);
-  if (view && score >= MIN_BLUEPRINT_MATCH_SCORE) {
-    return { partId: view.partId, drawingId: view.drawingId, score };
-  }
-
-  if (isHotStampPiece(pieza)) {
-    const hotStampEntry =
-      library.find((v) => isHotStampCatalogEntry(v) && isIsoDrawingView(v)) ??
-      library.find((v) => isHotStampCatalogEntry(v));
-    if (hotStampEntry) {
-      return {
-        partId: hotStampEntry.partId,
-        drawingId: hotStampEntry.drawingId,
-        score: MIN_BLUEPRINT_MATCH_SCORE,
-      };
-    }
-  }
-
-  return null;
-}
 
 // ─────────────────────────────────────────────
 //  syncMeta/odoo — estado del último sync
@@ -811,10 +697,6 @@ async function writeSyncMeta(
     ordersProcessed: number;
     status: 'ok' | 'error';
     errorMessage?: string;
-    otsCreated?: number;
-    otsUpdated?: number;
-    otsArchived?: number;
-    otsMatched?: number;
   },
 ): Promise<void> {
   if (!db) return; // dry run o Firebase no inicializado
@@ -847,12 +729,11 @@ async function upsertSaleOrder(
   // la información del año en nombres como "2026/S00288" → "2026_S00288".
   const docId = order.name.replace(/\//g, '_');
 
-  // LÓGICA BASADA EN TRASLADOS (Aprobada por el usuario):
-  // 1. Consideramos órdenes que en Odoo están en la pestaña "A facturar" ('to invoice' o 'upselling').
-  // 2. Si la orden tiene remisiones (stock.picking), verificamos si existe alguna pendiente.
-  //    Si TODOS los traslados están 'done' (Hecho) o 'cancel' (Cancelado), significa que
-  //    físicamente ya no hay trabajo pendiente, aunque no se haya facturado.
-  const isPendingInvoice = order.invoice_status === 'to invoice' || order.invoice_status === 'upselling';
+  // LÓGICA BASADA EN TRASLADOS (Actualizada):
+  // Consideramos órdenes que en Odoo están en la pestaña "A facturar" ('to invoice' o 'upselling').
+  // Las órdenes deben seguir mostrándose hasta que se facturen, incluso si ya se entregaron (remisión 'done'),
+  // para que el usuario pueda generar la solicitud de factura o remisión desde la UI.
+  const isPendingInvoice = order.invoice_status === 'to invoice' || order.invoice_status === 'upselling' || order.invoice_status === 'no';
   
   let hasPendingPhysicalWork = true;
   if (order.deliveries.length > 0) {
@@ -860,7 +741,7 @@ async function upsertSaleOrder(
     hasPendingPhysicalWork = order.deliveries.some(d => d.state !== 'done' && d.state !== 'cancel');
   }
 
-  const isActiveOrder = isPendingInvoice && hasPendingPhysicalWork;
+  const isActiveOrder = isPendingInvoice; // Mostrar siempre hasta que se facture (invoiced)
 
   const payload = {
     // ─ Encabezado ───────────────────────────────────────
@@ -870,6 +751,7 @@ async function upsertSaleOrder(
     client_order_ref: order.client_order_ref,
     // Estado de facturación directo de Odoo — es ahora el criterio de visibilidad.
     invoice_status: order.invoice_status,
+    state: order.state,
     toInvoice: isActiveOrder,
     // ─ Líneas de la orden ────────────────────────────────────────────────
     // Para servicios genéricos ([73181000] Servicio de maquinados), la pieza
@@ -877,23 +759,20 @@ async function upsertSaleOrder(
     order_lines: order.order_lines.map((l) => {
       const productDisplay = isServiceLine(l.product) ? (l.description || l.product) : l.product;
       
-      let qty_pending_from_pickings = 0;
-      
-      if (order.deliveries.length === 0) {
-        // Sin traslados generados aún: toda la cantidad está pendiente
-        qty_pending_from_pickings = l.qty;
-      } else {
-        // Con traslados: sumar la cantidad demandada en traslados que NO estén cancelados ni hechos
-        let pendingQty = 0;
-        for (const delivery of order.deliveries) {
-           for (const move of delivery.lines) {
-              if (move.sale_line_id === l.id && move.state !== 'done' && move.state !== 'cancel') {
-                 pendingQty += move.qty_demand;
-              }
-           }
+      // Calcular la cantidad entregada físicamente basándose en las remisiones (stock.picking en estado 'done')
+      let true_delivered_qty = 0;
+      for (const delivery of order.deliveries) {
+        if (delivery.state === 'done') {
+          for (const move of delivery.lines) {
+            if (move.sale_line_id === l.id && move.state === 'done') {
+              true_delivered_qty += move.qty_done;
+            }
+          }
         }
-        qty_pending_from_pickings = pendingQty;
       }
+
+      const qty_pending_from_pickings = Math.max(0, l.qty - true_delivered_qty);
+      const effective_qty_delivered = true_delivered_qty;
 
       // Mutar el objeto original para que upsertWorkOrdersFromOdoo lo tenga disponible
       (l as any).qty_pending_from_pickings = qty_pending_from_pickings;
@@ -904,7 +783,7 @@ async function upsertSaleOrder(
         // Omitir description si ya está capturado en product (evita duplicado en reporte)
         description: l.description !== productDisplay ? l.description : '',
         qty: l.qty,
-        qty_delivered: l.qty_delivered,
+        qty_delivered: effective_qty_delivered,
         qty_pending_from_pickings,
       };
     }),
@@ -957,294 +836,7 @@ function isServiceLine(product: string): boolean {
   return /servicio/i.test(product);
 }
 
-/**
- * Extrae código de parte y nombre de pieza de un product name de Odoo.
- * Formato "[CODE] Description" → { numeroParte: "CODE", pieza: "Description" }
- * Sin bracket → { numeroParte: "", pieza: product }
- */
-function parseOdooProduct(product: string): { numeroParte: string; pieza: string } {
-  const match = /^\[([^\]]+)\]\s*(.*)/.exec(product.trim());
-  if (match) {
-    return { numeroParte: match[1].trim(), pieza: match[2].trim() || product.trim() };
-  }
-  return { numeroParte: '', pieza: product.trim() };
-}
 
-/**
- * Sincroniza las líneas de los sale.orders como WorkOrders en Firestore.
- *
- * Estrategia de merge:
- *   - Si ya existe una OT con el mismo dedup key (SO::parte): solo actualiza
- *     `cantidad`, `odooSource` y `odooOrderId`. NO toca status ni timestamps.
- *   - Si no existe: crea la OT con status 'pendiente'.
- */
-async function upsertWorkOrdersFromOdoo(
-  db: ReturnType<typeof getFirestore> | null,
-  orders: OdooSaleOrder[],
-  library: ToolcribActiveDrawingView[],
-  dryRun: boolean,
-): Promise<{ created: number; updated: number; skipped: number; archived: number; matched: number }> {
-  // Señales del catálogo precomputadas una vez por corrida.
-  const librarySignals = new Map(
-    library.map((view) => [view.drawingId, extractLibrarySignals(view)]),
-  );
-  // LÓGICA ESTRICTA: Solo las órdenes que Odoo marca como 'A facturar'.
-  // Las facturadas ('invoiced') o sin factura ('no') ya no se muestran en el tablero.
-  // Esto reduce las órdenes exactamente a las ~21 que salen en la captura de Odoo.
-  const pendingOrders = orders.filter((o) =>
-    o.invoice_status === 'to invoice' || o.invoice_status === 'upselling'
-  );
-
-  console.info(`  [syncOdoo] Órdenes con líneas pendientes: ${pendingOrders.length} / ${orders.length}`);
-
-  if (pendingOrders.length === 0) {
-    return { created: 0, updated: 0, skipped: 0, archived: 0, matched: 0 };
-  }
-
-  // En dry run sin Firebase, solo contamos líneas sin consultar Firestore
-  if (dryRun && !db) {
-    let total = 0;
-    const seen = new Set<string>();
-    for (const order of pendingOrders) {
-      const odooOrderId = order.name.replace(/\//g, '_');
-      const validLines = order.order_lines.filter((l) => (l as any).qty_pending_from_pickings > 0);
-      for (const line of validLines) {
-        const effectiveProduct = isServiceLine(line.product)
-          ? (line.description || line.product)
-          : line.product;
-        if (!effectiveProduct.trim()) continue;
-        const { numeroParte, pieza } = parseOdooProduct(effectiveProduct);
-        const key = buildDedupeKey({
-          soNumber: order.name,
-          poNumber: order.client_order_ref ?? '',
-          numeroParte,
-          pieza,
-        });
-        if (seen.has(key)) continue;
-        seen.add(key);
-        total++;
-        void odooOrderId; // referenciado para evitar warning
-      }
-    }
-    console.info(`  [dryRun] workOrders → procesaría ~${total} OTs (sin consultar Firestore en dry run)`);
-    return { created: 0, updated: 0, skipped: total, archived: 0, matched: 0 };
-  }
-
-  if (!db) throw new Error('Firestore no inicializado');
-
-  const BATCH_SIZE = 450;
-  
-  let archived = 0;
-  const toInvoiceSoSet = new Set(pendingOrders.map((o) => o.name));
-
-  const validDedupeKeys = new Set<string>();
-  for (const order of pendingOrders) {
-    const validLines = order.order_lines.filter((l) => (l as any).qty_pending_from_pickings > 0);
-    for (const line of validLines) {
-      const effectiveProduct = isServiceLine(line.product)
-        ? (line.description || line.product)
-        : line.product;
-      if (!effectiveProduct.trim()) continue;
-      const { numeroParte, pieza } = parseOdooProduct(effectiveProduct);
-      validDedupeKeys.add(buildDedupeKey({
-        soNumber: order.name,
-        poNumber: (order.client_order_ref as any) || '',
-        numeroParte,
-        pieza,
-      }));
-    }
-  }
-
-  const odooOtsSnap = await db
-    .collection(WORK_ORDERS_COLLECTION)
-    .where('odooSource', '==', true)
-    .where('archived', '==', false)
-    .get();
-
-  const toArchive = odooOtsSnap.docs.filter((d) => {
-    const raw = d.data();
-    const so = raw['soNumber'] as string | undefined;
-    const numeroParte = raw['numeroParte'] as string | undefined;
-    const pieza = raw['pieza'] as string | undefined;
-    const poNumber = raw['poNumber'] as string | undefined;
-    
-    // Archivar si: el SO ya no está pendiente de facturación o código genérico
-    if (so && !toInvoiceSoSet.has(so)) return true;
-    if (numeroParte === '73181000') return true;
-    
-    // O si la línea específica ya no está en validLines (ej. ya se entregó al 100%)
-    const key = buildDedupeKey({
-      soNumber: so ?? '',
-      poNumber: poNumber ?? '',
-      numeroParte: numeroParte ?? '',
-      pieza: pieza ?? '',
-    });
-    
-    if (!validDedupeKeys.has(key)) return true;
-
-    return false;
-  });
-
-  if (toArchive.length > 0) {
-    console.info(`  [syncOdoo] Archivando ${toArchive.length} OTs stale/genéricas…`);
-    for (let i = 0; i < toArchive.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      for (const doc of toArchive.slice(i, i + BATCH_SIZE)) {
-        batch.update(doc.ref, { archived: true, updatedAtUTC: FieldValue.serverTimestamp() });
-        archived++;
-      }
-      await batch.commit();
-    }
-  }
-
-  // 2. Recopilar todos los soNumbers para buscar OTs existentes
-  const soNumbers = [...new Set(pendingOrders.map((o) => o.name))];
-
-  // 3. Query existentes por soNumber — solo no archivadas (chunks de 30, límite del operador `in`)
-  const CHUNK = 30;
-  const existingByKey = new Map<string, string>(); // dedupeKey → docId
-
-  for (let i = 0; i < soNumbers.length; i += CHUNK) {
-    const chunk = soNumbers.slice(i, i + CHUNK);
-    const snap = await db
-      .collection(WORK_ORDERS_COLLECTION)
-      .where('soNumber', 'in', chunk)
-      .where('archived', '==', false)
-      .get();
-
-    for (const d of snap.docs) {
-      const raw = d.data();
-      const key = buildDedupeKey({
-        soNumber: typeof raw['soNumber'] === 'string' ? raw['soNumber'] : '',
-        poNumber: typeof raw['poNumber'] === 'string' ? raw['poNumber'] : '',
-        numeroParte: typeof raw['numeroParte'] === 'string' ? raw['numeroParte'] : '',
-        pieza: typeof raw['pieza'] === 'string' ? raw['pieza'] : '',
-      });
-      existingByKey.set(key, d.id);
-    }
-  }
-
-  // 3. Construir operaciones de create/update para cada línea
-  const toCreate: Array<{ key: string; payload: Record<string, unknown> }> = [];
-  const toUpdate: Array<{ id: string; payload: Record<string, unknown> }> = [];
-  const seenKeys = new Set<string>();
-  let matched = 0;
-
-  for (const order of pendingOrders) {
-    const odooOrderId = order.name.replace(/\//g, '_');
-    const otDate = order.date_order !== false ? order.date_order.split(' ')[0] : '';
-    // Fecha compromiso default: otDate + ciclo de 14 días, igual que el
-    // upsert de la app (src/lib/firebase/workOrders.ts).
-    const dueDate = otDate ? addDaysToISODate(otDate, DEFAULT_CYCLE_DAYS) : null;
-    const validLines = order.order_lines.filter((l) => (l as any).qty_pending_from_pickings > 0);
-
-    for (const line of validLines) {
-      // Para servicios genéricos, la pieza real es la description de la línea
-      const effectiveProduct = isServiceLine(line.product)
-        ? (line.description || line.product)
-        : line.product;
-
-      if (!effectiveProduct.trim()) continue;
-
-      const { numeroParte, pieza } = parseOdooProduct(effectiveProduct);
-      const key = buildDedupeKey({
-        soNumber: order.name,
-        poNumber: (order.client_order_ref as any) || '',
-        numeroParte,
-        pieza,
-      });
-
-      if (seenKeys.has(key)) continue; // colapsa duplicados dentro del mismo lote
-      seenKeys.add(key);
-
-      const existingId = existingByKey.get(key);
-      if (existingId) {
-        toUpdate.push({
-          id: existingId,
-          payload: {
-            cantidad: String((line as any).qty_pending_from_pickings),
-            odooSource: true,
-            odooOrderId,
-            updatedAtUTC: FieldValue.serverTimestamp(),
-          },
-        });
-      } else {
-        const lineMatch = matchDrawingForLine(pieza, numeroParte, library, librarySignals);
-        if (lineMatch) matched++;
-        toCreate.push({
-          key,
-          payload: {
-            poNumber: order.client_order_ref ?? '',
-            soNumber: order.name,
-            otDate,
-            customer: order.partner,
-            pieza,
-            numeroParte,
-            cantidad: String((line as any).qty_pending_from_pickings),
-            prioridad: 'Normal',
-            status: 'pendiente',
-            matchedPartId: lineMatch?.partId ?? null,
-            matchedDrawingId: lineMatch?.drawingId ?? null,
-            matchScore: lineMatch?.score ?? null,
-            deliveredToTornero: null,
-            deliveredAtUTC: null,
-            deliveredByUid: null,
-            dueDate,
-            assignedToTornero: null,
-            assignedAtUTC: null,
-            finishedAtUTC: null,
-            notes: '',
-            sourcePdfName: 'odoo-sync',
-            archived: false,
-            odooSource: true,
-            odooOrderId,
-            createdAtUTC: FieldValue.serverTimestamp(),
-            updatedAtUTC: FieldValue.serverTimestamp(),
-          },
-        });
-      }
-    }
-  }
-
-  if (dryRun) {
-    console.info(
-      `  [dryRun] workOrders → crear: ${toCreate.length} (con plano: ${matched}), actualizar: ${toUpdate.length}, colapsados: ${seenKeys.size - toCreate.length - toUpdate.length}`,
-    );
-    for (const op of toCreate.slice(0, 5)) {
-      console.info(`    [dryRun] create key=${op.key}`);
-    }
-    if (toCreate.length > 5) console.info(`    [dryRun] …y ${toCreate.length - 5} más`);
-    return { created: 0, updated: 0, skipped: toCreate.length + toUpdate.length, archived: 0, matched };
-  }
-
-  // 4. Ejecutar create/update en batches de 450
-  let created = 0;
-  let updated = 0;
-
-  const allOps = [
-    ...toCreate.map((op) => ({ type: 'create' as const, op })),
-    ...toUpdate.map((op) => ({ type: 'update' as const, op })),
-  ];
-
-  for (let i = 0; i < allOps.length; i += BATCH_SIZE) {
-    const batch = db.batch();
-    const chunk = allOps.slice(i, i + BATCH_SIZE);
-    for (const item of chunk) {
-      if (item.type === 'create') {
-        const ref = db.collection(WORK_ORDERS_COLLECTION).doc();
-        batch.set(ref, item.op.payload);
-        created++;
-      } else {
-        const ref = db.collection(WORK_ORDERS_COLLECTION).doc(item.op.id);
-        batch.update(ref, item.op.payload);
-        updated++;
-      }
-    }
-    await batch.commit();
-  }
-
-  return { created, updated, skipped: 0, archived, matched };
-}
 
 // ─────────────────────────────────────────────
 //  Punto de entrada
@@ -1374,61 +966,20 @@ async function run(): Promise<void> {
     );
   }
 
-  // 7. Cargar catálogo Tool Crib para matching de planos (no fatal si falla)
-  let library: ToolcribActiveDrawingView[] = [];
-  if (db) {
-    try {
-      library = await fetchToolcribLibrary(db);
-      console.info(`[syncOdoo] Catálogo Tool Crib: ${library.length} planos activos para matching.`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[syncOdoo] No se pudo cargar el catálogo Tool Crib (OTs sin plano): ${msg}`);
-    }
-  }
-
-  // 8. Upsert WorkOrders desde las líneas de cada orden
-  console.info('\n[syncOdoo] Sincronizando WorkOrders desde líneas de Odoo…');
-  let woCreated = 0;
-  let woUpdated = 0;
-  let woArchived = 0;
-  let woMatched = 0;
-  let woError: string | null = null;
-  try {
-    const woResult = await upsertWorkOrdersFromOdoo(db, orders, library, dryRun);
-    woCreated = woResult.created;
-    woUpdated = woResult.updated;
-    woArchived = woResult.archived;
-    woMatched = woResult.matched;
-  } catch (err) {
-    woError = err instanceof Error ? err.message : String(err);
-    console.error('[syncOdoo] ✗ Error sincronizando WorkOrders:', woError);
-    // No es fatal — el sync de odooSaleOrders ya completó
-  }
-
-  // 9. Resumen final + registro en syncMeta
   const status = dryRun ? '[dryRun] ' : '';
   console.info(
     `\n[syncOdoo] ${status}Sincronización completada.\n` +
       `  ✓ Exitosos (odooSaleOrders) : ${synced}\n` +
       `  ✗ Fallidos (odooSaleOrders) : ${failed}\n` +
-      `  ✓ OTs creadas               : ${woCreated}\n` +
-      `  ✓ OTs con plano matcheado   : ${woMatched}\n` +
-      `  ✓ OTs actualizadas          : ${woUpdated}\n` +
-      `  ✓ OTs archivadas            : ${woArchived}\n` +
-      `  Colección Odoo              : ${ODOO_COLLECTION}\n` +
-      `  Colección WorkOrders        : ${WORK_ORDERS_COLLECTION}`,
+      `  Colección Odoo              : ${ODOO_COLLECTION}\n`,
   );
 
   const partialError =
-    woError ?? (failed > 0 ? `${failed} órdenes fallaron al escribir en odooSaleOrders` : null);
+    failed > 0 ? `${failed} órdenes fallaron al escribir en odooSaleOrders` : null;
   await writeSyncMeta(db, {
     ordersProcessed: synced,
     status: partialError ? 'error' : 'ok',
     ...(partialError ? { errorMessage: partialError } : {}),
-    otsCreated: woCreated,
-    otsUpdated: woUpdated,
-    otsArchived: woArchived,
-    otsMatched: woMatched,
   });
 
   if (failed > 0) {

@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from "motion/react";
+import { TransformWrapper, TransformComponent, useControls } from "react-zoom-pan-pinch";
 import {
   Database,
   FileText,
@@ -16,36 +17,22 @@ import {
   Printer,
   Pencil,
   Trash2,
-  RotateCcw,
   Check,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
 } from 'lucide-react';
-import {
-  Order,
-  WorkOrder,
-} from './types';
+import { Order } from './types';
 import { ToolcribLibraryPanel } from './components/ToolcribLibraryPanel';
-import { WorkOrdersPanel } from './components/WorkOrdersPanel';
 import { OdooOrdersPanel } from './components/OdooOrdersPanel';
 import { AppShell, type AppView } from './components/shell/AppShell';
-import { InicioView, type AlertSeverity } from './components/InicioView';
+import { InicioView } from './components/InicioView';
 import { BibliotecaView } from './components/BibliotecaView';
-import { useDashboardSummary } from './lib/useDashboardSummary';
-import { buildDedupeKey } from './lib/workOrders/dedupe';
+import { ComprasPanel } from './components/ComprasPanel';
+import { EntregasSinOCPanel } from './components/EntregasSinOCPanel';
 import { formatAgeDays, getOrderAgeDays } from './lib/age';
 import { useVisionAnalysis } from './hooks/useVisionAnalysis';
-
-/**
- * Llave de dedup de una orden del REPORTE (mismo formato que el upsert de
- * Control). Permite mapear una fila del reporte a su `WorkOrder` en Firestore.
- */
-function dedupeKeyOfReportOrder(order: Order): string {
-  return buildDedupeKey({
-    soNumber: order.orden,
-    poNumber: order.poNumber ?? '',
-    numeroParte: order.numero_parte ?? '',
-    pieza: order.pieza,
-  });
-}
 
 /**
  * Celda de cantidad editable (modo edición del reporte). Mantiene un borrador
@@ -90,42 +77,12 @@ function EditableCantidad({
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
-  const [controlAlert, setControlAlert] = useState<AlertSeverity | null>(null);
-  const { summary, refresh } = useDashboardSummary();
 
-  // Mapa dedupeKey -> WorkOrder (de Control) para enlazar cada fila del reporte
-  // con su documento en Firestore y poder sincronizar ediciones/exclusiones.
-  const workOrderByKey = useMemo(() => {
-    const map = new Map<string, WorkOrder>();
-    for (const wo of summary.orders) {
-      const key = buildDedupeKey({
-        soNumber: wo.soNumber,
-        poNumber: wo.poNumber,
-        numeroParte: wo.numeroParte,
-        pieza: wo.pieza,
-      });
-      if (!map.has(key)) map.set(key, wo);
-    }
-    return map;
-  }, [summary.orders]);
+  const vision = useVisionAnalysis({ findWorkOrderId: () => null, onDataChanged: () => {} });
 
-  const findWorkOrderId = useCallback(
-    (order: Order): string | null => workOrderByKey.get(dedupeKeyOfReportOrder(order))?.id ?? null,
-    [workOrderByKey],
-  );
-
-  const vision = useVisionAnalysis({ findWorkOrderId, onDataChanged: refresh });
-
-  // Navegación: al ir a Control sin una alerta específica, limpia el filtro.
+  // Navegación
   const navigate = useCallback((view: AppView) => {
-    if (view !== 'control') setControlAlert(null);
     setActiveView(view);
-  }, []);
-
-  // Desde "atención inmediata" de Inicio: salta a Control con el filtro puesto.
-  const handleFocusAlert = useCallback((sev: AlertSeverity) => {
-    setControlAlert(sev);
-    setActiveView('control');
   }, []);
 
   useEffect(() => {
@@ -142,7 +99,6 @@ export default function App() {
       <AppShell
         activeView={activeView}
         onNavigate={navigate}
-        counts={summary.counts}
         version="v3.1.PRO"
       >
         {/* ── Generar Reporte — montado siempre, oculto para preservar PDFs/resultados ── */}
@@ -408,9 +364,9 @@ export default function App() {
                           <span className="font-mono text-[10px] text-ink-dim hidden sm:inline">
                             Ajusta cantidades y excluye órdenes antes de imprimir.
                           </span>
-                          {summary.status === 'error' && (
+                          {vision.error && (
                             <span className="font-mono text-[9px] uppercase tracking-wider text-warn border border-warn/60 px-1.5 py-0.5">
-                              edición local · sin sincronizar
+                              edición local
                             </span>
                           )}
                           <span className="font-mono text-[10px] text-ink-dim ml-auto">
@@ -655,17 +611,14 @@ export default function App() {
             >
               {activeView === 'inicio' && (
                 <InicioView
-                  summary={summary}
                   onNavigate={navigate}
-                  onFocusAlert={handleFocusAlert}
                   analysisSummary={vision.analysisSummary}
                 />
               )}
-              {activeView === 'control' && (
-                <WorkOrdersPanel initialAlertFilter={controlAlert} onDataChanged={refresh} />
-              )}
               {activeView === 'odoo' && <OdooOrdersPanel />}
               {activeView === 'biblioteca' && <BibliotecaView />}
+              {activeView === 'compras' && <ComprasPanel />}
+              {activeView === 'entregas-sin-oc' && <EntregasSinOCPanel />}
             </motion.div>
           )}
         </AnimatePresence>
@@ -701,12 +654,31 @@ export default function App() {
                 <X size={16} />
               </button>
             </div>
-            <div className="grow overflow-auto bg-[#F4F4F4] p-4 flex items-center justify-center">
-              <img
-                src={vision.previewOrder.sourceImageDataUrl}
-                alt={`Plano ${vision.previewOrder.pieza}`}
-                className="max-w-full max-h-full object-contain"
-              />
+            <div className="grow overflow-hidden bg-surface-2 relative flex items-center justify-center">
+              <TransformWrapper initialScale={1} minScale={0.5} maxScale={10} centerOnInit>
+                {({ zoomIn, zoomOut, resetTransform }) => (
+                  <>
+                    <div className="absolute bottom-6 right-6 z-10 flex gap-2 bg-surface border-2 border-line p-1 shadow-hard-accent">
+                      <button onClick={() => zoomIn()} className="p-2 hover:bg-surface-2 text-ink transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent" title="Acercar">
+                        <ZoomIn size={20} />
+                      </button>
+                      <button onClick={() => zoomOut()} className="p-2 hover:bg-surface-2 text-ink transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent" title="Alejar">
+                        <ZoomOut size={20} />
+                      </button>
+                      <button onClick={() => resetTransform()} className="p-2 hover:bg-surface-2 text-ink transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent" title="Restaurar vista">
+                        <Maximize size={20} />
+                      </button>
+                    </div>
+                    <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
+                      <img
+                        src={vision.previewOrder?.sourceImageDataUrl ?? ''}
+                        alt={`Plano ${vision.previewOrder?.pieza ?? ''}`}
+                        className="max-w-full max-h-full object-contain cursor-grab active:cursor-grabbing"
+                      />
+                    </TransformComponent>
+                  </>
+                )}
+              </TransformWrapper>
             </div>
           </div>
         </div>

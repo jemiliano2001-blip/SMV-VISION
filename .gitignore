@@ -10,3 +10,6 @@ coverage/
 *serviceAccount*.json
 public/pdfjs-wasm/
 .claude/
+functions/lib/
+.firebase/
+scratch/

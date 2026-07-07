@@ -1,12 +1,78 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Uso personal — un solo usuario autenticado.
-    // La validación de datos vive en el código TypeScript, no aquí.
-    // Si en el futuro se comparte la app, agregar reglas por colección.
+    // App privada — solo usuarios autenticados (cuentas creadas a mano en
+    // Firebase Console → Authentication). No hay registro público.
+    //
+    // Principio: mínimo privilegio por colección. Las colecciones que solo
+    // escribe el backend (scripts/syncOdoo.ts, Cloud Function) usan el Admin
+    // SDK, que IGNORA estas reglas — por eso aquí quedan como solo lectura.
+    // La validación de forma de los documentos vive en los validators de
+    // TypeScript; las reglas garantizan identidad y superficie de escritura.
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ── Escritas solo por Admin SDK (sync Odoo / Cloud Function) ──────────
+    match /odooSaleOrders/{orderId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /syncMeta/{docId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /workOrders/{otId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── Catálogo Tool Crib (lectura + altas/ediciones desde la app) ───────
+    match /toolcribParts/{partId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false; // el dedupe borra vía Admin SDK
+    }
+
+    match /toolcribDrawings/{drawingId} {
+      allow read: if isSignedIn();
+      // El uploader firma el documento con su propio uid.
+      allow create: if isSignedIn()
+                    && request.resource.data.createdByUid == request.auth.uid;
+      // Un update nunca puede tocar la firma de procedencia (los planos
+      // antiguos del bootstrap no traen el campo — diff() los tolera).
+      allow update: if isSignedIn()
+                    && !request.resource.data.diff(resource.data)
+                        .affectedKeys().hasAny(['createdByUid']);
+      allow delete: if false; // el dedupe borra vía Admin SDK
+    }
+
+    // ── Logs de auditoría: solo altas, inmutables, uid no falsificable ────
+    match /toolcribPrintLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.printedByUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /analysisRuns/{runId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.userUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ── Catálogo de compras (CRUD completo desde ComprasPanel) ────────────
+    match /purchases/{purchaseId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
+    // ── Todo lo demás: denegado ────────────────────────────────────────────
     match /{document=**} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if false;
     }
   }
 }

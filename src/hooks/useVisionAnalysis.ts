@@ -38,9 +38,6 @@ import {
 } from '../lib/reportFormat';
 import { listActiveDrawingViews } from '../lib/firebase/toolcrib';
 import { listOrdersToInvoice } from '../lib/firebase/odooOrders';
-import { upsertWorkOrders, updateCantidad, archiveWorkOrder } from '../lib/firebase/workOrders';
-import type { IncomingWorkOrder } from '../lib/firebase/workOrders';
-import { buildDedupeKey } from '../lib/workOrders/dedupe';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
@@ -89,15 +86,7 @@ interface BlueprintStatusPatch {
   status: 'done' | 'error';
 }
 
-// ── Helper: maps a report Order to its dedup key ──────────────────────────────
-function dedupeKeyOfReportOrder(order: Order): string {
-  return buildDedupeKey({
-    soNumber: order.orden,
-    poNumber: order.poNumber ?? '',
-    numeroParte: order.numero_parte ?? '',
-    pieza: order.pieza,
-  });
-}
+
 
 // ── Pure helper functions ────────────────────────────────────────────────────
 
@@ -163,10 +152,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 // ── Hook interfaces ───────────────────────────────────────────────────────────
 
-export interface UseVisionAnalysisOptions {
-  findWorkOrderId: (order: Order) => string | null;
-  onDataChanged: () => void;
-}
+export interface UseVisionAnalysisOptions {}
 
 export interface VisionAnalysisHook {
   // File state
@@ -186,7 +172,7 @@ export interface VisionAnalysisHook {
   // Edit mode
   editMode: boolean;
   originalResults: Order[] | null;
-  excludedOrders: Array<{ order: Order; workOrderId: string | null }>;
+  excludedOrders: Array<{ order: Order }>;
   auditedCount: number;
   // Results display
   draggingZone: 'workshop' | null;
@@ -220,7 +206,7 @@ export interface VisionAnalysisHook {
   snapshotOriginalOnce: () => void;
   handleEditCantidad: (order: Order, newValue: string) => void;
   handleExcludeOrder: (order: Order) => void;
-  handleRestoreOrder: (entry: { order: Order; workOrderId: string | null }) => void;
+  handleRestoreOrder: (entry: { order: Order }) => void;
   handleRestoreAll: () => void;
   // Display setters
   setResultsFilter: (v: string) => void;
@@ -234,10 +220,7 @@ export interface VisionAnalysisHook {
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
-export function useVisionAnalysis({
-  findWorkOrderId,
-  onDataChanged,
-}: UseVisionAnalysisOptions): VisionAnalysisHook {
+export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnalysisHook {
   const [workshopPdfs, setWorkshopPdfs] = useState<WorkshopPdfUpload[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractingStep, setExtractingStep] = useState<string>('');
@@ -276,7 +259,7 @@ export function useVisionAnalysis({
   // `workOrderId` ya resuelto para restaurar/des-archivar sin re-buscar.
   const [editMode, setEditMode] = useState(false);
   const [originalResults, setOriginalResults] = useState<Order[] | null>(null);
-  const [excludedOrders, setExcludedOrders] = useState<Array<{ order: Order; workOrderId: string | null }>>([]);
+  const [excludedOrders, setExcludedOrders] = useState<Array<{ order: Order }>>([]);
 
   // Cancela timers pendientes si el componente se desmonta mid-corrida (evita
   // setState-after-unmount). Cubre el batcher de estados de plano y el reset
@@ -785,39 +768,7 @@ No inventes información.` },
         }
       }
 
-      // Persistir TODAS las órdenes en la capa de control (incluso sin plano):
-      // una orden "Pendiente sin plano" también se debe rastrear.
-      try {
-        const incoming: IncomingWorkOrder[] = ordersList.map((order) => {
-          const m = matchByOrder.get(order);
-          return {
-            pieza: order.pieza,
-            numeroParte: order.numero_parte,
-            cantidad: order.cantidad,
-            prioridad: order.prioridad,
-            soNumber: order.orden,
-            poNumber: order.poNumber ?? '',
-            otDate: order.fecha,
-            customer: 'SUPRAJIT',
-            matchedDrawingId: m?.drawingId ?? null,
-            matchedPartId: m?.partId ?? null,
-            matchScore: m?.score ?? null,
-            sourcePdfName: 'odoo-sync',
-          };
-        });
-        const upsertResult = await upsertWorkOrders(incoming);
-        if (upsertResult.ok === false) {
-          console.warn('[smv-vision][work-orders] upsert no aplicado:', upsertResult.reason);
-        } else {
-          log.debug('[smv-vision][work-orders] upsert', upsertResult.value);
-        }
-      } catch (woErr) {
-        console.warn('[smv-vision][work-orders] upsert lanzó (inesperado)', woErr);
-      }
 
-      // Revalida el resumen global (badges del rail + portada Inicio) con las
-      // órdenes recién creadas/actualizadas.
-      onDataChanged();
 
       if (currentWorkshopPdfs.length === 0) {
         setError('No se encontraron planos para las piezas detectadas. Sube planos manualmente o verifica la biblioteca.');
@@ -1183,47 +1134,25 @@ Reglas de extracción (ESTILO UT2033):
       if (!clean || clean === order.cantidad) return;
       snapshotOriginalOnce();
       setResults((prev) => (prev ? prev.map((o) => (o === order ? { ...o, cantidad: clean } : o)) : prev));
-      const woId = findWorkOrderId(order);
-      if (woId) {
-        void (async () => {
-          const res = await updateCantidad(woId, clean);
-          if (res.ok === false) console.warn('[smv-vision][report-edit] updateCantidad no aplicado:', res.reason);
-          else onDataChanged();
-        })();
-      }
     },
-    [snapshotOriginalOnce, findWorkOrderId, onDataChanged],
+    [snapshotOriginalOnce],
   );
 
   const handleExcludeOrder = useCallback(
     (order: Order) => {
       snapshotOriginalOnce();
-      const woId = findWorkOrderId(order);
-      setExcludedOrders((prev) => [...prev, { order, workOrderId: woId }]);
+      setExcludedOrders((prev) => [...prev, { order }]);
       setResults((prev) => (prev ? prev.filter((o) => o !== order) : prev));
-      if (woId) {
-        void (async () => {
-          const res = await archiveWorkOrder(woId, true);
-          if (res.ok === false) console.warn('[smv-vision][report-edit] archive no aplicado:', res.reason);
-          else onDataChanged();
-        })();
-      }
     },
-    [snapshotOriginalOnce, findWorkOrderId, onDataChanged],
+    [snapshotOriginalOnce],
   );
 
   const handleRestoreOrder = useCallback(
-    (entry: { order: Order; workOrderId: string | null }) => {
+    (entry: { order: Order }) => {
       setExcludedOrders((prev) => prev.filter((e) => e !== entry));
       setResults((prev) => (prev ? [...prev, entry.order] : [entry.order]));
-      if (entry.workOrderId) {
-        void (async () => {
-          const res = await archiveWorkOrder(entry.workOrderId!, false);
-          if (res.ok) onDataChanged();
-        })();
-      }
     },
-    [onDataChanged],
+    [],
   );
 
   const handleRestoreAll = useCallback(() => {
@@ -1233,32 +1162,7 @@ Reglas de extracción (ESTILO UT2033):
     if (snapshot) setResults(snapshot);
     setExcludedOrders([]);
     setOriginalResults(null);
-    void (async () => {
-      let touched = false;
-      for (const e of excluded) {
-        if (e.workOrderId) {
-          await archiveWorkOrder(e.workOrderId, false);
-          touched = true;
-        }
-      }
-      if (snapshot) {
-        const currentByKey = new Map(
-          current.map((o) => [dedupeKeyOfReportOrder(o), o.cantidad] as const),
-        );
-        for (const o of snapshot) {
-          const key = dedupeKeyOfReportOrder(o);
-          if (currentByKey.has(key) && currentByKey.get(key) !== o.cantidad) {
-            const woId = findWorkOrderId(o);
-            if (woId) {
-              await updateCantidad(woId, o.cantidad);
-              touched = true;
-            }
-          }
-        }
-      }
-      if (touched) onDataChanged();
-    })();
-  }, [originalResults, results, excludedOrders, findWorkOrderId, onDataChanged]);
+  }, [originalResults]);
 
   const auditedCount = useMemo(
     () => (results ? results.filter((r) => r.haSidoAuditada).length : 0),

@@ -11,9 +11,11 @@ npm run lint         # Type-check with tsc --noEmit
 npm test             # Run Vitest (single pass)
 npm run test:watch   # Vitest in watch mode
 npm run toolcrib:bootstrap  # Populate Firestore catalog (see script docs below)
-npm run sync:odoo    # Sync Odoo sale orders → Firestore (odooSaleOrders + workOrders + syncMeta)
+npm run sync:odoo    # Sync Odoo sale orders → Firestore (odooSaleOrders + syncMeta)
 npm run sync:odoo:dry  # Dry-run of the Odoo sync (no writes)
 npm run sync:odoo:install-task  # Register Windows scheduled task "SMV Odoo Sync" (hourly 7:00–19:00 weekdays)
+npm run sync:server              # Local HTTP server on localhost:3031 — expone POST /sync para que el botón REFRESCAR de OdooOrdersPanel dispare el sync desde el navegador
+npm run sync:server:install-task  # Registra Windows Task "SMV Sync Server" (arranca al iniciar sesión, ventana oculta)
 npm run toolcrib:dedupe          # Detect duplicate drawings (dry-run)
 npm run toolcrib:dedupe:execute  # Remove duplicate drawings (writes to Firestore)
 npm test -- matching             # Run a single test file by name pattern
@@ -31,7 +33,9 @@ npx tsx scripts/toolcribBootstrap.ts --scan=./TOOL\ CRIB --customer=SUPRAJIT
 npx tsx scripts/toolcribBootstrap.ts --inventory=./inventory.json --credentials=./serviceAccount.json
 ```
 
-**Odoo sync** (`scripts/syncOdoo.ts`): the single source of truth for Odoo data. Each run upserts `odooSaleOrders`, creates/updates/archives `workOrders` from the order lines (new OTs are born with `dueDate = otDate + 14 días` and a Tool Crib drawing matched via `selectLibraryDrawingMatch` — no Gemini involved), and overwrites `syncMeta/odoo` with the run status. Scheduled execution: `scripts/runOdooSync.ps1` (wrapper, logs to `logs/syncOdoo.log`) registered by `npm run sync:odoo:install-task` as the Windows task "SMV Odoo Sync". There is **no** Cloud Function for this — `syncSuprajitOrders` was retired on 2026-06-11 (see `docs/superpowers/specs/2026-06-11-odoo-sync-scheduled-design.md`).
+**Odoo sync** (`scripts/syncOdoo.ts` / Cloud Function `triggerOdooSync`): la fuente de verdad de Odoo. Existen dos mecanismos de sincronización:
+1. **Sync programado:** Ejecutado por la tarea de Windows "SMV Odoo Sync" (invoca `scripts/syncOdoo.ts`). Funciona de L-V, 7:00–19:00, cada hora.
+2. **Sync manual (Botón Refrescar):** El botón invoca la Cloud Function V2 `triggerOdooSync` (fuente en `functions/src/index.ts`, compilada a `functions/lib/` con `npm --prefix functions run build`; `firebase deploy` la compila automáticamente vía `predeploy`), que reutiliza la misma lógica y credenciales para disparar el sync al instante, sin depender del scheduler local de Windows. (Existe un fallback secundario a un servidor local `localhost:3031` lanzado por la tarea "SMV Sync Server"; exige el header `X-SMV-Sync: 1`).
 
 ## Environment variables
 
@@ -41,8 +45,6 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
 |---|---|---|
 | `VITE_GEMINI_API_KEY` | Yes | Gemini API calls |
 | `VITE_FIREBASE_*` (6 vars) | No | Firestore audit trail + Tool Crib catalog |
-| `VITE_RECAPTCHA_SITE_KEY` | No | Firebase App Check (reCAPTCHA v3) |
-| `VITE_APPCHECK_DEBUG` / `VITE_APPCHECK_DEBUG_TOKEN` | No | Local App Check bypass |
 | `VITE_TOOLCRIB_DEBUG_ALLOW_UNAUTH` | No | Skip auth gate in DEV only |
 | `DISABLE_HMR` | No | Set to `true` to disable Vite HMR (used in AI Studio) |
 | `ODOO_URL` / `ODOO_DB` / `ODOO_USER` / `ODOO_API_KEY` | Scripts only | Odoo 15 JSON-RPC sync — never exposed to the browser |
@@ -54,16 +56,17 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
 
 `App.tsx` owns all state and routes between views via `AppShell` + `NavRail` (left-side navigation rail):
 
-- **Inicio** (`InicioView.tsx`) — KPI dashboard: overdue/critical/warning counts, on-time %, immediate-attention shortcuts, and analytics charts (stage distribution, tornero workload, 30-day on-time trend via `BarChart`/`LineChart`). Reads from `useDashboardSummary` and navigates to Control with a pre-set alert filter on click.
-- **Control** (`WorkOrdersPanel.tsx`) — Production control board (kanban or list). Full CRUD on work orders with 4-stage lifecycle and tornero management.
-- **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders pending invoicing, synced from `odooSaleOrders` via `src/lib/firebase/odooOrders.ts`.
-- **Biblioteca** (`BibliotecaView.tsx`) — Tool Crib library (wraps `ToolcribLibraryPanel`).
+- **Inicio** (`InicioView.tsx`) — Dashboard and KPI analytics.
+- **Generar Reporte** (`reporte` view in `App.tsx`) — Report generation interface: Odoo order extraction, blueprint library attachment, PDF workspace management, and auditing pipeline powered by `useVisionAnalysis`.
+- **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders, synced via `scripts/syncOdoo.ts`.
+- **Biblioteca** (`BibliotecaView.tsx`) — Tool Crib catalog browser; wraps `ToolcribLibraryPanel`.
+- **Compras** (`ComprasPanel.tsx`) — Purchase catalog (metals, assemblies, tools, other). CRUD interface backed by Firestore `purchases` collection.
 
-The Reporte (analysis) view stays mounted but hidden so cached state is preserved. `useDashboardSummary` drives badge counts on the NavRail and is the single source of truth for aggregated work-order severity shared across NavRail, InicioView, and WorkOrdersPanel.
+The Reporte view stays mounted but hidden (`display: none`) so UI state and PDF cache are preserved across navigation.
 
 ### Analysis pipeline (`src/hooks/useVisionAnalysis.ts`)
 
-`App.tsx` wires views and passes callbacks; all analysis state and the `extractInfo()` flow live in the `useVisionAnalysis` hook. The hook delegates UI state to two sub-hooks: `useEditMode` (edit/exclude/restore orders, cantidad writes to Firestore) and `useResultsDisplay` (filter, search, preview state — returns `filteredResults`). The pipeline:
+`App.tsx` wires views and passes callbacks; all analysis state and the `extractInfo()` flow live in the `useVisionAnalysis` hook. The pipeline:
 
 1. **Order extraction** — `gemini-3.5-flash` reads the order report PDF and returns structured JSON (piece name, qty, order #, date, priority). Results are cached in IndexedDB keyed by `ORDER_PROMPT_VERSION`.
 2. **Auto-matching** — `listActiveDrawingViews()` fetches the Tool Crib catalog from Firestore and scores each order against each library entry using `scorePieceMatch` / `extractLibrarySignals`. **ISO-first**: if any ISO drawing scores ≥ `MIN_BLUEPRINT_MATCH_SCORE`, it wins over any CAD drawing regardless of score. Matching blueprints are auto-fetched via `fetchPdfAsDataUrl` and added to the workspace without user interaction. Hot-stamp orders (`isHotStampPiece`) are matched by keyword search (the fuzzy matcher can't connect "HOT STAMP LETRA M" with "PUNZONES DE MARCA").
@@ -71,44 +74,38 @@ The Reporte (analysis) view stays mounted but hidden so cached state is preserve
 4. **Blueprint analysis** — The JPEG is sent to `gemini-3.5-flash` Vision; it returns `BlueprintSpec[]` with piece label and an isometric bounding box (`[ymin, xmin, ymax, xmax]` on a 0–1000 grid). Results are cached in IndexedDB keyed by `BLUEPRINT_PROMPT_VERSION`. **Two-pass refinement**: if the initial bounding box area exceeds `REFINEMENT_SKIP_AREA_THRESHOLD = 200_000`, a second Gemini call crops the region and re-asks for a tighter box, then maps coordinates back to the original 0–1000 space.
 5. **Progressive merge** — Blueprint results are applied to the order list as each blueprint completes (not at the end). `cropIsometricView()` crops the matched region from the rasterized JPEG. Falls back to `FALLBACK_CENTER_BOX = [30, 30, 720, 970]` if the box is invalid.
 6. **PDF export** — `jsPDF` + `jspdf-autotable` via `src/lib/pdfGenerator.ts` generates the final report with one row per order and the cropped isometric image embedded.
-7. **Upsert to Firestore** — After analysis, orders are written to `workOrders` via `upsertWorkOrders`. The upsert is idempotent (keyed by `SO::parte`) and does **not** overwrite delivery/status state already set.
 
 Up to 8 blueprints are analyzed concurrently (`MAX_BLUEPRINT_CONCURRENCY = 8`, via `runWithConcurrencyLimit` in `src/lib/documentAnalysis/concurrency.ts`). Results are cached in IndexedDB by document SHA-256 + prompt version (`src/lib/documentAnalysis/cache.ts`, TTL: 7 days). All Gemini API calls use `callWithRetry` (max 3 attempts, exponential backoff: 1s/2s).
 
 **Prompt versioning**: When the Gemini prompts in `extractInfo()` change, bump `ORDER_PROMPT_VERSION` or `BLUEPRINT_PROMPT_VERSION` at the top of `src/hooks/useVisionAnalysis.ts` to invalidate stale IndexedDB cache entries for all users. App version is exposed as `__APP_VERSION__` (defined in `vite.config.ts` from `package.json`).
 
-### Work Orders / Control de Producción
+### Purchases module
 
-A production-tracking system layered on top of the analysis pipeline.
-
-**4-stage lifecycle**: `pendiente → en_proceso → terminada → entregada`
+A simple purchase catalog for tracking materials and components needed for production.
 
 Key modules:
-- `src/lib/firebase/workOrders.ts` — Data layer. Same result-type contract as `toolcrib.ts` (never throws). `upsertWorkOrders` uses `WriteBatch` (max 500 ops/batch) and merges incoming orders without overwriting delivery state. Default cycle time: 14 days (`DEFAULT_CYCLE_DAYS`).
-- `src/lib/workOrders/dedupe.ts` — Pure dedup logic. Dedup key: `SO::parte` (or `PO::…` fallback). `mergeUpsert` decides which mutable fields to refresh vs. which to preserve.
-- `src/lib/workOrders/metrics.ts` — Severity and metrics calculations (`getDueDateSeverity`, `calcMetrics`). Shared between `WorkOrdersPanel`, `InicioView`, and `useDashboardSummary` — do not duplicate this logic elsewhere.
-- `src/lib/planoOt.ts` — Stamps the **original** (full-dimension) blueprint PDF with an SO/cantidad/fecha badge in the top-left corner using `pdf-lib`. Does not crop — the tornero needs the full dimensions.
+- `src/lib/firebase/purchases.ts` — Data layer using the result-type contract (never throws). Exports `listPurchases`, `createPurchase`, `updatePurchase`, `deletePurchase`.
+- `src/lib/firebase/purchaseValidators.ts` — Runtime shape normalization for Firestore `purchases` documents.
+- `src/components/ComprasPanel.tsx` — Full CRUD UI with search and sort. Item types: `metal`, `ensamble`, `herramienta`, `otro`.
 
-**Torneros** (lathe operators): managed via the `torneros` Firestore collection. `WorkOrdersPanel` exposes a side drawer for CRUD. Assignment tracked per order via `assignedToTornero` / `deliveredToTornero`.
+Firestore collection `purchases`: `{ id, nombre, tipo, sku, proveedor, link, notas, createdAtUTC, updatedAtUTC }`
 
 ### Firebase layer (`src/lib/firebase/`)
 
 All Firebase functions use a **result type** — they never throw:
 ```ts
 type ToolcribResult<T> = { ok: true; value: T } | { ok: false; reason: ToolcribFailureReason }
-// WorkOrders uses the same pattern with WorkOrderResult<T>
 ```
 
 Key modules:
 - `client.ts` — Lazy singleton for `FirebaseApp` + `Firestore`. Returns `null` if config is missing; callers treat this as "feature disabled". Exports `__resetFirebaseClientForTests()` to clear cached singletons in tests.
 - `toolcrib.ts` — Read-only catalog queries (`listActiveDrawingViews`, `getActiveDrawingForPart`, `getDrawingById`) and `recordToolcribPrintLog` (write). Auth UID is resolved inside the writer — callers cannot spoof it.
-- `workOrders.ts` — Full CRUD for `workOrders` and `torneros` collections.
+- `purchases.ts` — CRUD for `purchases` collection. Exports `listPurchases`, `createPurchase`, `updatePurchase`, `deletePurchase`.
 - `odooOrders.ts` — Read-only queries for `odooSaleOrders` (`listOrdersToInvoice`). Same result-type contract; writing is done only by `scripts/syncOdoo.ts`.
-- `metricsSnapshots.ts` — Reads/writes `dailyMetricSnapshots` collection. `buildSnapshotData` is pure; `writeSnapshot` / `getTodaySnapshot` hit Firestore. Called by `useDailySnapshot` (fire-and-forget, errors never surfaced to UI).
 - `analysisRuns.ts` — Fire-and-forget audit log for each analysis run.
-- `auth.ts` — Google and email/password sign-in; `useFirebaseUser()` hook (backed by `useSyncExternalStore`). Google sign-in uses redirect flow on localhost in DEV, popup flow in production.
+- `auth.ts` — Email/password sign-in only (Google flow removed on purpose: private app without domain allowlist); `useFirebaseUser()` hook (backed by `useSyncExternalStore`).
 - `env.ts` — Reads and caches Firebase config from `import.meta.env`. `isToolcribDebugUnauthAllowed()` is gated to `DEV` only.
-- `toolcribValidators.ts` / `workOrderValidators.ts` / `validators.ts` — Runtime shape normalization for all Firestore documents.
+- `toolcribValidators.ts` / `purchaseValidators.ts` / `validators.ts` — Runtime shape normalization for all Firestore documents.
 
 ### Firestore collections
 
@@ -117,14 +114,12 @@ Key modules:
 | `toolcribParts` | Part catalog (`partNumber`, `customer`, `status: active`) |
 | `toolcribDrawings` | Drawing revisions per part (`partId`, `revision`, `isActive`, `sourceType`, `sourcePath`, `pdfUrl`) |
 | `toolcribPrintLogs` | Audit log for PDF prints (`drawingId`, `printedByUid` from server auth) |
-| `analysisRuns` | Audit log for each `extractInfo()` run |
-| `workOrders` | Production work orders — deduped by `SO::parte` key |
-| `torneros` | Lathe operators (`name`, `active`) |
+| `analysisRuns` | Audit log for each vision analysis run |
 | `odooSaleOrders` | Odoo sale orders synced by `scripts/syncOdoo.ts` — read-only from the app |
-| `syncMeta` | Single doc `odoo` with last-sync status (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage?`), written by `scripts/syncOdoo.ts` on every run (success and failure); read by the status chip in `OdooOrdersPanel` via `useSyncMeta` |
-| `dailyMetricSnapshots` | One document per day keyed by ISO date; written by `useDailySnapshot` on first app load |
+| `syncMeta` | Single doc `odoo` with last-sync status (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage?`), written by `scripts/syncOdoo.ts` on every run (success and failure); read by the status chip in `OdooOrdersPanel` |
+| `purchases` | Purchase catalog items (`nombre`, `tipo`, `sku`, `proveedor`, `link`, `notas`), managed by `ComprasPanel` |
 
-Security rules (`firestore.rules`): any authenticated user can read/write. Data validation lives in TypeScript validators, not in rules.
+Security rules (`firestore.rules`): least-privilege per collection with default deny. `odooSaleOrders` / `syncMeta` / `workOrders` are read-only from the client (written only by the Admin SDK, which bypasses rules). `toolcribPrintLogs` and `analysisRuns` are create-only and immutable, with the auth uid enforced in rules (`printedByUid` / `userUid` / `createdByUid` must equal `request.auth.uid`). `purchases` is full CRUD for any signed-in user. Data *shape* validation lives in TypeScript validators; rules enforce identity and write surface.
 
 **Two-query join**: `listActiveDrawingViews` issues exactly two Firestore reads — one for parts, one for all active drawings (`isActive == true`) — then joins them in memory by `partId`. No N+1.
 
@@ -134,12 +129,15 @@ Receives `rasterize-normalize` messages. Uses `pdfjsLib` with `disableWorker: tr
 
 ### Component tree
 
-- `main.tsx` wraps `<App>` in `<AuthGate>` and `<WorkOrdersProvider>`.
-- `WorkOrdersProvider` (`src/contexts/WorkOrdersContext.tsx`) — Holds a single `onSnapshot` subscription to `workOrders` (archived == false), shared by `useDashboardSummary` and `WorkOrdersPanel`. Eliminates the double read that previously occurred when both components called `listWorkOrders()` independently. Exposes work orders and torneros via `useWorkOrdersContext()`. Also calls `useDailySnapshot` to write one metric snapshot per day. Must be placed inside `<AuthGate>` so the listener always starts with an active session.
-- `AuthGate` (`src/components/AuthGate.tsx`) — Shows login screen if Firebase is configured and user is not authenticated. Passes through if Firebase is unconfigured or `isBypassed`. The "bypass" button enables unauthenticated access (audit logs will not be recorded).
-- `AppShell` + `NavRail` (`src/components/shell/`) — Fixed left rail + full-viewport content area. `NavRail` receives `DashboardCounts` from `useDashboardSummary` for badge display.
-- `WorkOrdersPanel` (`src/components/WorkOrdersPanel.tsx`) — Kanban/list board with alert-bar filters, search, and a side drawer for tornero management + production metrics.
-- `ToolcribLibraryPanel` (`src/components/ToolcribLibraryPanel.tsx`) — Reads `listActiveDrawingViews` on mount, renders a searchable list with Print and Attach actions. Deduplication via `attachedDrawingIds` prop (Set of `drawingId`).
+- `main.tsx` wraps `<App>` in `<ErrorBoundary>` → `<AuthGate>`.
+- `ErrorBoundary` (`src/components/ErrorBoundary.tsx`) — Global boundary: replaces the blank screen on render crashes with a recoverable error screen (reload button). Event-handler/promise errors do NOT route here; those use the result-type contract.
+- `AuthGate` (`src/components/AuthGate.tsx`) — Shows login screen if Firebase is configured and user is not authenticated. Passes through if Firebase is unconfigured or bypassed (DEV-only button). Fail-closed: if Firebase IS configured but Auth fails to initialize, it blocks with an error screen instead of passing through.
+- `App.tsx` — Owns view state and the `useVisionAnalysis` hook. Routes between views via `AppShell` + `NavRail`.
+- `AppShell` + `NavRail` (`src/components/shell/`) — Fixed left rail (desktop) / mobile hamburger menu (mobile) + full-viewport content area. NavRail exposes navigation buttons for all views.
+- `ToolcribLibraryPanel` (`src/components/ToolcribLibraryPanel.tsx`) — Reads `listActiveDrawingViews` on mount, renders a searchable list with Print and Attach actions. Deduplication via `attachedDrawingIds` prop.
+- `ComprasPanel` (`src/components/ComprasPanel.tsx`) — Purchase catalog CRUD with search/sort.
+- `OdooOrdersPanel` (`src/components/OdooOrdersPanel.tsx`) — Read-only list of pending Odoo orders with sync status.
+- `InicioView` + `BibliotecaView` (`src/components/`) — Dashboard and Tool Crib library views.
 
 ### Piece-matching algorithm (`src/lib/matching.ts`)
 
@@ -158,27 +156,62 @@ Tailwind v4 is used via the `@tailwindcss/vite` plugin — there is no `tailwind
 
 ### Build chunking
 
-The Vite build splits vendor code into named chunks to avoid one giant bundle: `pdfjs-vendor`, `genai-vendor`, `motion-vendor`, `react-vendor`. This is configured in `vite.config.ts` under `build.rollupOptions.output.manualChunks`.
+The Vite build splits vendor code into named chunks to avoid one giant bundle: `react-vendor`, `genai-vendor`, `motion-vendor`, `firebase-vendor`, `pdf-gen-vendor` (jspdf + autotable), `pdf-lib-vendor`, `pdfjs-vendor` (pdfjs-dist main; note pdfjs-dist lives inside the worker bundle in practice); anything else in `node_modules` falls back into `react-vendor` (avoids a circular standalone `vendor` chunk). This is configured in `vite.config.ts` under `build.rollupOptions.output.manualChunks`.
 
 ### Shared utilities
 
 - `fetchPdfAsDataUrl` (`src/lib/fetchPdf.ts`) — 30-second AbortController timeout, FileReader → dataURL. Used by `useVisionAnalysis` (auto-matching) and `ToolcribLibraryPanel.tsx` (manual attach).
-- `src/lib/age.ts` — Date parsing, ISO date arithmetic (`parseDateToISO`, `addDaysToISODate`). Used by `workOrders.ts` to compute default due dates.
-- `src/lib/reportFormat.ts` — Pure formatting functions for display (piece names, due-date labels, severity).
+- `src/lib/age.ts` — Date parsing, ISO date arithmetic (`parseDateToISO`, `addDaysToISODate`).
+- `src/lib/reportFormat.ts` — Pure formatting functions for display (piece names, date labels).
 - `src/lib/hotStamp.ts` — Consolidates hot-stamp orders sharing the same die across multiple POs.
 - `src/lib/orderMerge.ts` — Merges grouped orders across multiple PDF uploads; handles multi-sheet PO reports.
 - `src/lib/pdfGenerator.ts` — `generateReportPdf` and `generateSingleOrderPdf`. Logic extracted from `App.tsx`; callers pass explicit options instead of closing over component state.
 - `src/lib/log.ts` — Dev-gated logger. `log.debug`/`log.info` only emit when `import.meta.env.DEV` is true; `log.warn`/`log.error` always emit. Use `log.*` instead of `console.*` for match/pipeline traces.
 - `src/lib/imageProcessing.ts` — `isValidBoundingBox`, `cropIsometricView`, `cropToBoxRaw`. Bounding-box validation is pure (testable in Node); the crop functions require a browser Canvas (not testable in Node without jsdom).
+- `src/lib/gemini.ts` — Low-level Gemini utilities: `callWithRetry` (exponential backoff), `preparePdfPart` / `prepareImagePart` (build `inlineData` objects for `@google/genai`). All Gemini calls go through these.
+- `src/lib/blueprintParsers.ts` — `parseBoundingBox` and `parseBlueprintResponse` parse/validate raw Gemini Vision JSON into typed `BlueprintSpec[]`. Also exports `isRecord` / `asString` type-narrowing helpers.
+- `src/lib/metricsBaseline.ts` — Stores/reads `AnalysisMetrics` in `localStorage` (`smvVisionMetricsBaselineV2`) to detect analysis performance regressions between sessions.
 - `src/components/charts/BarChart.tsx` / `LineChart.tsx` — Pure SVG chart components used by `InicioView`. No external charting library; they accept typed data props and apply the project's CSS token colors.
+
+### Tests
+
+Unit tests live in `src/lib/__tests__/`. Test coverage is light; core logic tested includes `matching.ts`, `imageProcessing.ts`, `age.ts`. Run with `npm test` (single pass) or `npm run test:watch`. Priority: if modifying matching or image processing, run tests to catch regressions.
+
+### Scripts
+
+`scripts/` contains one-off utilities beyond the npm scripts. Notable:
+- `scripts/syncOdoo.ts` — Odoo → Firestore sync (sale orders, odooSaleOrders collection). Invoked by Windows scheduled task or Cloud Function.
+- `scripts/syncServer.ts` — Local Express server on 127.0.0.1:3031 that exposes `POST /sync`. Allows the "Refrescar" button in `OdooOrdersPanel` to trigger a local sync when the Cloud Function isn't available. Requires the `X-SMV-Sync: 1` header (forces a CORS preflight so arbitrary websites can't fire drive-by syncs against localhost).
+- `scripts/toolcrib*.ts` — Tool Crib catalog management (upload PDFs, dedupe drawings, bootstrap).
+- `scripts/installSyncTask.ps1` / `scripts/installSyncServerTask.ps1` — PowerShell scripts to register Windows scheduled tasks.
+
+The `functions/` directory contains Cloud Functions V2. Source of truth is `functions/src/index.ts` (TypeScript, compiled to the gitignored `functions/lib/` via `npm --prefix functions run build`; `firebase deploy` runs it automatically via the `predeploy` hook in `firebase.json`). Exports: `triggerOdooSync` (callable, requires `request.auth`; powers the Refrescar button) and `syncSuprajitOrders` (legacy 30-min schedule kept for parity with what's deployed — the scheduled sync of record is the Windows task). Note: the function still upserts the `workOrders` collection, which the app reads for the production badge in `OdooOrdersPanel`.
 
 ### Path alias
 
 `@` resolves to the project root (defined in `vite.config.ts`). Prefer `@/src/...` imports over relative `../../` chains when crossing directory boundaries.
 
-### Unused dependencies
+## Important Patterns
 
-`@react-three/fiber`, `@react-three/drei`, and `@types/three` are installed but not imported anywhere in `src/`. Safe to remove unless a 3D feature is planned.
+### Result types
+All Firebase functions follow a **result-type contract** — they never throw. Always check `result.ok` before accessing `result.value`:
+```ts
+const res = await listPurchases();
+if (res.ok) {
+  setItems(res.value);
+} else {
+  setError(res.reason);
+}
+```
+
+### Prompt versioning
+When Gemini prompts in `extractInfo()` change, bump `ORDER_PROMPT_VERSION` or `BLUEPRINT_PROMPT_VERSION` in `src/hooks/useVisionAnalysis.ts` to invalidate stale IndexedDB cache entries. This ensures all users see fresh AI results on next use.
+
+### PDF caching
+Analyzed blueprints are cached in IndexedDB (7-day TTL) keyed by document SHA-256 + prompt version. Cache miss is not an error — the UI simply re-analyzes (with exponential backoff via `callWithRetry`).
+
+### Bounding-box validation
+AI-generated bounding boxes `[ymin, xmin, ymax, xmax]` on a 0–1000 grid are validated by `isValidBoundingBox()`. Invalid boxes (area < 5%, area > 56%, or sliver proportions) fall back to `FALLBACK_CENTER_BOX = [30, 30, 720, 970]`.
 
 ## Wiki Knowledge Base
 

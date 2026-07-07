@@ -45,7 +45,7 @@ export default defineConfig(({mode}) => {
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // Do not modify: file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
     },
     build: {
@@ -76,11 +76,21 @@ export default defineConfig(({mode}) => {
               return 'react-vendor';
             }
 
-            if (id.includes('@hello-pangea/dnd') || id.includes('use-latest-ref')) {
-              return 'dnd-vendor';
+            if (id.includes('firebase')) {
+              return 'firebase-vendor';
             }
 
-            return 'vendor';
+            if (id.includes('jspdf') || id.includes('jspdf-autotable')) {
+              return 'pdf-gen-vendor';
+            }
+
+            if (id.includes('pdf-lib')) {
+              return 'pdf-lib-vendor';
+            }
+
+            // Catch-all goes into react-vendor to avoid circular chunk
+            // between a standalone 'vendor' chunk and react-vendor.
+            return 'react-vendor';
           },
         },
       },

@@ -71,10 +71,25 @@ export interface OdooOrderView {
    *   'no'         → Nada que facturar
    */
   invoice_status: string;
+  /** Estado de la orden ('draft', 'sent', 'sale', 'done', 'cancel') */
+  state: string;
   /** true si la orden está pendiente de facturación (to invoice). */
   toInvoice: boolean;
   /** Líneas de la orden con producto, descripción y cantidad. */
   order_lines: OdooOrderLineView[];
+  /** Entregas (remisiones / stock.picking) asociadas a esta orden. */
+  deliveries: {
+    name: string;
+    state: string;
+    date_done: string | false;
+    lines: {
+      product: string;
+      qty_demand: number;
+      qty_done: number;
+      state: string;
+      sale_line_id: number | null;
+    }[];
+  }[];
   /** Cuándo se sincronizó desde Odoo (ISO string o null). */
   syncedAtUTC: string | null;
 }
@@ -111,13 +126,15 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
     .map((l) => {
       const qty = typeof l['qty'] === 'number' ? l['qty'] : 0;
       const qty_delivered = typeof l['qty_delivered'] === 'number' ? l['qty_delivered'] : 0;
+      const qty_pending_from_pickings = typeof l['qty_pending_from_pickings'] === 'number' ? l['qty_pending_from_pickings'] : undefined;
+      
       return {
         product: typeof l['product'] === 'string' ? l['product'] : '',
         description: typeof l['description'] === 'string' ? l['description'] : '',
         qty,
         qty_delivered,
-        qty_pending: Math.max(0, qty - qty_delivered),
-        qty_pending_from_pickings: typeof l['qty_pending_from_pickings'] === 'number' ? l['qty_pending_from_pickings'] : undefined,
+        qty_pending: qty_pending_from_pickings !== undefined ? qty_pending_from_pickings : Math.max(0, qty - qty_delivered),
+        qty_pending_from_pickings,
       };
     });
 
@@ -135,8 +152,10 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
     partner: typeof raw['partner'] === 'string' ? raw['partner'] : 'Sin cliente',
     client_order_ref: typeof raw['client_order_ref'] === 'string' ? raw['client_order_ref'] : null,
     invoice_status: typeof raw['invoice_status'] === 'string' ? raw['invoice_status'] : 'no',
+    state: typeof raw['state'] === 'string' ? raw['state'] : 'unknown',
     toInvoice: raw['toInvoice'] === true,
     order_lines,
+    deliveries: Array.isArray(raw['deliveries']) ? (raw['deliveries'] as any[]) : [],
     syncedAtUTC,
   };
 }
@@ -159,11 +178,11 @@ export async function listOrdersToInvoice(options?: {
   if (!isAuthed()) return { ok: false, reason: 'not-authenticated' };
 
   try {
-    // Filtra por `toInvoice === true`, campo que el script syncOdoo.ts calcula
-    // usando la LÓGICA BASADA EN TRASLADOS:
-    // Solo órdenes marcadas en Odoo como 'A facturar' ('to invoice') o 'upselling',
-    // Y que tengan al menos un Traslado (Remisión) en estado 'Listo', 'En espera' o no tengan ninguno.
-    // Si TODOS sus traslados están en 'Hecho', significa que ya se entregó al 100% y se oculta.
+    // Filtra por `toInvoice === true`, campo que el script syncOdoo.ts calcula.
+    // LÓGICA BASADA EN ESTADO DE FACTURACIÓN:
+    // Solo órdenes marcadas en Odoo como 'A facturar' ('to invoice') o 'upselling'.
+    // Las órdenes se muestran siempre hasta que se facturan por completo, incluso
+    // si sus remisiones (físicas) ya están entregadas, para poder solicitar facturas.
     const q = query(
       collection(database, ODOO_ORDERS_COLLECTION),
       where('toInvoice', '==', true),
@@ -187,6 +206,65 @@ export async function listOrdersToInvoice(options?: {
     return { ok: true, value: out };
   } catch (error) {
     console.warn('[smv-vision][odoo-orders] listOrdersToInvoice falló', error);
+    return { ok: false, reason: 'read-failed' };
+  }
+}
+
+/**
+ * Devuelve órdenes de SUPRAJIT que ya tienen remisión entregada ('done')
+ * pero no tienen Orden de Compra (client_order_ref está vacío o dice "Pendiente").
+ * También podemos verificar que state sea 'draft' o 'sent' (Cotización).
+ */
+export async function listEntregasSinOC(options?: {
+  max?: number;
+}): Promise<OdooOrderResult<OdooOrderView[]>> {
+  const database = db();
+  if (!database) return { ok: false, reason: 'not-configured' };
+  if (!isAuthed()) return { ok: false, reason: 'not-authenticated' };
+
+  try {
+    // Como las órdenes sin OC de Suprajit tal vez no estén en 'toInvoice' (si se configuraron mal),
+    // y Odoo no deja facturar cotizaciones sin confirmar, hacemos un query a todo lo de SUPRAJIT (las más recientes)
+    // y lo filtramos en cliente. Firebase Admin syncOdoo actualiza las órdenes.
+    const q = query(
+      collection(database, ODOO_ORDERS_COLLECTION),
+      orderBy('date_order', 'desc'),
+      fbLimit(options?.max ?? DEFAULT_MAX),
+    );
+
+    const snap = await getDocs(q);
+    const out: OdooOrderView[] = [];
+    snap.forEach((d) => {
+      const normalized = normalizeOdooOrder(d.id, d.data() as Record<string, unknown>);
+      if (!normalized) return;
+      
+      // Solo órdenes de Suprajit (o Bulk Pack, etc., dependiendo del negocio)
+      if (!normalized.partner.toUpperCase().includes('SUPRAJIT')) return;
+
+      const hasPo = normalized.client_order_ref && 
+                    normalized.client_order_ref.trim() !== '' && 
+                    normalized.client_order_ref.toUpperCase() !== 'PENDIENTE' &&
+                    normalized.client_order_ref.toUpperCase() !== 'FALTA OC';
+
+      if (hasPo) return; // Si tiene OC, no nos interesa
+      
+      // Solo nos interesan las que siguen siendo Cotizaciones (draft)
+      // Odoo states: draft, sent, sale, done, cancel
+      if (normalized.state !== 'draft') return;
+
+      // Debe tener alguna remisión (stock.picking) en estado 'done'
+      // o líneas con qty_delivered > 0
+      const hasDeliveredLines = normalized.order_lines.some(l => l.qty_delivered > 0);
+      const hasDoneDelivery = normalized.deliveries?.some(d => d.state === 'done');
+      
+      if (hasDeliveredLines || hasDoneDelivery) {
+        out.push(normalized);
+      }
+    });
+
+    return { ok: true, value: out };
+  } catch (error) {
+    console.warn('[smv-vision][odoo-orders] listEntregasSinOC falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }

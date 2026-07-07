@@ -22,14 +22,16 @@ import {
   query,
   serverTimestamp,
   where,
+  writeBatch,
   type DocumentReference,
   type Firestore,
   type QueryConstraint,
 } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 import type { ToolcribActiveDrawingView } from '../../types';
 import { getCurrentUserUid } from './auth';
-import { getFirestoreClient } from './client';
+import { getFirestoreClient, getStorageClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
 import {
   normalizeToolcribDrawing,
@@ -83,7 +85,7 @@ export async function listActiveToolcribParts(options?: {
     return { ok: false, reason: 'not-authenticated' };
   }
 
-  const constraints: QueryConstraint[] = [];
+  const constraints: QueryConstraint[] = [where('status', '==', 'active')];
   if (options?.customer && options.customer.trim().length > 0) {
     constraints.push(where('customer', '==', options.customer.trim()));
   }
@@ -370,3 +372,138 @@ export function recordToolcribPrintLogFireAndForget(
     console.warn('[smv-vision][toolcrib] fire-and-forget atrapó error inesperado', error);
   });
 }
+
+export async function uploadDrawingPdf(
+  file: File,
+  customer: string,
+  partNumber: string,
+  revision: string
+): Promise<ToolcribResult<string>> {
+  const storage = getStorageClient();
+  if (!storage) return { ok: false, reason: 'not-configured' };
+  
+  const uid = getCurrentUserUid();
+  if (!uid) return { ok: false, reason: 'not-authenticated' };
+
+  try {
+    const destName = `toolcrib/uploads/${customer}_${partNumber}_rev${revision}_${Date.now()}.pdf`;
+    const storageRef = ref(storage, destName);
+    await uploadBytes(storageRef, file, { contentType: 'application/pdf' });
+    const url = await getDownloadURL(storageRef);
+    return { ok: true, value: url };
+  } catch (error) {
+    console.warn('[smv-vision][toolcrib] uploadDrawingPdf falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+export interface CreateDrawingPayload {
+  partNumber: string;
+  customer: string;
+  description: string;
+  revision: string;
+  pdfUrl: string | null;
+  sourceType: 'network' | 'storage';
+  sourcePath: string;
+  isActive: boolean;
+}
+
+export async function createPartAndDrawing(
+  payload: CreateDrawingPayload
+): Promise<ToolcribResult<void>> {
+  const db = resolveFirestoreOrFail();
+  if (!db) return { ok: false, reason: 'not-configured' };
+
+  const uid = getCurrentUserUid();
+  if (!uid) return { ok: false, reason: 'not-authenticated' };
+
+  try {
+    const qParts = query(
+      collection(db, TOOLCRIB_PARTS_COLLECTION),
+      where('partNumber', '==', payload.partNumber),
+      where('customer', '==', payload.customer)
+    );
+    const partsSnap = await getDocs(qParts);
+    
+    let partId: string;
+    const batch = writeBatch(db);
+    
+    if (partsSnap.empty) {
+      const newPartRef = doc(collection(db, TOOLCRIB_PARTS_COLLECTION));
+      partId = newPartRef.id;
+      batch.set(newPartRef, {
+        partNumber: payload.partNumber,
+        customer: payload.customer,
+        description: payload.description,
+        status: 'active',
+        createdAtUTC: serverTimestamp(),
+        updatedAtUTC: serverTimestamp(),
+      });
+    } else {
+      partId = partsSnap.docs[0].id;
+    }
+
+    const newDrawingRef = doc(collection(db, TOOLCRIB_DRAWINGS_COLLECTION));
+    batch.set(newDrawingRef, {
+      partId,
+      revision: payload.revision,
+      isActive: payload.isActive,
+      sourceType: payload.sourceType,
+      sourcePath: payload.sourcePath,
+      pdfUrl: payload.pdfUrl,
+      checksumSha256: null,
+      createdAtUTC: serverTimestamp(),
+      createdByUid: uid,
+    });
+
+    if (payload.isActive) {
+      const qOthers = query(
+        collection(db, TOOLCRIB_DRAWINGS_COLLECTION),
+        where('partId', '==', partId),
+        where('isActive', '==', true)
+      );
+      const othersSnap = await getDocs(qOthers);
+      othersSnap.forEach(docSnap => {
+        batch.update(docSnap.ref, { isActive: false });
+      });
+    }
+
+    await batch.commit();
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][toolcrib] createPartAndDrawing falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+export async function inactivatePart(partId: string): Promise<ToolcribResult<void>> {
+  const db = resolveFirestoreOrFail();
+  if (!db) return { ok: false, reason: 'not-configured' };
+
+  const uid = getCurrentUserUid();
+  if (!uid) return { ok: false, reason: 'not-authenticated' };
+
+  try {
+    const batch = writeBatch(db);
+    
+    const partRef = doc(db, TOOLCRIB_PARTS_COLLECTION, partId);
+    batch.update(partRef, { status: 'inactive', updatedAtUTC: serverTimestamp() });
+
+    const qDrawings = query(
+      collection(db, TOOLCRIB_DRAWINGS_COLLECTION),
+      where('partId', '==', partId),
+      where('isActive', '==', true)
+    );
+    const drawingsSnap = await getDocs(qDrawings);
+    drawingsSnap.forEach(docSnap => {
+      batch.update(docSnap.ref, { isActive: false });
+    });
+
+    await batch.commit();
+    return { ok: true, value: undefined };
+  } catch (error) {
+    console.warn('[smv-vision][toolcrib] inactivatePart falló', error);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+

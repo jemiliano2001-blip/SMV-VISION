@@ -26,15 +26,24 @@ import {
   Printer,
   RefreshCcw,
   Search,
+  Eye,
+  X,
+  Trash2,
 } from 'lucide-react';
 import Fuse from 'fuse.js';
 
 import {
   listActiveDrawingViews,
   recordToolcribPrintLogFireAndForget,
+  inactivatePart,
 } from '../lib/firebase/toolcrib';
 import type { ToolcribActiveDrawingView } from '../types';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { ToolcribUploadModal } from './ToolcribUploadModal';
+import { ToolcribPrintModal } from './ToolcribPrintModal';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
+import { Input } from './ui/input';
+import { Button } from './ui/button';
 
 export interface ToolcribAttachment {
   drawingId: string;
@@ -89,7 +98,11 @@ export function ToolcribLibraryPanel({
   const [views, setViews] = useState<ToolcribActiveDrawingView[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isOpen, setIsOpen] = useState<boolean>(true);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+  const [printDrawing, setPrintDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const [updateDrawing, setUpdateDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [rowState, setRowState] = useState<Record<string, RowActionState>>({});
+  const [previewDrawing, setPreviewDrawing] = useState<ToolcribActiveDrawingView | null>(null);
 
   const loadLibrary = useCallback(async () => {
     setStatus('loading');
@@ -252,187 +265,347 @@ export function ToolcribLibraryPanel({
     [onAttachDrawing],
   );
 
+  const handleInactivate = useCallback(async (view: ToolcribActiveDrawingView) => {
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar (inactivar) la parte ${view.partNumber}?`)) {
+      return;
+    }
+
+    setRowState((prev) => ({
+      ...prev,
+      [view.drawingId]: { status: 'inactivating' as any },
+    }));
+
+    try {
+      const res = await inactivatePart(view.partId);
+      if (res.ok === false) {
+        throw new Error(res.reason);
+      }
+      void loadLibrary();
+    } catch (error) {
+      console.warn('[smv-vision][toolcrib] handleInactivate falló', error);
+      setRowState((prev) => ({
+        ...prev,
+        [view.drawingId]: {
+          status: 'error',
+          message: 'No fue posible inactivar la parte. Intenta nuevamente.',
+        },
+      }));
+    }
+  }, [loadLibrary]);
+
   const totalCount = views.length;
   const visibleCount = filteredViews.length;
   const isEmpty = status === 'ready' && totalCount === 0;
 
   return (
-    <div className="border-2 border-line bg-surface">
+    <div className="border border-border bg-card text-card-foreground rounded-lg shadow-sm">
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="w-full flex items-center justify-between px-3 py-2.5 font-display text-[12px] font-black uppercase tracking-wider text-ink hover:text-accent transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="w-full flex items-center justify-between px-4 py-3 font-medium hover:bg-muted/50 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-t-lg"
         aria-expanded={isOpen}
       >
         <span className="flex items-center gap-2">
-          <FolderOpen size={15} className="text-accent" />
+          <FolderOpen size={16} className="text-primary" />
           Biblioteca Tool Crib
         </span>
-        <span className="flex items-center gap-2 font-mono text-[10px]">
+        <span className="flex items-center gap-2 text-sm text-muted-foreground">
           {status === 'loading' ? (
-            <Loader2 size={12} className="animate-spin" />
+            <Loader2 size={14} className="animate-spin" />
           ) : status === 'ready' ? (
-            <span className="bg-ink text-bg px-1.5 py-0.5">{totalCount}</span>
+            <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-full text-xs font-semibold">{totalCount}</span>
           ) : status === 'error' ? (
-            <AlertCircle size={12} className="text-danger" />
+            <AlertCircle size={14} className="text-destructive" />
           ) : null}
         </span>
       </button>
 
       {isOpen && (
-        <div className="border-t-2 border-line p-3 space-y-3">
-          <div className="flex items-center gap-2">
-            <div className="grow flex items-center gap-2 border border-line px-2 py-1.5 bg-surface-2">
-              <Search size={12} className="text-ink-dim shrink-0" />
-              <input
+        <div className="border-t border-border p-4 space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <div className="relative flex-1 w-full">
+              <Search size={16} className="absolute left-2.5 top-2.5 text-muted-foreground" />
+              <Input
                 type="text"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 placeholder="Buscar parte, descripción o revisión…"
-                className="grow bg-transparent outline-none text-[11px] font-mono text-ink placeholder:text-ink-dim/70"
+                className="pl-9 w-full"
               />
             </div>
-            <button
-              type="button"
-              onClick={() => void loadLibrary()}
-              disabled={status === 'loading'}
-              className="shrink-0 border border-line bg-surface-2 px-2 py-1.5 text-[9px] font-black uppercase tracking-wider text-ink-dim hover:text-accent hover:border-accent disabled:opacity-40 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              aria-label="Refrescar biblioteca"
-              title="Refrescar biblioteca"
-            >
-              {status === 'loading' ? (
-                <Loader2 size={11} className="animate-spin" />
-              ) : (
-                <RefreshCcw size={11} />
-              )}
-            </button>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadLibrary()}
+                disabled={status === 'loading'}
+                className="w-full sm:w-auto"
+                title="Refrescar biblioteca"
+              >
+                {status === 'loading' ? (
+                  <Loader2 size={14} className="animate-spin mr-2" />
+                ) : (
+                  <RefreshCcw size={14} className="mr-2" />
+                )}
+                Actualizar
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setIsUploadModalOpen(true)}
+                className="w-full sm:w-auto"
+              >
+                <Plus size={14} className="mr-2" />
+                Subir Plano
+              </Button>
+            </div>
           </div>
 
           {errorMessage && (
-            <div
-              className="flex items-start gap-2 border border-danger/60 bg-danger/10 px-2 py-1.5 text-[10px] font-mono text-danger leading-snug"
-              role="alert"
-            >
-              <AlertCircle size={12} className="shrink-0 mt-0.5" />
-              <span className="text-left">{errorMessage}</span>
+            <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle size={16} className="shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
             </div>
           )}
 
           {status === 'loading' && (
-            <div className="text-[10px] font-mono text-ink-dim flex items-center gap-2">
-              <Loader2 size={12} className="animate-spin" /> Cargando catálogo…
+            <div className="text-sm text-muted-foreground flex items-center justify-center py-8">
+              <Loader2 size={16} className="animate-spin mr-2" /> Cargando catálogo…
             </div>
           )}
 
           {isEmpty && (
-            <div className="text-[10px] font-mono text-ink-dim">
-              Aún no hay planos registrados. Ejecuta el script de bootstrap o carga el primer inventario.
+            <div className="text-sm text-muted-foreground text-center py-8 border rounded-lg border-dashed">
+              Aún no hay planos registrados. Ejecuta el script de bootstrap o carga el primer plano manual.
             </div>
           )}
 
           {status === 'ready' && totalCount > 0 && (
-            <>
-              <p className="text-[9px] font-mono text-ink-dim">
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
                 Mostrando {visibleCount} de {totalCount} planos activos.
               </p>
-              <div className="max-h-64 overflow-y-auto pr-1 space-y-2">
-                {filteredViews.map((view) => {
-                  const rowActionState = rowState[view.drawingId] ?? { status: 'idle' };
-                  const isAttached = attachedDrawingIds?.has(view.drawingId) === true;
-                  return (
-                    <div
-                      key={view.drawingId}
-                      className="border border-line bg-surface-2 p-2 space-y-1"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[11px] font-black uppercase tracking-tight truncate text-ink" title={view.partNumber}>
-                            {view.partNumber}
-                          </p>
-                          <p className="text-[9px] font-mono text-ink-dim truncate" title={view.description}>
-                            {view.description || 'Sin descripción'}
-                          </p>
-                        </div>
-                        <span
-                          className="shrink-0 bg-ink text-bg px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
-                          title={`Revisión activa: ${view.revision}`}
-                        >
-                          Rev {view.revision}
-                        </span>
-                      </div>
+              
+              <div className="rounded-md border max-h-[400px] overflow-auto">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-background/95 backdrop-blur z-10 shadow-sm">
+                    <TableRow>
+                      <TableHead>Número de Parte</TableHead>
+                      <TableHead>Descripción</TableHead>
+                      <TableHead className="w-24">Rev</TableHead>
+                      <TableHead className="text-right">Acciones</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredViews.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                          Ningún plano coincide con la búsqueda.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filteredViews.map((view) => {
+                        const rowActionState = rowState[view.drawingId] ?? { status: 'idle' };
+                        const isAttached = attachedDrawingIds?.has(view.drawingId) === true;
+                        
+                        return (
+                          <TableRow key={view.drawingId}>
+                            <TableCell className="font-medium whitespace-nowrap">
+                              <div className="flex flex-col">
+                                <span>{view.partNumber}</span>
+                                {rowActionState.status === 'error' && rowActionState.message && (
+                                  <span className="text-xs text-destructive mt-1 font-normal whitespace-normal">
+                                    {rowActionState.message}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col max-w-[200px] sm:max-w-xs">
+                                <span className="truncate" title={view.description}>
+                                  {view.description || 'Sin descripción'}
+                                </span>
+                                <span className="text-xs text-muted-foreground truncate" title={view.sourcePath}>
+                                  <FileText size={10} className="inline-block mr-1 -mt-0.5" />
+                                  {view.sourcePath ? view.sourcePath.split(/[\\/]/).pop() : '(sin archivo)'}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="inline-flex items-center justify-center rounded-md bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground ring-1 ring-inset ring-secondary/20">
+                                {view.revision}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => setPreviewDrawing(view)}
+                                  disabled={!view.pdfUrl}
+                                  title={view.pdfUrl ? "Ver plano" : "Plano no disponible"}
+                                >
+                                  <Eye size={12} />
+                                  <span className="ml-1 hidden sm:inline">Ver</span>
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => setUpdateDrawing(view)}
+                                  title="Subir nueva revisión"
+                                >
+                                  <RefreshCcw size={12} />
+                                  <span className="ml-1 hidden sm:inline">Actualizar</span>
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => setPrintDrawing(view)}
+                                  disabled={rowActionState.status === 'printing'}
+                                >
+                                  {rowActionState.status === 'printing' ? (
+                                    <Loader2 size={12} className="animate-spin" />
+                                  ) : (
+                                    <Printer size={12} />
+                                  )}
+                                  <span className="ml-1 hidden sm:inline">Imprimir</span>
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => void handleInactivate(view)}
+                                  disabled={(rowActionState.status as any) === 'inactivating'}
+                                  title="Eliminar (Inactivar)"
+                                >
+                                  {(rowActionState.status as any) === 'inactivating' ? (
+                                    <Loader2 size={12} className="animate-spin" />
+                                  ) : (
+                                    <Trash2 size={12} />
+                                  )}
+                                  <span className="ml-1 hidden sm:inline">Eliminar</span>
+                                </Button>
 
-                      <p className="text-[9px] font-mono text-ink-dim/70 truncate" title={view.sourcePath}>
-                        <FileText size={9} className="inline-block mr-1 -mt-0.5" />
-                        {view.sourcePath || '(sin ruta)'}
-                      </p>
-
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => void handlePrint(view)}
-                          disabled={rowActionState.status === 'printing'}
-                          className="border border-line bg-surface px-2 py-1 text-[9px] font-black uppercase tracking-wider text-ink hover:border-accent hover:text-accent disabled:opacity-40 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                        >
-                          {rowActionState.status === 'printing' ? (
-                            <>
-                              <Loader2 size={10} className="animate-spin" /> Abriendo
-                            </>
-                          ) : (
-                            <>
-                              <Printer size={10} /> Imprimir
-                            </>
-                          )}
-                        </button>
-
-                        {onAttachDrawing && (
-                          <button
-                            type="button"
-                            onClick={() => void handleAttach(view)}
-                            disabled={
-                              rowActionState.status === 'attaching' || isAttached || !view.pdfUrl
-                            }
-                            className="border border-accent bg-accent text-bg px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-accent/80 disabled:opacity-40 transition-colors flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            title={
-                              !view.pdfUrl
-                                ? 'Falta pdfUrl accesible'
-                                : isAttached
-                                  ? 'Ya adjunto al análisis'
-                                  : 'Adjuntar al análisis'
-                            }
-                          >
-                            {isAttached ? (
-                              <>
-                                <CheckCircle2 size={10} /> Adjunto
-                              </>
-                            ) : rowActionState.status === 'attaching' ? (
-                              <>
-                                <Loader2 size={10} className="animate-spin" /> Adjuntando
-                              </>
-                            ) : (
-                              <>
-                                <Plus size={10} /> Análisis
-                              </>
-                            )}
-                          </button>
-                        )}
-                      </div>
-
-                      {rowActionState.status === 'error' && rowActionState.message && (
-                        <p className="text-[9px] font-mono text-danger leading-tight">
-                          {rowActionState.message}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-                {filteredViews.length === 0 && (
-                  <p className="text-[10px] font-mono text-ink-dim italic">
-                    Ningún plano coincide con la búsqueda.
-                  </p>
-                )}
+                                {onAttachDrawing && (
+                                  <Button
+                                    variant={isAttached ? 'secondary' : 'default'}
+                                    size="xs"
+                                    onClick={() => void handleAttach(view)}
+                                    disabled={
+                                      rowActionState.status === 'attaching' || isAttached || !view.pdfUrl
+                                    }
+                                    title={
+                                      !view.pdfUrl
+                                        ? 'Falta pdfUrl accesible'
+                                        : isAttached
+                                          ? 'Ya adjunto al análisis'
+                                          : 'Adjuntar al análisis'
+                                    }
+                                  >
+                                    {isAttached ? (
+                                      <CheckCircle2 size={12} />
+                                    ) : rowActionState.status === 'attaching' ? (
+                                      <Loader2 size={12} className="animate-spin" />
+                                    ) : (
+                                      <Plus size={12} />
+                                    )}
+                                    <span className="ml-1 hidden sm:inline">
+                                      {isAttached ? 'Adjunto' : 'Análisis'}
+                                    </span>
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
               </div>
-            </>
+            </div>
           )}
+        </div>
+      )}
+
+      <ToolcribUploadModal
+        isOpen={isUploadModalOpen || !!updateDrawing}
+        onClose={() => {
+          setIsUploadModalOpen(false);
+          setUpdateDrawing(null);
+        }}
+        onSuccess={() => {
+          void loadLibrary();
+        }}
+        initialPartNumber={updateDrawing?.partNumber}
+        initialCustomer={updateDrawing?.customer}
+        initialDescription={updateDrawing?.description}
+      />
+      <ToolcribPrintModal
+        drawing={printDrawing}
+        onClose={() => setPrintDrawing(null)}
+        onSuccess={() => {
+          if (printDrawing) {
+            recordToolcribPrintLogFireAndForget({
+              drawingId: printDrawing.drawingId,
+              partId: printDrawing.partId,
+              copies: 1,
+              orderRef: null,
+            });
+          }
+        }}
+      />
+
+      {previewDrawing?.pdfUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 sm:p-8"
+          onClick={() => setPreviewDrawing(null)}
+          role="dialog"
+          aria-modal="true"
+          ref={(el) => {
+            if (el) el.focus();
+          }}
+          tabIndex={-1}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setPreviewDrawing(null);
+          }}
+        >
+          <div
+            className="bg-surface border-2 border-line shadow-hard-accent max-w-6xl w-full max-h-full flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-4 px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white">
+              <div className="min-w-0">
+                <p className="text-[10px] font-mono opacity-60 uppercase tracking-widest truncate">
+                  Plano de biblioteca
+                </p>
+                <h3 className="font-display text-lg font-black uppercase tracking-tight truncate">
+                  {previewDrawing.partNumber} - Rev {previewDrawing.revision}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewDrawing(null)}
+                className="shrink-0 p-1.5 border-2 border-white/40 hover:bg-accent hover:border-accent transition-colors"
+                title="Cerrar (ESC)"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="grow overflow-hidden bg-surface-2 relative flex items-center justify-center min-h-[70vh]">
+              <object
+                data={`${previewDrawing.pdfUrl}#toolbar=0&navpanes=0&view=FitH`}
+                type="application/pdf"
+                className="w-full h-full border-none"
+              >
+                <p className="text-center p-4">
+                  El navegador no soporta visualización incrustada de PDFs.{' '}
+                  <a href={previewDrawing.pdfUrl} target="_blank" rel="noopener noreferrer" className="text-accent underline">
+                    Descargar o abrir PDF
+                  </a>
+                </p>
+              </object>
+            </div>
+          </div>
         </div>
       )}
     </div>

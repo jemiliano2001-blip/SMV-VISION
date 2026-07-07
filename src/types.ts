@@ -153,3 +153,18 @@ export interface Tornero {
   active: boolean;
   createdAtUTC: string | null;
 }
+
+export type PurchaseItemType = 'metal' | 'ensamble' | 'herramienta' | 'otro';
+
+/** Un material o pieza que se requiere comprar (metales, ensambles, McMaster). */
+export interface PurchaseItem {
+  id: string;
+  nombre: string;
+  tipo: PurchaseItemType;
+  sku: string;
+  proveedor: string;
+  link: string;
+  notas: string;
+  createdAtUTC: string | null;
+  updatedAtUTC: string | null;
+}

@@ -32,12 +32,12 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall, HttpsError, type CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import * as logger from "firebase-functions/logger";
-import * as admin from "firebase-admin";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getFirestore, FieldValue, type Firestore } from "firebase-admin/firestore";
 import Odoo = require("odoo-xmlrpc");
 
-if (admin.apps.length === 0) {
-  admin.initializeApp();
+if (getApps().length === 0) {
+  initializeApp();
 }
 
 // La API Key de Odoo se guarda en Google Secret Manager, NO en .env.
@@ -780,7 +780,7 @@ export const syncSuprajitOrders = onSchedule(
     secrets: [ODOO_API_KEY],
   },
   async () => {
-    const db = admin.firestore();
+    const db = getFirestore();
     try {
       const url = process.env.ODOO_URL ? process.env.ODOO_URL.trim() : "";
       const database = process.env.ODOO_DB ? process.env.ODOO_DB.trim() : "";
@@ -828,7 +828,7 @@ export const triggerOdooSync = onCall(
       );
     }
 
-    const db = admin.firestore();
+    const db = getFirestore();
     try {
       const url = process.env.ODOO_URL ? process.env.ODOO_URL.trim() : "";
       const database = process.env.ODOO_DB ? process.env.ODOO_DB.trim() : "";

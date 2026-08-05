@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from "motion/react";
-import { TransformWrapper, TransformComponent, useControls } from "react-zoom-pan-pinch";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import {
   Database,
   FileText,
@@ -78,7 +78,7 @@ function EditableCantidad({
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
 
-  const vision = useVisionAnalysis({ findWorkOrderId: () => null, onDataChanged: () => {} });
+  const vision = useVisionAnalysis();
 
   // Navegación
   const navigate = useCallback((view: AppView) => {
@@ -255,10 +255,10 @@ export default function App() {
                         <FileText className="absolute inset-0 m-auto text-ink-dim w-10 h-10" />
                       </div>
                       <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">Esperando Instrucciones</h3>
-                      <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px]">Carga el reporte de pedidos y selecciona planos para iniciar</p>
+                      <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px]">Presiona "Ejecutar Auditoría" — las órdenes se leen de Odoo automáticamente</p>
                       <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl w-full">
                         {[
-                          ['01', 'Carga el PDF de órdenes generado por Google Sheets.'],
+                          ['01', 'Las órdenes pendientes se leen de Odoo automáticamente.'],
                           ['02', 'Usa el Auto-Matching o la Biblioteca para buscar planos.'],
                           ['03', 'Presiona "Ejecutar" para que Vision AI audite las piezas.'],
                         ].map(([n, text]) => (

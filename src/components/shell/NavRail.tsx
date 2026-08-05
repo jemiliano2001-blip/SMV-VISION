@@ -1,8 +1,7 @@
 /**
  * NavRail — rail de navegación vertical fijo (instrumento de ingeniería).
  *
- * - Destinos con icono + etiqueta + badge en vivo (pendientes; punto rojo si
- *   hay vencidas).
+ * - Destinos con icono + etiqueta.
  * - Integra la sesión (de Firebase Auth) al pie → elimina la barra superior
  *   duplicada que antes vivía en AuthGate.
  * - Responsive: en <lg se contrae a solo-iconos.

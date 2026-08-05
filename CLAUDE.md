@@ -11,15 +11,12 @@ npm run lint         # Type-check with tsc --noEmit
 npm test             # Run Vitest (single pass)
 npm run test:watch   # Vitest in watch mode
 npm run toolcrib:bootstrap  # Populate Firestore catalog (see script docs below)
-npm run sync:odoo    # Sync Odoo sale orders → Firestore (odooSaleOrders + syncMeta)
-npm run sync:odoo:dry  # Dry-run of the Odoo sync (no writes)
-npm run sync:odoo:install-task  # Register Windows scheduled task "SMV Odoo Sync" (hourly 7:00–19:00 weekdays)
-npm run sync:server              # Local HTTP server on localhost:3031 — expone POST /sync para que el botón REFRESCAR de OdooOrdersPanel dispare el sync desde el navegador
-npm run sync:server:install-task  # Registra Windows Task "SMV Sync Server" (arranca al iniciar sesión, ventana oculta)
 npm run toolcrib:dedupe          # Detect duplicate drawings (dry-run)
 npm run toolcrib:dedupe:execute  # Remove duplicate drawings (writes to Firestore)
 npm test -- matching             # Run a single test file by name pattern
 ```
+
+*El sync corre en la nube (Cloud Function). No hay sync local.*
 
 **Bootstrap script** (populates `toolcribParts` / `toolcribDrawings`):
 ```bash
@@ -33,9 +30,7 @@ npx tsx scripts/toolcribBootstrap.ts --scan=./TOOL\ CRIB --customer=SUPRAJIT
 npx tsx scripts/toolcribBootstrap.ts --inventory=./inventory.json --credentials=./serviceAccount.json
 ```
 
-**Odoo sync** (`scripts/syncOdoo.ts` / Cloud Function `triggerOdooSync`): la fuente de verdad de Odoo. Existen dos mecanismos de sincronización:
-1. **Sync programado:** Ejecutado por la tarea de Windows "SMV Odoo Sync" (invoca `scripts/syncOdoo.ts`). Funciona de L-V, 7:00–19:00, cada hora.
-2. **Sync manual (Botón Refrescar):** El botón invoca la Cloud Function V2 `triggerOdooSync` (fuente en `functions/src/index.ts`, compilada a `functions/lib/` con `npm --prefix functions run build`; `firebase deploy` la compila automáticamente vía `predeploy`), que reutiliza la misma lógica y credenciales para disparar el sync al instante, sin depender del scheduler local de Windows. (Existe un fallback secundario a un servidor local `localhost:3031` lanzado por la tarea "SMV Sync Server"; exige el header `X-SMV-Sync: 1`).
+**Odoo sync** — La Cloud Function V2 es la **única** ruta de sincronización. Fuente: `functions/src/index.ts`. Exporta `syncSuprajitOrders` (schedule cada 30 min) y `triggerOdooSync` (callable, requiere `request.auth`; la usa el botón REFRESCAR de `OdooOrdersPanel`). Ambas llaman a `runSync()`. Escribe `odooSaleOrders`, `workOrders` y `syncMeta/odoo`.
 
 ## Environment variables
 
@@ -68,10 +63,10 @@ The Reporte view stays mounted but hidden (`display: none`) so UI state and PDF 
 
 `App.tsx` wires views and passes callbacks; all analysis state and the `extractInfo()` flow live in the `useVisionAnalysis` hook. The pipeline:
 
-1. **Order extraction** — `gemini-3.5-flash` reads the order report PDF and returns structured JSON (piece name, qty, order #, date, priority). Results are cached in IndexedDB keyed by `ORDER_PROMPT_VERSION`.
+1. **Order extraction** — Las órdenes vienen de Firestore (`odooSaleOrders`) vía `listOrdersToInvoice()`. No hay PDF de órdenes ni llamada a Gemini en este paso. Cada línea de orden con `qty_pending_from_pickings > 0` se mapea a un `ExtractedOrder`. La constante `ORDER_PROMPT_VERSION` sobrevive **solo** como etiqueta en el log de auditoría `analysisRuns`.
 2. **Auto-matching** — `listActiveDrawingViews()` fetches the Tool Crib catalog from Firestore and scores each order against each library entry using `scorePieceMatch` / `extractLibrarySignals`. **ISO-first**: if any ISO drawing scores ≥ `MIN_BLUEPRINT_MATCH_SCORE`, it wins over any CAD drawing regardless of score. Matching blueprints are auto-fetched via `fetchPdfAsDataUrl` and added to the workspace without user interaction. Hot-stamp orders (`isHotStampPiece`) are matched by keyword search (the fuzzy matcher can't connect "HOT STAMP LETRA M" with "PUNZONES DE MARCA").
 3. **PDF rasterization** — Blueprint PDFs are sent to a dedicated Web Worker (`src/workers/pdfImageWorker.ts`) that renders page 1 with pdf.js (OffscreenCanvas, `disableWorker: true`) and normalizes the output to JPEG.
-4. **Blueprint analysis** — The JPEG is sent to `gemini-3.5-flash` Vision; it returns `BlueprintSpec[]` with piece label and an isometric bounding box (`[ymin, xmin, ymax, xmax]` on a 0–1000 grid). Results are cached in IndexedDB keyed by `BLUEPRINT_PROMPT_VERSION`. **Two-pass refinement**: if the initial bounding box area exceeds `REFINEMENT_SKIP_AREA_THRESHOLD = 200_000`, a second Gemini call crops the region and re-asks for a tighter box, then maps coordinates back to the original 0–1000 space.
+4. **Blueprint analysis** — The JPEG is sent to `gemini-3.5-flash` Vision; it returns `BlueprintSpec[]` with piece label and an isometric bounding box (`[ymin, xmin, ymax, xmax]` on a 0–1000 grid). Results are cached in IndexedDB keyed by `BLUEPRINT_PROMPT_VERSION`. **Two-pass refinement**: if the initial bounding box area exceeds `REFINEMENT_SKIP_AREA_THRESHOLD = 400_000` (~632×632 px), a second Gemini call crops the region and re-asks for a tighter box, then maps coordinates back to the original 0–1000 space.
 5. **Progressive merge** — Blueprint results are applied to the order list as each blueprint completes (not at the end). `cropIsometricView()` crops the matched region from the rasterized JPEG. Falls back to `FALLBACK_CENTER_BOX = [30, 30, 720, 970]` if the box is invalid.
 6. **PDF export** — `jsPDF` + `jspdf-autotable` via `src/lib/pdfGenerator.ts` generates the final report with one row per order and the cropped isometric image embedded.
 
@@ -101,11 +96,16 @@ Key modules:
 - `client.ts` — Lazy singleton for `FirebaseApp` + `Firestore`. Returns `null` if config is missing; callers treat this as "feature disabled". Exports `__resetFirebaseClientForTests()` to clear cached singletons in tests.
 - `toolcrib.ts` — Read-only catalog queries (`listActiveDrawingViews`, `getActiveDrawingForPart`, `getDrawingById`) and `recordToolcribPrintLog` (write). Auth UID is resolved inside the writer — callers cannot spoof it.
 - `purchases.ts` — CRUD for `purchases` collection. Exports `listPurchases`, `createPurchase`, `updatePurchase`, `deletePurchase`.
-- `odooOrders.ts` — Read-only queries for `odooSaleOrders` (`listOrdersToInvoice`). Same result-type contract; writing is done only by `scripts/syncOdoo.ts`.
+- `odooOrders.ts` — Read-only queries for `odooSaleOrders` (`listOrdersToInvoice`, `listEntregasSinOC`). Same result-type contract; writing is done only by Cloud Function.
+- `syncOdoo.ts` — Wrapper cliente de `httpsCallable('triggerOdooSync')`.
+- `authValidators.ts` — Normalización de forma para el usuario de Auth.
 - `analysisRuns.ts` — Fire-and-forget audit log for each analysis run.
 - `auth.ts` — Email/password sign-in only (Google flow removed on purpose: private app without domain allowlist); `useFirebaseUser()` hook (backed by `useSyncExternalStore`).
 - `env.ts` — Reads and caches Firebase config from `import.meta.env`. `isToolcribDebugUnauthAllowed()` is gated to `DEV` only.
 - `toolcribValidators.ts` / `purchaseValidators.ts` / `validators.ts` — Runtime shape normalization for all Firestore documents.
+- `src/lib/invoiceEmail.ts` — Plantillas de correo de solicitud de factura.
+- `src/lib/planoOt.ts` — Usado por `ToolcribPrintModal`.
+- `src/hooks/useSyncMeta.ts` — Suscripción al doc `syncMeta/odoo` (chip de estado).
 
 ### Firestore collections
 
@@ -115,8 +115,8 @@ Key modules:
 | `toolcribDrawings` | Drawing revisions per part (`partId`, `revision`, `isActive`, `sourceType`, `sourcePath`, `pdfUrl`) |
 | `toolcribPrintLogs` | Audit log for PDF prints (`drawingId`, `printedByUid` from server auth) |
 | `analysisRuns` | Audit log for each vision analysis run |
-| `odooSaleOrders` | Odoo sale orders synced by `scripts/syncOdoo.ts` — read-only from the app |
-| `syncMeta` | Single doc `odoo` with last-sync status (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage?`), written by `scripts/syncOdoo.ts` on every run (success and failure); read by the status chip in `OdooOrdersPanel` |
+| `odooSaleOrders` | Odoo sale orders synced by Cloud Function — read-only from the app |
+| `syncMeta` | Single doc `odoo` with last-sync status (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage?`), written by Cloud Function on every run (success and failure); read by the status chip in `OdooOrdersPanel` |
 | `purchases` | Purchase catalog items (`nombre`, `tipo`, `sku`, `proveedor`, `link`, `notas`), managed by `ComprasPanel` |
 
 Security rules (`firestore.rules`): least-privilege per collection with default deny. `odooSaleOrders` / `syncMeta` / `workOrders` are read-only from the client (written only by the Admin SDK, which bypasses rules). `toolcribPrintLogs` and `analysisRuns` are create-only and immutable, with the auth uid enforced in rules (`printedByUid` / `userUid` / `createdByUid` must equal `request.auth.uid`). `purchases` is full CRUD for any signed-in user. Data *shape* validation lives in TypeScript validators; rules enforce identity and write surface.
@@ -137,6 +137,8 @@ Receives `rasterize-normalize` messages. Uses `pdfjsLib` with `disableWorker: tr
 - `ToolcribLibraryPanel` (`src/components/ToolcribLibraryPanel.tsx`) — Reads `listActiveDrawingViews` on mount, renders a searchable list with Print and Attach actions. Deduplication via `attachedDrawingIds` prop.
 - `ComprasPanel` (`src/components/ComprasPanel.tsx`) — Purchase catalog CRUD with search/sort.
 - `OdooOrdersPanel` (`src/components/OdooOrdersPanel.tsx`) — Read-only list of pending Odoo orders with sync status.
+- `EntregasSinOCPanel` (`src/components/EntregasSinOCPanel.tsx`) — Vista "Entregas sin OC": órdenes de SUPRAJIT con remisión entregada pero sin número de OC del cliente. Depende de `listEntregasSinOC()` y del campo `state` del documento de Odoo.
+- `InvoiceRequestPanel` (`src/components/InvoiceRequestPanel.tsx`) — Se renderiza dentro de `OdooOrdersPanel`, no es una vista del NavRail.
 - `InicioView` + `BibliotecaView` (`src/components/`) — Dashboard and Tool Crib library views.
 
 ### Piece-matching algorithm (`src/lib/matching.ts`)
@@ -179,13 +181,10 @@ Unit tests live in `src/lib/__tests__/`. Test coverage is light; core logic test
 
 ### Scripts
 
-`scripts/` contains one-off utilities beyond the npm scripts. Notable:
-- `scripts/syncOdoo.ts` — Odoo → Firestore sync (sale orders, odooSaleOrders collection). Invoked by Windows scheduled task or Cloud Function.
-- `scripts/syncServer.ts` — Local Express server on 127.0.0.1:3031 that exposes `POST /sync`. Allows the "Refrescar" button in `OdooOrdersPanel` to trigger a local sync when the Cloud Function isn't available. Requires the `X-SMV-Sync: 1` header (forces a CORS preflight so arbitrary websites can't fire drive-by syncs against localhost).
+`scripts/` contains catalog management scripts:
 - `scripts/toolcrib*.ts` — Tool Crib catalog management (upload PDFs, dedupe drawings, bootstrap).
-- `scripts/installSyncTask.ps1` / `scripts/installSyncServerTask.ps1` — PowerShell scripts to register Windows scheduled tasks.
 
-The `functions/` directory contains Cloud Functions V2. Source of truth is `functions/src/index.ts` (TypeScript, compiled to the gitignored `functions/lib/` via `npm --prefix functions run build`; `firebase deploy` runs it automatically via the `predeploy` hook in `firebase.json`). Exports: `triggerOdooSync` (callable, requires `request.auth`; powers the Refrescar button) and `syncSuprajitOrders` (legacy 30-min schedule kept for parity with what's deployed — the scheduled sync of record is the Windows task). Note: the function still upserts the `workOrders` collection, which the app reads for the production badge in `OdooOrdersPanel`.
+The `functions/` directory contains Cloud Functions V2. Source of truth is `functions/src/index.ts` (TypeScript, compiled to the gitignored `functions/lib/` via `npm --prefix functions run build`; `firebase deploy` runs it automatically via the `predeploy` hook in `firebase.json`). Exports: `triggerOdooSync` (callable, requires `request.auth`; powers the Refrescar button) and `syncSuprajitOrders` (schedule cada 30 min). Note: la función escribe `odooSaleOrders`, `workOrders` y `syncMeta/odoo`.
 
 ### Path alias
 

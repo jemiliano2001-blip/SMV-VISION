@@ -42,8 +42,8 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
 | `VITE_FIREBASE_*` (6 vars) | No | Firestore audit trail + Tool Crib catalog |
 | `VITE_TOOLCRIB_DEBUG_ALLOW_UNAUTH` | No | Skip auth gate in DEV only |
 | `DISABLE_HMR` | No | Set to `true` to disable Vite HMR (used in AI Studio) |
-| `ODOO_URL` / `ODOO_DB` / `ODOO_USER` / `ODOO_API_KEY` | Scripts only | Odoo 15 JSON-RPC sync — never exposed to the browser |
-| `FIREBASE_SERVICE_ACCOUNT_PATH` | Scripts only | Firebase Admin SDK for `syncOdoo.ts` |
+| `ODOO_URL` / `ODOO_DB` / `ODOO_USER` | Cloud Function only | Odoo 15 JSON-RPC sync. Read from `functions/.env` via `process.env` in `functions/src/index.ts` — never exposed to the browser |
+| `ODOO_API_KEY` | Cloud Function only | Odoo password. A Secret Manager secret (`defineSecret`), not an env var — read with `ODOO_API_KEY.value()` |
 
 ## Architecture
 
@@ -56,7 +56,7 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
   offers quick actions to the other views. Remounts on every visit (`App.tsx` gates it
   behind `activeView === 'inicio'`), so the counters refresh without a refresh button.
 - **Generar Reporte** (`reporte` view in `App.tsx`) — Report generation interface: Odoo order extraction, blueprint library attachment, PDF workspace management, and auditing pipeline powered by `useVisionAnalysis`.
-- **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders, synced via `scripts/syncOdoo.ts`.
+- **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders, synced by the Cloud Function (`functions/src/index.ts`).
 - **Biblioteca** (`BibliotecaView.tsx`) — Tool Crib catalog browser; wraps `ToolcribLibraryPanel`.
 - **Compras** (`ComprasPanel.tsx`) — Purchase catalog (metals, assemblies, tools, other). CRUD interface backed by Firestore `purchases` collection.
 

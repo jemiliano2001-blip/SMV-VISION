@@ -4,7 +4,7 @@
  * Capa de datos para las órdenes de Odoo sincronizadas en Firestore
  * (colección `odooSaleOrders`). Mismo contrato que `workOrders.ts`:
  *  - Las funciones NUNCA lanzan — devuelven un result type.
- *  - Solo lectura: la escritura la hace el script `scripts/syncOdoo.ts`.
+ *  - Solo lectura: la escritura la hace la Cloud Function (`functions/src/index.ts`).
  */
 
 import {

@@ -13,7 +13,7 @@
  *    desde el botón REFRESCAR de OdooOrdersPanel. Requiere usuario
  *    autenticado (request.auth) aunque el invoker sea público.
  *
- * Pipeline (idéntico a scripts/syncOdoo.ts):
+ * Pipeline:
  *   1. search_read en sale.order (partner ilike SUPRAJIT).
  *   2. Trae líneas (sale.order.line), remisiones (stock.picking) y sus
  *      movimientos (stock.move) en llamadas masivas.

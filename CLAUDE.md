@@ -51,7 +51,10 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
 
 `App.tsx` owns all state and routes between views via `AppShell` + `NavRail` (left-side navigation rail):
 
-- **Inicio** (`InicioView.tsx`) — Dashboard and KPI analytics.
+- **Inicio** (`InicioView.tsx`) — Landing view. Reads three live counters on mount
+  (`listOrdersToInvoice().length`, `listEntregasSinOC().length`, `useSyncMeta()`) and
+  offers quick actions to the other views. Remounts on every visit (`App.tsx` gates it
+  behind `activeView === 'inicio'`), so the counters refresh without a refresh button.
 - **Generar Reporte** (`reporte` view in `App.tsx`) — Report generation interface: Odoo order extraction, blueprint library attachment, PDF workspace management, and auditing pipeline powered by `useVisionAnalysis`.
 - **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders, synced via `scripts/syncOdoo.ts`.
 - **Biblioteca** (`BibliotecaView.tsx`) — Tool Crib catalog browser; wraps `ToolcribLibraryPanel`.

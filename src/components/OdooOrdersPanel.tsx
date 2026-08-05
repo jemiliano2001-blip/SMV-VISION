@@ -296,36 +296,18 @@ export function OdooOrdersPanel() {
 
   const handleRefresh = useCallback(async () => {
     startSyncTimer();
-    
-    const result = await triggerOdooSync();
-    if (result.ok) {
-      return;
-    }
-    
-    if (!result.ok) {
-      const errResult = result as { ok: false; reason: string };
-      if (errResult.reason === 'not-authenticated') {
-        clearInterval(syncTimeoutRef.current!);
-        setSyncingOdoo(false);
-        setError('Debes iniciar sesión para sincronizar.');
-        return;
-      }
-      console.warn('[smv-vision] Cloud Function falló, fallback a server local', errResult.reason);
-    }
 
-    try {
-      const res = await fetch('http://localhost:3031/sync', {
-        method: 'POST',
-        headers: { 'X-SMV-Sync': '1' },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (res.ok) return;
-    } catch {
+    const result = await triggerOdooSync();
+    if (!result.ok && 'reason' in result) {
       clearInterval(syncTimeoutRef.current!);
       setSyncingOdoo(false);
-      void fetchOrders();
+      setError(
+        result.reason === 'not-authenticated'
+          ? 'Debes iniciar sesión para sincronizar.'
+          : `No se pudo sincronizar con Odoo: ${result.reason}`,
+      );
     }
-  }, [fetchOrders, startSyncTimer]);
+  }, [startSyncTimer]);
 
   useEffect(() => {
     return () => {

@@ -103,6 +103,7 @@ interface SaleOrder {
   client_order_ref: string | null;
   requisitor: string | null;
   invoice_status: string;
+  state: string;
   order_lines: OrderLine[];
   deliveries: Picking[];
 }
@@ -260,6 +261,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
     "partner_id",
     "client_order_ref",
     "invoice_status",
+    "state",
     "requisitor",
   ];
   const rows = await executeKw<OdooRow[]>(
@@ -281,6 +283,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
       client_order_ref: typeof ref === "string" && ref.trim() !== "" ? ref.trim() : null,
       requisitor: typeof req === "string" && req.trim() !== "" ? req.trim() : null,
       invoice_status: strOf(row["invoice_status"]) || "no",
+      state: strOf(row["state"]) || "unknown",
       order_lines: [],
       deliveries: [],
     };
@@ -458,6 +461,7 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
         client_order_ref: order.client_order_ref,
         requisitor: order.requisitor,
         invoice_status: order.invoice_status,
+        state: order.state,
         toInvoice: isActiveOrder,
         order_lines: order.order_lines.map((l) => {
           const productDisplay = isServiceLine(l.product) ?

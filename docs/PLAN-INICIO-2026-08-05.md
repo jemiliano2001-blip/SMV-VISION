@@ -317,7 +317,7 @@ npm run build       # debe completar
 ```
 
 ```bash
-grep -c "listEntregasSinOC" src/components/InicioView.tsx   # debe imprimir 1
+grep -c "listEntregasSinOC" src/components/InicioView.tsx   # debe imprimir 3 (import, comentario ponytail, llamada)
 grep -c "entregas-sin-oc" src/components/InicioView.tsx     # debe imprimir 1
 grep -c ": any" src/components/InicioView.tsx               # debe imprimir 0
 ```

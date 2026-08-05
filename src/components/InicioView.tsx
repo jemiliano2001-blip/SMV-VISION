@@ -1,21 +1,32 @@
 /**
  * InicioView — portada / resumen.
  *
- * Ofrece accesos rápidos a las demás vistas.
+ * Contesta "¿qué hay hoy?" con tres cifras que ya viven en Firestore y ofrece
+ * accesos rápidos a las demás vistas.
  */
 
-import { type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { motion } from 'motion/react';
 import {
-  ScanLine, Library, ArrowRight, CloudDownload, ShoppingCart
+  ScanLine, Library, ArrowRight, CloudDownload, ShoppingCart, FileWarning, RefreshCw,
+  type LucideIcon,
 } from 'lucide-react';
 
+import { listOrdersToInvoice, listEntregasSinOC } from '../lib/firebase/odooOrders';
+import { formatRelativeTime } from '../lib/age';
+import { useSyncMeta } from '../hooks/useSyncMeta';
 import type { AnalysisRunSummary } from '../types';
 import type { AppView } from './shell/AppShell';
 
 export interface InicioViewProps {
   onNavigate: (view: AppView) => void;
   analysisSummary: AnalysisRunSummary | null;
+}
+
+/** Por cifra: `undefined` = cargando · `null` = la consulta falló · número = dato bueno. */
+interface Counts {
+  pendientes: number | null;
+  sinOc: number | null;
 }
 
 const container = {
@@ -27,8 +38,31 @@ const item = {
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 30 } },
 } as const;
 
+function show(n: number | null | undefined): string {
+  if (n === undefined) return '…';
+  if (n === null) return '—';
+  return String(n);
+}
+
 export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): ReactElement {
   const now = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const { meta } = useSyncMeta();
+  const [counts, setCounts] = useState<Counts | undefined>(undefined);
+
+  // ponytail: relee en cada visita — App.tsx desmonta Inicio al navegar. Sin caché ni
+  // auto-refresh. Si la doble lectura de listEntregasSinOC (hasta 1000 docs, filtra en
+  // cliente) llega a molestar, subir el estado a App.tsx; hoy nadie lo ha medido.
+  useEffect(() => {
+    let alive = true;
+    void Promise.all([listOrdersToInvoice(), listEntregasSinOC()]).then(([pend, sin]) => {
+      if (!alive) return;
+      setCounts({
+        pendientes: pend.ok ? pend.value.length : null,
+        sinOc: sin.ok ? sin.value.length : null,
+      });
+    });
+    return () => { alive = false; };
+  }, []);
 
   return (
     <motion.div
@@ -48,14 +82,39 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         <p className="font-mono text-[11px] text-ink-dim capitalize">{now}</p>
       </motion.header>
 
+      {/* ── Qué hay hoy ── */}
+      <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+        <StatCard
+          icon={CloudDownload}
+          value={show(counts?.pendientes)}
+          label="Órdenes pendientes"
+          onClick={() => onNavigate('odoo')}
+        />
+        <StatCard
+          icon={FileWarning}
+          value={show(counts?.sinOc)}
+          label="Entregas sin OC"
+          tone={counts?.sinOc ? 'text-warn' : undefined}
+          onClick={() => onNavigate('entregas-sin-oc')}
+        />
+        <StatCard
+          icon={RefreshCw}
+          value={meta ? formatRelativeTime(meta.lastSyncAt) : '—'}
+          label={meta?.status === 'error' ? 'Último sync · ERROR' : 'Último sync Odoo'}
+          tone={meta?.status === 'error' ? 'text-danger' : undefined}
+          small
+        />
+      </motion.section>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ── Accesos rápidos + última corrida ── */}
+        {/* ── Accesos rápidos ── */}
         <motion.section variants={item} className="space-y-3">
           <QuickAction icon={ScanLine} title="Generar Reporte" desc="Auditar planos y generar reporte PDF" onClick={() => onNavigate('reporte')} />
-          <QuickAction icon={CloudDownload} title="Órdenes Odoo" desc="Ver órdenes importadas desde Odoo" onClick={() => onNavigate('odoo')} />
           <QuickAction icon={Library} title="Biblioteca" desc="Catálogo de planos Tool Crib" onClick={() => onNavigate('biblioteca')} />
-          <QuickAction icon={ShoppingCart} title="Compras" desc="Gestión de órdenes de compra" onClick={() => onNavigate('compras')} />
+          <QuickAction icon={ShoppingCart} title="Compras" desc="Catálogo de compras" onClick={() => onNavigate('compras')} />
         </motion.section>
+
+        {/* ── Última corrida (solo si auditaste en esta sesión) ── */}
         <motion.section variants={item} className="space-y-3">
           {analysisSummary && (
             <div className="corner-ticks bg-surface border-2 border-line p-4">
@@ -73,6 +132,46 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
   );
 }
 
+function StatCard({ icon: Icon, value, label, tone = 'text-ink', small = false, onClick }: {
+  icon: LucideIcon;
+  value: string;
+  label: string;
+  tone?: string;
+  small?: boolean;
+  onClick?: () => void;
+}) {
+  const body = (
+    <>
+      <div className="flex items-start justify-between mb-2">
+        <Icon size={16} className="text-ink-dim" />
+        {onClick && (
+          <ArrowRight size={14} className="text-ink-dim opacity-0 group-hover:opacity-100 transition-opacity" />
+        )}
+      </div>
+      <p className={`font-display font-black italic leading-none ${small ? 'text-2xl' : 'text-4xl'} ${tone}`}>
+        {value}
+      </p>
+      <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mt-2">{label}</p>
+    </>
+  );
+
+  if (!onClick) {
+    return <div className="corner-ticks bg-surface border-2 border-line p-4">{body}</div>;
+  }
+
+  return (
+    <motion.button
+      type="button"
+      onClick={onClick}
+      whileHover={{ y: -2, boxShadow: '4px 4px 0px var(--color-accent)' }}
+      whileTap={{ y: 0, boxShadow: '0px 0px 0px var(--color-accent)' }}
+      className="group corner-ticks bg-surface border-2 border-line p-4 text-left transition-colors hover:border-accent outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      {body}
+    </motion.button>
+  );
+}
+
 function Stat({ n, l, tone = 'text-ink' }: { n: number | string; l: string; tone?: string }) {
   return (
     <div>
@@ -82,7 +181,7 @@ function Stat({ n, l, tone = 'text-ink' }: { n: number | string; l: string; tone
   );
 }
 
-function QuickAction({ icon: Icon, title, desc, onClick }: { icon: any; title: string; desc: string; onClick: () => void }) {
+function QuickAction({ icon: Icon, title, desc, onClick }: { icon: LucideIcon; title: string; desc: string; onClick: () => void }) {
   return (
     <motion.button
       type="button"

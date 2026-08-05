@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState, useMemo, type ReactElement } f
 import { Loader2, Plus, AlertCircle, ExternalLink, Pencil, Trash2, Box, X, Search, ArrowUpDown } from 'lucide-react';
 import type { PurchaseItem, PurchaseItemType } from '../types';
 import { listPurchases, createPurchase, updatePurchase, deletePurchase } from '../lib/firebase/purchases';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';

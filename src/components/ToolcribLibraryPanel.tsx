@@ -165,53 +165,7 @@ export function ToolcribLibraryPanel({
     }).map(result => result.item);
   }, [searchTerm, views]);
 
-  const handlePrint = useCallback(
-    async (view: ToolcribActiveDrawingView) => {
-      setRowState((prev) => ({
-        ...prev,
-        [view.drawingId]: { status: 'printing' },
-      }));
 
-      try {
-        if (view.pdfUrl) {
-          const openedWindow = window.open(view.pdfUrl, '_blank', 'noopener,noreferrer');
-          if (!openedWindow) {
-            setRowState((prev) => ({
-              ...prev,
-              [view.drawingId]: {
-                status: 'error',
-                message:
-                  'Tu navegador bloqueó la ventana del PDF. Habilita pop-ups y reintenta.',
-              },
-            }));
-            return;
-          }
-        }
-
-        recordToolcribPrintLogFireAndForget({
-          drawingId: view.drawingId,
-          partId: view.partId,
-          copies: 1,
-          orderRef: null,
-        });
-
-        setRowState((prev) => ({
-          ...prev,
-          [view.drawingId]: { status: 'idle' },
-        }));
-      } catch (error) {
-        console.warn('[smv-vision][toolcrib] handlePrint falló', error);
-        setRowState((prev) => ({
-          ...prev,
-          [view.drawingId]: {
-            status: 'error',
-            message: 'No fue posible abrir el PDF. Intenta nuevamente.',
-          },
-        }));
-      }
-    },
-    [],
-  );
 
   const handleAttach = useCallback(
     async (view: ToolcribActiveDrawingView) => {

@@ -53,6 +53,7 @@ interface OdooSaleOrder {
   date_order: string | false;
   partner: string;
   client_order_ref: string | null;
+  requisitor: string | null;
   /**
    * Estado de facturación de Odoo:
    *   'to invoice'  → A facturar (trabajos pendientes)
@@ -447,6 +448,7 @@ async function fetchOdooSaleOrders(
     'state',            // 'draft' | 'sent' | 'sale' | 'done' | 'cancel'
     'delivery_count',
     'picking_ids',
+    'requisitor',
   ];
 
   const result = await xmlRpcCall(url, 'object', 'execute_kw', [
@@ -472,12 +474,16 @@ async function fetchOdooSaleOrders(
     const clientOrderRef =
       typeof ref === 'string' && ref.trim() !== '' ? ref.trim() : null;
 
+    const req = row['requisitor'];
+    const requisitor = typeof req === 'string' && req.trim() !== '' ? req.trim() : null;
+
     return {
       id: row['id'] as number,
       name: row['name'] as string,
       date_order: typeof row['date_order'] === 'string' ? row['date_order'] : false,
       partner: partnerName,
       client_order_ref: clientOrderRef,
+      requisitor,
       invoice_status: typeof row['invoice_status'] === 'string' ? row['invoice_status'] : 'no',
       state: typeof row['state'] === 'string' ? row['state'] : 'unknown',
       delivery_count: typeof row['delivery_count'] === 'number' ? row['delivery_count'] : 0,
@@ -749,6 +755,7 @@ async function upsertSaleOrder(
     date_order: order.date_order !== false ? order.date_order : null,
     partner: order.partner,
     client_order_ref: order.client_order_ref,
+    requisitor: order.requisitor,
     // Estado de facturación directo de Odoo — es ahora el criterio de visibilidad.
     invoice_status: order.invoice_status,
     state: order.state,

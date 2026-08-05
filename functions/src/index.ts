@@ -101,6 +101,7 @@ interface SaleOrder {
   date_order: string | false;
   partner: string;
   client_order_ref: string | null;
+  requisitor: string | null;
   invoice_status: string;
   order_lines: OrderLine[];
   deliveries: Picking[];
@@ -259,6 +260,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
     "partner_id",
     "client_order_ref",
     "invoice_status",
+    "requisitor",
   ];
   const rows = await executeKw<OdooRow[]>(
     odoo,
@@ -268,6 +270,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
   );
   return rows.map((row) => {
     const ref = row["client_order_ref"];
+    const req = row["requisitor"];
     return {
       id: numOf(row["id"]),
       name: strOf(row["name"]),
@@ -276,6 +279,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
         false,
       partner: many2oneName(row["partner_id"]) || "Sin cliente",
       client_order_ref: typeof ref === "string" && ref.trim() !== "" ? ref.trim() : null,
+      requisitor: typeof req === "string" && req.trim() !== "" ? req.trim() : null,
       invoice_status: strOf(row["invoice_status"]) || "no",
       order_lines: [],
       deliveries: [],
@@ -452,6 +456,7 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
         date_order: order.date_order !== false ? order.date_order : null,
         partner: order.partner,
         client_order_ref: order.client_order_ref,
+        requisitor: order.requisitor,
         invoice_status: order.invoice_status,
         toInvoice: isActiveOrder,
         order_lines: order.order_lines.map((l) => {

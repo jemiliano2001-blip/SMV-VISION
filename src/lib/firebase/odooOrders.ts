@@ -63,6 +63,8 @@ export interface OdooOrderView {
   partner: string;
   /** Referencia del cliente / PO. Null si no tiene. */
   client_order_ref: string | null;
+  /** Requisitor o Ingeniero solicitante de la orden en Odoo. */
+  requisitor: string | null;
   /**
    * Estado de facturación en Odoo:
    *   'to invoice' → A facturar (pendiente)
@@ -151,6 +153,7 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
     date_order: typeof raw['date_order'] === 'string' ? raw['date_order'] : null,
     partner: typeof raw['partner'] === 'string' ? raw['partner'] : 'Sin cliente',
     client_order_ref: typeof raw['client_order_ref'] === 'string' ? raw['client_order_ref'] : null,
+    requisitor: typeof raw['requisitor'] === 'string' && raw['requisitor'].trim() !== '' ? raw['requisitor'].trim() : null,
     invoice_status: typeof raw['invoice_status'] === 'string' ? raw['invoice_status'] : 'no',
     state: typeof raw['state'] === 'string' ? raw['state'] : 'unknown',
     toInvoice: raw['toInvoice'] === true,

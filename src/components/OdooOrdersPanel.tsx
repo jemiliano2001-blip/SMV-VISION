@@ -1,5 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, CloudDownload, RefreshCw, AlertCircle, FileDown, Mail, Truck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Loader2,
+  CloudDownload,
+  RefreshCw,
+  AlertCircle,
+  FileDown,
+  Mail,
+  Truck,
+  User,
+  Users,
+  Search,
+  ChevronDown,
+  ChevronRight,
+  List,
+  X,
+} from 'lucide-react';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
 import jsPDF from 'jspdf';
@@ -47,7 +62,7 @@ function exportDeliverySlip(order: OdooOrderView): void {
   doc.setFontSize(10);
   doc.text(`Fecha: ${generatedAt.toLocaleString()}`, pageW - 40, 70, { align: 'right' });
   
-  // Customer info
+  // Customer & Requisitor info
   doc.setFillColor(240, 240, 240);
   doc.rect(40, 110, pageW - 80, 60, 'F');
   
@@ -60,6 +75,11 @@ function exportDeliverySlip(order: OdooOrderView): void {
   doc.text('PO / REF:', 50, 150);
   doc.setFont('helvetica', 'normal');
   doc.text(order.client_order_ref || 'N/A', 110, 150);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text('REQUISITOR:', pageW / 2 + 10, 130);
+  doc.setFont('helvetica', 'normal');
+  doc.text(order.requisitor || 'Sin asignar', pageW / 2 + 90, 130);
 
   // Table
   let y = 200;
@@ -155,7 +175,7 @@ function exportPdf(orders: OdooOrderView[], productionMap: Map<string, Productio
     doc.setFontSize(7.5);
     doc.setTextColor(180, 220, 255);
     doc.text(
-      `PO: ${order.client_order_ref || 'N/A'}   FECHA: ${order.date_order?.split(' ')[0] ?? '—'}   ESTADO: ${order.invoice_status.toUpperCase()}   PRODUCCIÓN: ${statusLabel}`,
+      `PO: ${order.client_order_ref || 'N/A'}   REQ: ${order.requisitor || 'Sin asignar'}   FECHA: ${order.date_order?.split(' ')[0] ?? '—'}   PROD: ${statusLabel}`,
       130, y + 13,
     );
     y += 20;
@@ -209,6 +229,12 @@ export function OdooOrdersPanel() {
   const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
   const [invoicePanelOpen, setInvoicePanelOpen] = useState(false);
 
+  // Vistas y Filtros por Requisitor
+  const [viewMode, setViewMode] = useState<'all' | 'by_requisitor'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedRequisitor, setSelectedRequisitor] = useState<string>('ALL');
+  const [collapsedRequisitores, setCollapsedRequisitores] = useState<Record<string, boolean>>({});
+
   const syncTriggeredAt = useRef<Date | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { meta } = useSyncMeta();
@@ -218,10 +244,7 @@ export function OdooOrdersPanel() {
     setError(null);
     const result = await listOrdersToInvoice();
     if (result.ok) {
-      // Mostrar todas las órdenes que vengan como pendientes de facturar,
-      // incluso si ya fueron entregadas en su totalidad.
       setOrders(result.value);
-      // Lanza la segunda query en paralelo — no bloquea el render de las tarjetas
       const soNumbers = result.value.map((o) => o.name);
       void listWorkOrderStatusBySoNumbers(soNumbers).then((r) => {
         if (r.ok) setProductionMap(r.value);
@@ -257,11 +280,9 @@ export function OdooOrdersPanel() {
     
     if (syncTimeoutRef.current) clearInterval(syncTimeoutRef.current);
     
-    // Timer para actualizar segundos y manejar timeout de 120s
     syncTimeoutRef.current = setInterval(() => {
       setSyncElapsedSeconds(prev => {
         if (prev >= 120) {
-          // Timeout alcanzado
           clearInterval(syncTimeoutRef.current!);
           setSyncingOdoo(false);
           syncTriggeredAt.current = null;
@@ -274,12 +295,10 @@ export function OdooOrdersPanel() {
   }, []);
 
   const handleRefresh = useCallback(async () => {
-    // 1. Intentar disparar vía Cloud Function (primary)
     startSyncTimer();
     
     const result = await triggerOdooSync();
     if (result.ok) {
-      // Éxito, el useEffect de meta detectará el cambio y recargará.
       return;
     }
     
@@ -291,30 +310,23 @@ export function OdooOrdersPanel() {
         setError('Debes iniciar sesión para sincronizar.');
         return;
       }
-      
       console.warn('[smv-vision] Cloud Function falló, fallback a server local', errResult.reason);
     }
 
-    // 2. Fallback al sync server local. El header custom fuerza preflight
-    // CORS — el servidor lo exige para bloquear disparos drive-by.
     try {
       const res = await fetch('http://localhost:3031/sync', {
         method: 'POST',
         headers: { 'X-SMV-Sync': '1' },
         signal: AbortSignal.timeout(2000),
       });
-      if (res.ok) {
-        return; // Sigue esperando el onSnapshot de meta
-      }
+      if (res.ok) return;
     } catch {
-      // Fallback 3: servidor local no corriendo, abortar estado de sync y recargar normal
       clearInterval(syncTimeoutRef.current!);
       setSyncingOdoo(false);
       void fetchOrders();
     }
   }, [fetchOrders, startSyncTimer]);
 
-  // Limpiar timer al desmontar
   useEffect(() => {
     return () => {
       if (syncTimeoutRef.current) clearInterval(syncTimeoutRef.current);
@@ -325,10 +337,196 @@ export function OdooOrdersPanel() {
     void fetchOrders();
   }, [fetchOrders]);
 
+  // Lista de Requisitores únicos para el filtro selector
+  const uniqueRequisitores = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders) {
+      set.add(o.requisitor || 'Sin Requisitor');
+    }
+    return Array.from(set).sort();
+  }, [orders]);
+
+  // Órdenes filtradas por texto de búsqueda y por requisitor seleccionado
+  const filteredOrders = useMemo(() => {
+    return orders.filter((o) => {
+      // Filtro por requisitor seleccionado
+      if (selectedRequisitor !== 'ALL') {
+        const reqName = o.requisitor || 'Sin Requisitor';
+        if (reqName !== selectedRequisitor) return false;
+      }
+
+      // Filtro por búsqueda libre
+      if (!searchTerm.trim()) return true;
+      const term = searchTerm.toLowerCase();
+      const nameMatch = o.name.toLowerCase().includes(term);
+      const poMatch = (o.client_order_ref || '').toLowerCase().includes(term);
+      const partnerMatch = o.partner.toLowerCase().includes(term);
+      const reqMatch = (o.requisitor || '').toLowerCase().includes(term);
+      const lineMatch = o.order_lines.some(
+        (l) =>
+          l.product.toLowerCase().includes(term) ||
+          l.description.toLowerCase().includes(term),
+      );
+
+      return nameMatch || poMatch || partnerMatch || reqMatch || lineMatch;
+    });
+  }, [orders, selectedRequisitor, searchTerm]);
+
+  // Agrupación de órdenes por Requisitor
+  const groupedByRequisitor = useMemo(() => {
+    const groups = new Map<string, OdooOrderView[]>();
+    for (const order of filteredOrders) {
+      const reqKey = order.requisitor || 'Sin Requisitor';
+      if (!groups.has(reqKey)) {
+        groups.set(reqKey, []);
+      }
+      groups.get(reqKey)!.push(order);
+    }
+    // Ordenar grupos alfabéticamente (poniendo "Sin Requisitor" al final)
+    return Array.from(groups.entries()).sort(([a], [b]) => {
+      if (a === 'Sin Requisitor') return 1;
+      if (b === 'Sin Requisitor') return -1;
+      return a.localeCompare(b);
+    });
+  }, [filteredOrders]);
+
+  const toggleGroupCollapse = (reqKey: string) => {
+    setCollapsedRequisitores((prev) => ({
+      ...prev,
+      [reqKey]: !prev[reqKey],
+    }));
+  };
+
+  const renderOrderCard = (order: OdooOrderView) => {
+    const ageDays = order.date_order ? getOrderAgeDays(order.date_order.split(' ')[0]) : null;
+    const prod = productionMap.get(order.name);
+    const badge =
+      !prod || prod.total === 0
+        ? { label: '○ SIN OTs', cls: 'bg-line/40 text-ink-dim' }
+        : prod.entregadas >= prod.total
+        ? { label: '✓ LISTO', cls: 'bg-ok text-bg' }
+        : { label: `◐ ${prod.entregadas}/${prod.total} OTs`, cls: 'bg-warn text-bg' };
+
+    return (
+      <div key={order.id} className="border-2 border-line bg-surface flex flex-col shadow-hard">
+        <div className="border-b-2 border-line bg-[#0D2B4D] text-white px-5 py-3 flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <h2 className="font-display font-black text-xl tracking-tight uppercase">
+                {order.name}
+              </h2>
+              <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-black uppercase tracking-widest">
+                {order.partner}
+              </span>
+              {order.requisitor && (
+                <span className="bg-surface-2 text-ink border border-line/40 px-2.5 py-0.5 text-[10px] font-mono font-bold flex items-center gap-1.5 uppercase tracking-wide">
+                  <User size={11} className="text-accent" />
+                  {order.requisitor}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-4 mt-1 font-mono text-[10px] opacity-80 uppercase tracking-widest">
+              <span>PO: {order.client_order_ref || 'N/A'}</span>
+              {order.date_order && (
+                <span>
+                  FECHA: {order.date_order.split(' ')[0]}
+                  {ageDays !== null && ` (${formatAgeDays(ageDays)})`}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className={`px-2 py-1 text-[10px] font-black uppercase tracking-widest font-mono ${badge.cls}`}>
+              {badge.label}
+            </span>
+            <div className="text-right">
+              <p className="text-[10px] uppercase font-black tracking-widest opacity-60">Líneas</p>
+              <p className="font-display text-xl font-black">{order.order_lines.length}</p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => exportDeliverySlip(order)}
+              className="flex items-center gap-2 bg-surface text-ink hover:bg-line ml-2"
+              title="Generar PDF de Remisión (Preview)"
+            >
+              <Truck size={14} />
+              <span className="text-[10px] font-black tracking-widest uppercase">Remisión (Test)</span>
+            </Button>
+          </div>
+        </div>
+        
+        <div className="p-0">
+          <Table className="w-full text-left border-collapse">
+            <TableHeader>
+              <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
+                <TableHead className="px-5 py-2 font-bold w-1/3 text-ink-dim h-auto">Producto</TableHead>
+                <TableHead className="px-5 py-2 font-bold text-ink-dim h-auto">Descripción</TableHead>
+                <TableHead className="px-5 py-2 font-bold text-center w-24 text-ink-dim h-auto">Pendiente</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {order.order_lines.map((line, idx) => {
+                const fullyDelivered = line.qty_pending <= 0;
+                return (
+                  <TableRow
+                    key={idx}
+                    className={`border-b border-line last:border-b-0 transition-colors ${
+                      fullyDelivered
+                        ? 'opacity-40 bg-ok/5 hover:bg-ok/5'
+                        : 'hover:bg-surface-2/40'
+                    }`}
+                  >
+                    <TableCell className="px-5 py-3 align-top">
+                      <span className="font-display font-black uppercase tracking-tight text-sm text-ink block">
+                        {line.product.split('] ')[1] || line.product}
+                      </span>
+                      {line.product.includes(']') && (
+                        <span className="font-mono text-[9px] text-ink-dim">
+                          {line.product.split(']')[0] + ']'}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-5 py-3 font-mono text-xs text-ink align-top leading-snug">
+                      {line.description || '—'}
+                    </TableCell>
+                    <TableCell className="px-5 py-3 text-center align-top">
+                      {fullyDelivered ? (
+                        <span className="font-mono text-[10px] text-ok uppercase tracking-widest">
+                          ✓ entregada
+                        </span>
+                      ) : (
+                        <div>
+                          <span className="font-black text-xl italic">{line.qty_pending}</span>
+                          {line.qty_delivered > 0 && (
+                            <span className="block font-mono text-[9px] text-ink-dim">
+                              de {line.qty} ({line.qty_delivered} entregadas)
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {order.order_lines.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
+                    No hay líneas de producto en esta orden
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-full flex flex-col bg-bg">
-      {/* ── Header ── */}
-      <header className="shrink-0 border-b-2 border-line bg-surface px-6 py-4 flex items-center justify-between">
+      {/* ── Header Principal ── */}
+      <header className="shrink-0 border-b-2 border-line bg-surface px-6 py-4 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-accent text-bg flex items-center justify-center corner-ticks shadow-hard">
             <CloudDownload size={22} strokeWidth={2.5} />
@@ -342,7 +540,7 @@ export function OdooOrdersPanel() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {meta && (
             <div
               className={`font-mono text-[10px] uppercase tracking-widest px-3 py-2 border-2 ${
@@ -368,8 +566,8 @@ export function OdooOrdersPanel() {
           </Button>
           <Button
             variant="ghost"
-            onClick={() => exportPdf(orders, productionMap)}
-            disabled={loading || orders.length === 0}
+            onClick={() => exportPdf(filteredOrders, productionMap)}
+            disabled={loading || filteredOrders.length === 0}
             className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
           >
             <FileDown size={14} />
@@ -387,7 +585,90 @@ export function OdooOrdersPanel() {
         </div>
       </header>
 
-      {/* ── Contenido ── */}
+      {/* ── Subheader / Barra de Navegación y Filtros por Requisitor ── */}
+      <section className="shrink-0 border-b-2 border-line bg-surface-2 px-6 py-3 flex items-center justify-between flex-wrap gap-4">
+        {/* Selector de Modo de Vista */}
+        <div className="flex items-center border-2 border-line bg-surface p-0.5 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setViewMode('all')}
+            className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+              viewMode === 'all'
+                ? 'bg-[#0D2B4D] text-white shadow-sm'
+                : 'text-ink-dim hover:text-ink hover:bg-surface-2'
+            }`}
+          >
+            <List size={14} />
+            <span>Todas las Órdenes</span>
+            <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
+              {orders.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('by_requisitor')}
+            className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+              viewMode === 'by_requisitor'
+                ? 'bg-[#0D2B4D] text-white shadow-sm'
+                : 'text-ink-dim hover:text-ink hover:bg-surface-2'
+            }`}
+          >
+            <Users size={14} />
+            <span>Por Requisitor</span>
+            <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
+              {uniqueRequisitores.length}
+            </span>
+          </button>
+        </div>
+
+        {/* Barra de Filtros y Búsqueda */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Selector Filtro de Requisitor */}
+          <div className="flex items-center gap-2 bg-surface border-2 border-line px-3 py-1 text-xs">
+            <User size={14} className="text-accent" />
+            <span className="font-mono text-[10px] uppercase font-bold text-ink-dim">Ingeniero:</span>
+            <select
+              value={selectedRequisitor}
+              onChange={(e) => setSelectedRequisitor(e.target.value)}
+              className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer"
+            >
+              <option value="ALL">TODOS ({orders.length})</option>
+              {uniqueRequisitores.map((req) => {
+                const count = orders.filter((o) => (o.requisitor || 'Sin Requisitor') === req).length;
+                return (
+                  <option key={req} value={req}>
+                    {req} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Caja de Búsqueda Rápida */}
+          <div className="relative flex items-center">
+            <Search size={14} className="absolute left-3 text-ink-dim" />
+            <input
+              type="text"
+              placeholder="Buscar SO, PO, requisitor, pieza…"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="bg-surface border-2 border-line pl-8 pr-8 py-1 font-mono text-xs text-ink placeholder:text-ink-dim focus:outline-none focus:border-accent w-64 uppercase"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2 text-ink-dim hover:text-ink"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Contenido Principal ── */}
       <main className="flex-1 overflow-y-auto p-6">
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4">
@@ -399,138 +680,96 @@ export function OdooOrdersPanel() {
             <AlertCircle size={48} />
             <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
           </div>
-        ) : orders.length === 0 ? (
+        ) : filteredOrders.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-12 text-center max-w-2xl mx-auto">
             <CloudDownload size={48} className="text-line" />
-            <p className="font-display font-black text-2xl uppercase italic">No hay órdenes pendientes</p>
+            <p className="font-display font-black text-2xl uppercase italic">No se encontraron órdenes</p>
             <p className="font-mono text-xs uppercase tracking-widest">
-              Todas las órdenes de Odoo están facturadas o no hay datos sincronizados.
+              {searchTerm || selectedRequisitor !== 'ALL'
+                ? 'Ninguna orden coincide con los filtros de búsqueda aplicados.'
+                : 'Todas las órdenes de Odoo están facturadas o no hay datos sincronizados.'}
             </p>
+            {(searchTerm || selectedRequisitor !== 'ALL') && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setSearchTerm('');
+                  setSelectedRequisitor('ALL');
+                }}
+                className="font-mono text-xs underline text-accent uppercase"
+              >
+                Limpiar filtros
+              </Button>
+            )}
+          </div>
+        ) : viewMode === 'all' ? (
+          /* ── MODO 1: Vista de Lista Plana (Todas las órdenes) ── */
+          <div className="space-y-6 max-w-6xl mx-auto">
+            {filteredOrders.map((order) => renderOrderCard(order))}
           </div>
         ) : (
-          <div className="space-y-6 max-w-6xl mx-auto">
-            {orders.map((order) => {
-              const ageDays = order.date_order ? getOrderAgeDays(order.date_order.split(' ')[0]) : null;
-              const prod = productionMap.get(order.name);
-              const badge =
-                !prod || prod.total === 0
-                  ? { label: '○ SIN OTs', cls: 'bg-line/40 text-ink-dim' }
-                  : prod.entregadas >= prod.total
-                  ? { label: '✓ LISTO', cls: 'bg-ok text-bg' }
-                  : { label: `◐ ${prod.entregadas}/${prod.total} OTs`, cls: 'bg-warn text-bg' };
+          /* ── MODO 2: Vista Agrupada por Requisitor / Ingeniero ── */
+          <div className="space-y-8 max-w-6xl mx-auto">
+            {groupedByRequisitor.map(([requisitorName, groupOrders]) => {
+              const isCollapsed = collapsedRequisitores[requisitorName] ?? false;
+
+              // Métricas del grupo de este Requisitor
+              const totalLines = groupOrders.reduce((sum, o) => sum + o.order_lines.length, 0);
+              const totalPendingPieces = groupOrders.reduce(
+                (sum, o) => sum + o.order_lines.reduce((lSum, line) => lSum + line.qty_pending, 0),
+                0,
+              );
 
               return (
-                <div key={order.id} className="border-2 border-line bg-surface flex flex-col shadow-hard">
-                  <div className="border-b-2 border-line bg-[#0D2B4D] text-white px-5 py-3 flex items-center justify-between flex-wrap gap-4">
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <h2 className="font-display font-black text-xl tracking-tight uppercase">
-                          {order.name}
-                        </h2>
-                        <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-black uppercase tracking-widest">
-                          {order.partner}
-                        </span>
+                <div
+                  key={requisitorName}
+                  className="border-2 border-line bg-surface shadow-hard overflow-hidden"
+                >
+                  {/* Encabezado del Grupo / Requisitor */}
+                  <div
+                    onClick={() => toggleGroupCollapse(requisitorName)}
+                    className="bg-[#0D2B4D] text-white px-5 py-3.5 flex items-center justify-between cursor-pointer select-none border-b-2 border-line hover:bg-[#12365e] transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-none bg-accent text-bg font-black flex items-center justify-center border border-accent">
+                        <User size={18} />
                       </div>
-                      <div className="flex items-center gap-4 mt-1 font-mono text-[10px] opacity-80 uppercase tracking-widest">
-                        <span>PO: {order.client_order_ref || 'N/A'}</span>
-                        {order.date_order && (
-                          <span>
-                            FECHA: {order.date_order.split(' ')[0]}
-                            {ageDays !== null && ` (${formatAgeDays(ageDays)})`}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-display font-black text-xl tracking-tight uppercase">
+                            {requisitorName}
+                          </h2>
+                          <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-black uppercase tracking-widest font-mono">
+                            {groupOrders.length} {groupOrders.length === 1 ? 'ORDEN' : 'ÓRDENES'}
                           </span>
-                        )}
+                        </div>
+                        <p className="font-mono text-[10px] opacity-70 uppercase tracking-widest mt-0.5">
+                          {totalLines} LÍNEAS TOTALES · {totalPendingPieces} PIEZAS PENDIENTES
+                        </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <span className={`px-2 py-1 text-[10px] font-black uppercase tracking-widest font-mono ${badge.cls}`}>
-                        {badge.label}
+
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs font-bold uppercase tracking-wider opacity-80">
+                        {isCollapsed ? 'Mostrar órdenes' : 'Ocultar'}
                       </span>
-                      <div className="text-right">
-                        <p className="text-[10px] uppercase font-black tracking-widest opacity-60">Líneas</p>
-                        <p className="font-display text-xl font-black">{order.order_lines.length}</p>
-                      </div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => exportDeliverySlip(order)}
-                        className="flex items-center gap-2 bg-surface text-ink hover:bg-line ml-2"
-                        title="Generar PDF de Remisión (Preview)"
-                      >
-                        <Truck size={14} />
-                        <span className="text-[10px] font-black tracking-widest uppercase">Remisión (Test)</span>
-                      </Button>
+                      {isCollapsed ? <ChevronRight size={20} /> : <ChevronDown size={20} />}
                     </div>
                   </div>
-                  
-                  <div className="p-0">
-                    <Table className="w-full text-left border-collapse">
-                      <TableHeader>
-                        <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
-                          <TableHead className="px-5 py-2 font-bold w-1/3 text-ink-dim h-auto">Producto</TableHead>
-                          <TableHead className="px-5 py-2 font-bold text-ink-dim h-auto">Descripción</TableHead>
-                          <TableHead className="px-5 py-2 font-bold text-center w-24 text-ink-dim h-auto">Pendiente</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {order.order_lines.map((line, idx) => {
-                          const fullyDelivered = line.qty_pending <= 0;
-                          return (
-                            <TableRow
-                              key={idx}
-                              className={`border-b border-line last:border-b-0 transition-colors ${
-                                fullyDelivered
-                                  ? 'opacity-40 bg-ok/5 hover:bg-ok/5'
-                                  : 'hover:bg-surface-2/40'
-                              }`}
-                            >
-                              <TableCell className="px-5 py-3 align-top">
-                                <span className="font-display font-black uppercase tracking-tight text-sm text-ink block">
-                                  {line.product.split('] ')[1] || line.product}
-                                </span>
-                                {line.product.includes(']') && (
-                                  <span className="font-mono text-[9px] text-ink-dim">
-                                    {line.product.split(']')[0] + ']'}
-                                  </span>
-                                )}
-                              </TableCell>
-                              <TableCell className="px-5 py-3 font-mono text-xs text-ink align-top leading-snug">
-                                {line.description || '—'}
-                              </TableCell>
-                              <TableCell className="px-5 py-3 text-center align-top">
-                                {fullyDelivered ? (
-                                  <span className="font-mono text-[10px] text-ok uppercase tracking-widest">
-                                    ✓ entregada
-                                  </span>
-                                ) : (
-                                  <div>
-                                    <span className="font-black text-xl italic">{line.qty_pending}</span>
-                                    {line.qty_delivered > 0 && (
-                                      <span className="block font-mono text-[9px] text-ink-dim">
-                                        de {line.qty} ({line.qty_delivered} entregadas)
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                        {order.order_lines.length === 0 && (
-                          <TableRow>
-                            <TableCell colSpan={3} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
-                              No hay líneas de producto en esta orden
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
+
+                  {/* Lista de Órdenes del Requisitor */}
+                  {!isCollapsed && (
+                    <div className="p-5 space-y-6 bg-surface-2/20">
+                      {groupOrders.map((order) => renderOrderCard(order))}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
         )}
       </main>
+
       {/* ── Modal de Factura / Remisión ── */}
       <InvoiceRequestPanel
         open={invoicePanelOpen}

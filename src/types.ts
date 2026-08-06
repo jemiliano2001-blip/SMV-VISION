@@ -58,9 +58,15 @@ export interface WorkshopPdfUpload {
   dataUrl: string;
 }
 
+/** Se escribe en `analysisRuns` (Firestore). Ya no se muestra en la UI. */
 export interface AnalysisMetrics {
   totalMs: number;
   pdfRasterMs: number;
+  /**
+   * ponytail: el nombre miente — hoy mide la lectura de Odoo en Firestore, no
+   * una llamada a Gemini (ese paso se borró). No se renombra porque partiría el
+   * esquema de los documentos de `analysisRuns` ya escritos.
+   */
   aiOrderMs: number;
   aiBlueprintMs: number;
   mergeMs: number;

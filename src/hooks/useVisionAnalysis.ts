@@ -48,7 +48,6 @@ import {
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
 const BLUEPRINT_PROMPT_VERSION = 'blueprints-v15-multi-piece-variants';
 const SMV_VISION_APP_VERSION = `smv-vision@${__APP_VERSION__}`;
-const METRICS_BASELINE_KEY = 'smvVisionMetricsBaselineV2';
 const MAX_BLUEPRINT_CONCURRENCY = 8;
 // Umbral para el segundo pase de refinamiento del bounding box.
 // 400k = ~632×632px: solo recuadros muy grandes disparan el pase adicional.
@@ -58,11 +57,6 @@ const GEMINI_BLUEPRINT_MODEL = 'gemini-3.5-flash';
 const FALLBACK_CENTER_BOX: number[] = [30, 30, 720, 970];
 
 // ── Internal types ────────────────────────────────────────────────────────────
-interface MetricsComparison {
-  baseline: AnalysisMetrics;
-  latest: AnalysisMetrics;
-  totalImprovementPct: number;
-}
 interface BlueprintTaskResult {
   index: number;
   fileId: string;
@@ -78,42 +72,6 @@ interface BlueprintStatusPatch {
 
 
 // ── Pure helper functions ────────────────────────────────────────────────────
-
-function readBaselineMetrics(): AnalysisMetrics | null {
-  const raw = localStorage.getItem(METRICS_BASELINE_KEY);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw) as AnalysisMetrics;
-  } catch {
-    localStorage.removeItem(METRICS_BASELINE_KEY);
-    return null;
-  }
-}
-
-function calculateMetricsComparison(latest: AnalysisMetrics): MetricsComparison {
-  const baseline = readBaselineMetrics();
-  if (!baseline) {
-    localStorage.setItem(METRICS_BASELINE_KEY, JSON.stringify(latest));
-    return {
-      baseline: latest,
-      latest,
-      totalImprovementPct: 0,
-    };
-  }
-
-  const improvement = baseline.totalMs > 0
-    ? ((baseline.totalMs - latest.totalMs) / baseline.totalMs) * 100
-    : 0;
-
-  return {
-    baseline,
-    latest,
-    totalImprovementPct: improvement,
-  };
-}
 
 function isPdfFile(file: File): boolean {
   const mimeType = file.type.toLowerCase();
@@ -156,7 +114,6 @@ export interface VisionAnalysisHook {
   error: string | null;
   results: Order[] | null;
   analysisSummary: AnalysisRunSummary | null;
-  metricsComparison: MetricsComparison | null;
   copying: boolean;
   // Edit mode
   editMode: boolean;
@@ -218,7 +175,6 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   const [results, setResults] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
-  const [metricsComparison, setMetricsComparison] = useState<MetricsComparison | null>(null);
   const [analysisSummary, setAnalysisSummary] = useState<AnalysisRunSummary | null>(null);
   // Mapa pdfId -> drawingId para dibujos adjuntados desde la biblioteca Tool Crib.
   // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
@@ -1037,7 +993,6 @@ Reglas de extracción (ESTILO UT2033):
         aiBlueprintMs,
         mergeMs,
       };
-      setMetricsComparison(calculateMetricsComparison(latestMetrics));
 
       const auditSummary = {
         totalLoaded: currentWorkshopPdfs.length,
@@ -1175,7 +1130,7 @@ Reglas de extracción (ESTILO UT2033):
     toolcribPdfToDrawing, attachedToolcribDrawingIds,
     // Analysis state
     isExtracting, extractingStep, error, results,
-    analysisSummary, metricsComparison, copying,
+    analysisSummary, copying,
     // Edit mode
     editMode, originalResults, excludedOrders, auditedCount,
     // Results display

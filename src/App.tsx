@@ -563,7 +563,7 @@ export default function App() {
                         </div>
                         <div className="bg-surface border-2 border-line p-5 flex items-center justify-center">
                           <div className="text-center">
-                            <p className="text-[10px] text-ink-dim uppercase font-black tracking-widest">No Coincidentes</p>
+                            <p className="text-[10px] text-ink-dim uppercase font-black tracking-widest" title="Planos que se analizaron pero no casaron con ninguna orden">Planos sin orden</p>
                             <p className="font-display text-2xl font-black text-accent italic">{vision.analysisSummary?.totalNonMatching ?? 0}</p>
                           </div>
                         </div>
@@ -571,25 +571,6 @@ export default function App() {
                       <div className="mt-2 text-[10px] font-mono text-ink-dim">
                         Cargados: {vision.analysisSummary?.totalLoaded ?? vision.workshopPdfs.length} PDFs de taller. Ordenes en reporte: {vision.analysisSummary?.totalOrders ?? vision.results.length}.
                       </div>
-                      {vision.metricsComparison && (
-                        <div className="mt-4 bg-surface-2 text-ink border-2 border-line p-4">
-                          <div className="flex items-center justify-between gap-4 flex-wrap">
-                            <p className="text-[10px] font-black uppercase tracking-widest">Métricas de rendimiento</p>
-                            <p className="text-xs font-mono text-ink-dim">
-                              Total actual: {vision.metricsComparison.latest.totalMs.toFixed(0)}ms
-                            </p>
-                          </div>
-                          <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-[10px] font-mono text-ink-dim">
-                            <p>Raster: {vision.metricsComparison.latest.pdfRasterMs.toFixed(0)}ms</p>
-                            <p>AI órdenes: {vision.metricsComparison.latest.aiOrderMs.toFixed(0)}ms</p>
-                            <p>AI planos: {vision.metricsComparison.latest.aiBlueprintMs.toFixed(0)}ms</p>
-                            <p>Merge: {vision.metricsComparison.latest.mergeMs.toFixed(0)}ms</p>
-                            <p className={vision.metricsComparison.totalImprovementPct >= 0 ? 'text-ok' : 'text-danger'}>
-                              Delta baseline: {vision.metricsComparison.totalImprovementPct.toFixed(1)}%
-                            </p>
-                          </div>
-                        </div>
-                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>

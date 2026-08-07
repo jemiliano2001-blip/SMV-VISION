@@ -56,7 +56,7 @@ Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all
   offers quick actions to the other views. Remounts on every visit (`App.tsx` gates it
   behind `activeView === 'inicio'`), so the counters refresh without a refresh button.
 - **Generar Reporte** (`reporte` view in `App.tsx`) — Report generation interface: Odoo order extraction, blueprint library attachment, PDF workspace management, and auditing pipeline powered by `useVisionAnalysis`.
-- **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders, synced by the Cloud Function (`functions/src/index.ts`).
+- **Órdenes** (`OdooOrdersPanel.tsx`) — Read-only list of Odoo sale orders, synced by the Cloud Function (`functions/src/index.ts`). Has a view-mode toggle (`all` / `by_requisitor`) plus a requisitor selector that groups orders by both Requisitor and Ingeniero — not just a flat list.
 - **Biblioteca** (`BibliotecaView.tsx`) — Tool Crib catalog browser; wraps `ToolcribLibraryPanel`.
 - **Compras** (`ComprasPanel.tsx`) — Purchase catalog (metals, assemblies, tools, other). CRUD interface backed by Firestore `purchases` collection.
 
@@ -175,8 +175,7 @@ The Vite build splits vendor code into named chunks to avoid one giant bundle: `
 - `src/lib/imageProcessing.ts` — `isValidBoundingBox`, `cropIsometricView`, `cropToBoxRaw`. Bounding-box validation is pure (testable in Node); the crop functions require a browser Canvas (not testable in Node without jsdom).
 - `src/lib/gemini.ts` — Low-level Gemini utilities: `callWithRetry` (exponential backoff), `preparePdfPart` / `prepareImagePart` (build `inlineData` objects for `@google/genai`). All Gemini calls go through these.
 - `src/lib/blueprintParsers.ts` — `parseBoundingBox` and `parseBlueprintResponse` parse/validate raw Gemini Vision JSON into typed `BlueprintSpec[]`. Also exports `isRecord` / `asString` type-narrowing helpers.
-- `src/lib/metricsBaseline.ts` — Stores/reads `AnalysisMetrics` in `localStorage` (`smvVisionMetricsBaselineV2`) to detect analysis performance regressions between sessions.
-- `src/components/charts/BarChart.tsx` / `LineChart.tsx` — Pure SVG chart components used by `InicioView`. No external charting library; they accept typed data props and apply the project's CSS token colors.
+- `src/components/charts/BarChart.tsx` / `LineChart.tsx` — Pure SVG chart components (no external charting library). **Currently unused** — not imported by any view, including `InicioView`. Check before assuming they're wired to anything.
 
 ### Tests
 

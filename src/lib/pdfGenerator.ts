@@ -22,6 +22,10 @@ import {
 } from './reportFormat';
 import { formatAgeDays, getOrderAgeDays } from './age';
 
+function jsPdfImageFormat(dataUrl: string): 'JPEG' | 'PNG' {
+  return dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+}
+
 export interface ReportPdfOptions {
   hotStampRefImage?: string | null;
   analysisSummary?: AnalysisRunSummary | null;
@@ -88,10 +92,23 @@ export function generateSingleOrderPdf(order: Order): void {
 
   if (order.isometricView) {
     try {
-      doc.addImage(order.isometricView, 'JPEG', 40, y, imgSize, imgSize);
+      doc.addImage(
+        order.isometricView,
+        jsPdfImageFormat(order.isometricView),
+        40,
+        y,
+        imgSize,
+        imgSize,
+      );
       doc.setDrawColor(0, 0, 0);
       doc.setLineWidth(1.5);
       doc.rect(40, y, imgSize, imgSize);
+      if (order.isometricSource === 'ai-generated') {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(180, 0, 0);
+        doc.text('IA · NO ACOTAR', 40, y + imgSize + 12);
+      }
     } catch (e) {
       console.warn('No se pudo incrustar la imagen isométrica', e);
     }
@@ -330,7 +347,14 @@ export function generateReportPdf(orders: Order[], options?: ReportPdfOptions): 
         const imageX = hookData.cell.x + (hookData.cell.width - imageSize) / 2;
         const imageY = hookData.cell.y + (hookData.cell.height - imageSize) / 2;
         try {
-          doc.addImage(order.isometricView, 'JPEG', imageX, imageY, imageSize, imageSize);
+          doc.addImage(
+            order.isometricView,
+            jsPdfImageFormat(order.isometricView),
+            imageX,
+            imageY,
+            imageSize,
+            imageSize,
+          );
         } catch (error) {
           console.error('PDF image embedding error', error);
         }

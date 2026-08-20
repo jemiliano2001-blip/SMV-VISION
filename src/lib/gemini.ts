@@ -35,5 +35,9 @@ export function prepareImagePart(dataUrl: string): {
   inlineData: { mimeType: string; data: string };
 } {
   const base64Data = dataUrl.split(';base64,')[1];
-  return { inlineData: { mimeType: 'image/jpeg', data: base64Data } };
+  const mimeMatch = /^data:([^;]+);base64,/.exec(dataUrl);
+  const mimeType = mimeMatch?.[1] && mimeMatch[1].startsWith('image/')
+    ? mimeMatch[1]
+    : 'image/jpeg';
+  return { inlineData: { mimeType, data: base64Data } };
 }

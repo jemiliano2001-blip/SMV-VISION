@@ -22,8 +22,10 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
+  Sparkles,
 } from 'lucide-react';
-import { Order } from './types';
+import { Order, type OrderDrawingLink } from './types';
+import { canGenerateAiIsometric } from './lib/generateIsometricImage';
 import { ToolcribLibraryPanel } from './components/ToolcribLibraryPanel';
 import { OdooOrdersPanel } from './components/OdooOrdersPanel';
 import { AppShell, type AppView } from './components/shell/AppShell';
@@ -33,6 +35,9 @@ import { ComprasPanel } from './components/ComprasPanel';
 import { EntregasSinOCPanel } from './components/EntregasSinOCPanel';
 import { formatAgeDays, getOrderAgeDays } from './lib/age';
 import { useVisionAnalysis } from './hooks/useVisionAnalysis';
+import { useToolcribCatalog } from './hooks/useToolcribCatalog';
+import { useOrderDrawingBridge } from './hooks/useOrderDrawingBridge';
+import type { ToolcribActiveDrawingView } from './types';
 
 /**
  * Celda de cantidad editable (modo edición del reporte). Mantiene un borrador
@@ -77,13 +82,42 @@ function EditableCantidad({
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
+  const [biblioSearchPrefill, setBiblioSearchPrefill] = useState('');
 
   const vision = useVisionAnalysis();
+  const catalog = useToolcribCatalog();
+  const bridge = useOrderDrawingBridge();
 
   // Navegación
   const navigate = useCallback((view: AppView) => {
     setActiveView(view);
   }, []);
+
+  const handleSendToReport = useCallback(async (link: OrderDrawingLink) => {
+    await vision.seedFromBridgeLinks([link]);
+    setActiveView('reporte');
+  }, [vision]);
+
+  const handleOpenBiblioteca = useCallback((query: string, linkKey: string) => {
+    bridge.setPendingKey(linkKey);
+    setBiblioSearchPrefill(query);
+    setActiveView('biblioteca');
+  }, [bridge]);
+
+  const handleUseDrawingForPending = useCallback((view: ToolcribActiveDrawingView) => {
+    const key = bridge.pendingKey;
+    if (!key) return;
+    const updated = bridge.upsertManual(key, view);
+    bridge.setPendingKey(null);
+    setBiblioSearchPrefill('');
+    if (updated) {
+      setActiveView('odoo');
+    }
+  }, [bridge]);
+
+  const pendingBibliotecaLink = bridge.pendingKey
+    ? bridge.links[bridge.pendingKey] ?? null
+    : null;
 
   useEffect(() => {
     if (!vision.previewOrder) return;
@@ -123,6 +157,28 @@ export default function App() {
                       <p className="text-[9px] text-ink-dim font-mono uppercase">Las órdenes pendientes se obtendrán automáticamente al ejecutar la auditoría.</p>
                     </div>
                   </div>
+                  {vision.seededBridgeLinks.length > 0 && (
+                    <div className="border-2 border-accent/40 bg-accent/5 p-3 space-y-2">
+                      <p className="font-mono text-[9px] uppercase tracking-widest text-accent font-black">
+                        {vision.seededBridgeLinks.length} enviada{vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {vision.seededBridgeLinks.map((link) => (
+                          <button
+                            key={link.key}
+                            type="button"
+                            onClick={() => vision.removeSeededBridgeLink(link.key)}
+                            className="inline-flex items-center gap-1 border border-line bg-surface px-2 py-1 font-mono text-[9px] uppercase hover:border-danger hover:text-danger"
+                            title="Quitar de la semilla del reporte"
+                          >
+                            {link.soNumber}
+                            {link.numeroParte ? ` · ${link.numeroParte}` : ''}
+                            <X size={10} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* 02 Biblioteca */}
@@ -424,19 +480,28 @@ export default function App() {
                                           {order.matchScore}% • REVISAR
                                         </span>
                                       )}
+                                      {order.isometricSource === 'ai-generated' && (
+                                        <span
+                                          className="bg-white text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
+                                          title="Vista 3D generada por IA a partir del plano 2D. No usar para cotizar dimensiones ni maquinado."
+                                        >
+                                          IA · NO ACOTAR
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-[10px] text-gray-500 font-mono italic">
                                       {order.sourcePdfName || "Sin plano asociado"}
                                     </p>
                                   </div>
 
+                                  <div className="flex flex-col items-end gap-2 shrink-0">
                                   {order.isometricView && (
                                     <button
                                       type="button"
                                       onClick={() => vision.setPreviewOrder(order)}
                                       disabled={!order.sourceImageDataUrl}
                                       title={order.sourceImageDataUrl ? 'Ver plano completo' : 'Plano completo no disponible'}
-                                      className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] shrink-0 relative overflow-hidden flex items-center justify-center p-1 hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] disabled:hover:translate-x-0 disabled:hover:translate-y-0 cursor-zoom-in"
+                                      className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] relative overflow-hidden flex items-center justify-center p-1 hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] disabled:hover:translate-x-0 disabled:hover:translate-y-0 cursor-zoom-in"
                                     >
                                       <img
                                         src={order.isometricView}
@@ -445,6 +510,30 @@ export default function App() {
                                       />
                                     </button>
                                   )}
+                                  {canGenerateAiIsometric(order) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void vision.generateAiIsometricForOrder(order)}
+                                      disabled={
+                                        vision.isExtracting ||
+                                        vision.aiIsoGeneratingKey !== null
+                                      }
+                                      title={
+                                        order.isometricSource === 'ai-generated'
+                                          ? 'Regenerar vista 3D con IA desde el plano 2D'
+                                          : 'Generar vista 3D con IA desde el plano 2D (no usar para acotar)'
+                                      }
+                                      className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-accent hover:text-bg disabled:opacity-50"
+                                    >
+                                      {vision.isAiIsoGenerating(order) ? (
+                                        <Loader2 size={11} className="animate-spin" />
+                                      ) : (
+                                        <Sparkles size={11} />
+                                      )}
+                                      {order.isometricSource === 'ai-generated' ? 'Regen 3D' : '3D IA'}
+                                    </button>
+                                  )}
+                                  </div>
                                 </td>
 
                                 <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
@@ -596,8 +685,21 @@ export default function App() {
                   analysisSummary={vision.analysisSummary}
                 />
               )}
-              {activeView === 'odoo' && <OdooOrdersPanel />}
-              {activeView === 'biblioteca' && <BibliotecaView />}
+              {activeView === 'odoo' && (
+                <OdooOrdersPanel
+                  catalog={catalog}
+                  bridge={bridge}
+                  onSendToReport={handleSendToReport}
+                  onOpenBiblioteca={handleOpenBiblioteca}
+                />
+              )}
+              {activeView === 'biblioteca' && (
+                <BibliotecaView
+                  searchPrefill={biblioSearchPrefill}
+                  pendingLink={pendingBibliotecaLink}
+                  onUseDrawingForPending={handleUseDrawingForPending}
+                />
+              )}
               {activeView === 'compras' && <ComprasPanel />}
               {activeView === 'entregas-sin-oc' && <EntregasSinOCPanel />}
             </motion.div>

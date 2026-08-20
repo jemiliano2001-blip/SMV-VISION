@@ -18,6 +18,8 @@ export interface AnalysisRunClientInfo {
 export interface AnalysisRunPromptVersions {
   order: string;
   blueprint: string;
+  /** Presente cuando la corrida usó (o pudo usar) fallback de imagen 3D IA. */
+  isoGen?: string;
 }
 
 export interface AnalysisRunDocumentHashes {
@@ -102,7 +104,9 @@ function validatePromptVersions(
   if (!isNonEmptyString(order) || !isNonEmptyString(blueprint)) {
     return null;
   }
-  return { order, blueprint };
+  const isoGenRaw = raw.isoGen;
+  const isoGen = isNonEmptyString(isoGenRaw) ? isoGenRaw : undefined;
+  return isoGen ? { order, blueprint, isoGen } : { order, blueprint };
 }
 
 function validateDocumentHashes(

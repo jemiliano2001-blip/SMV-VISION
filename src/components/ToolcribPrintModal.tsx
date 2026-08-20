@@ -6,15 +6,31 @@ import { Input } from './ui/input';
 import { openStampedPlanoOt } from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { listOrdersToInvoice, type OdooOrderView } from '../lib/firebase/odooOrders';
+import {
+  extractLibrarySignals,
+  extractOrderSignals,
+  MIN_BLUEPRINT_MATCH_SCORE,
+  scorePieceMatch,
+} from '../lib/matching';
 import type { ToolcribActiveDrawingView } from '../types';
 
 export interface ToolcribPrintModalProps {
   drawing: ToolcribActiveDrawingView | null;
   onClose: () => void;
   onSuccess: () => void;
+  /** Prefill desde Órdenes Odoo (número SO). */
+  initialSoNumber?: string;
+  /** Prefill desde Órdenes Odoo (cantidad pendiente). */
+  initialCantidad?: string;
 }
 
-export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrintModalProps) {
+export function ToolcribPrintModal({
+  drawing,
+  onClose,
+  onSuccess,
+  initialSoNumber,
+  initialCantidad,
+}: ToolcribPrintModalProps) {
   const [soNumber, setSoNumber] = useState('');
   const [cantidad, setCantidad] = useState('');
   const [notas, setNotas] = useState('');
@@ -29,6 +45,10 @@ export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrin
 
   useEffect(() => {
     if (drawing) {
+      setSoNumber(initialSoNumber?.trim() ?? '');
+      setCantidad(initialCantidad?.trim() ?? '');
+      setNotas('');
+      setError(null);
       setIsLoadingOrders(true);
       listOrdersToInvoice()
         .then((res) => {
@@ -40,7 +60,6 @@ export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrin
           setIsLoadingOrders(false);
         });
     } else {
-      // Limpiar cuando se cierra
       setSoNumber('');
       setCantidad('');
       setNotas('');
@@ -48,29 +67,38 @@ export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrin
       setMatchingOrders([]);
       setError(null);
     }
-  }, [drawing]);
+  }, [drawing, initialSoNumber, initialCantidad]);
 
   useEffect(() => {
     if (drawing && odooOrders.length > 0) {
-      const matches: { order: OdooOrderView; qty: number }[] = [];
-      const pnLower = drawing.partNumber.toLowerCase();
-      
+      const drawingSignals = extractLibrarySignals(drawing);
+      const matches: { order: OdooOrderView; qty: number; score: number }[] = [];
+
       for (const order of odooOrders) {
-        let matchedLine = null;
+        let bestQty = 0;
+        let bestScore = 0;
         for (const line of order.order_lines) {
-          if (line.product.toLowerCase().includes(pnLower) || line.description.toLowerCase().includes(pnLower)) {
-            matchedLine = line;
-            break;
+          if (line.qty_pending <= 0) continue;
+          const productLabel = line.product.includes('] ')
+            ? line.product.split('] ').slice(1).join('] ')
+            : line.product;
+          const orderSignals = extractOrderSignals(
+            line.description || productLabel,
+            productLabel,
+          );
+          const score = scorePieceMatch(orderSignals, drawingSignals);
+          if (score > bestScore) {
+            bestScore = score;
+            bestQty = line.qty_pending;
           }
         }
-        if (matchedLine) {
-          matches.push({
-            order,
-            qty: matchedLine.qty_pending > 0 ? matchedLine.qty_pending : matchedLine.qty,
-          });
+        if (bestScore >= MIN_BLUEPRINT_MATCH_SCORE) {
+          matches.push({ order, qty: bestQty, score: bestScore });
         }
       }
-      setMatchingOrders(matches);
+
+      matches.sort((a, b) => b.score - a.score);
+      setMatchingOrders(matches.map(({ order, qty }) => ({ order, qty })));
     } else {
       setMatchingOrders([]);
     }
@@ -95,14 +123,11 @@ export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrin
     setError(null);
 
     try {
-      // 1. Fetch PDF bytes
       const dataUrl = await fetchPdfAsDataUrl(drawing.pdfUrl);
 
-      // 2. Formatear la fecha
       const now = new Date();
       const fecha = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-      // 3. Imprimir el documento (lo sella y abre en nueva pestaña)
       await openStampedPlanoOt(dataUrl, {
         soNumber: soNumber.trim() || 'N/A',
         cantidad: cantidad.trim() || 'N/A',
@@ -110,7 +135,6 @@ export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrin
         notas: notas.trim(),
       });
 
-      // 4. Limpiar y cerrar
       setSoNumber('');
       setCantidad('');
       setNotas('');
@@ -170,7 +194,7 @@ export function ToolcribPrintModal({ drawing, onClose, onSuccess }: ToolcribPrin
               </div>
             </div>
           )}
-          
+
           {isLoadingOrders && matchingOrders.length === 0 && (
             <p className="text-xs text-muted-foreground flex items-center gap-1.5">
               <Loader2 size={12} className="animate-spin" /> Buscando órdenes en Odoo...

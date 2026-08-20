@@ -10,6 +10,12 @@ export interface Order {
   prioridad: 'URGENTE' | 'Normal';
   haSidoAuditada?: boolean;
   isometricView?: string;
+  /**
+   * Origen de la miniatura 3D del reporte.
+   * - crop: recorte del plano (ISO real o bbox Gemini)
+   * - ai-generated: imagen inventada por Gemini (fallback sin ISO/eDrawing)
+   */
+  isometricSource?: 'crop' | 'ai-generated';
   isometricBoundingBox?: BoundingBox;
   sourcePdfName?: string;
   sourcePdfPath?: string;
@@ -96,6 +102,8 @@ export interface ToolcribActiveDrawingView {
   sourceType: 'network' | 'storage';
   sourcePath: string;
   pdfUrl: string | null;
+  /** STL en Storage (export eDrawings); null si no hay malla. */
+  stlUrl: string | null;
   effectiveFromUTC: string | null;
 }
 
@@ -173,4 +181,52 @@ export interface PurchaseItem {
   notas: string;
   createdAtUTC: string | null;
   updatedAtUTC: string | null;
+}
+
+/**
+ * Snapshot de un dibujo Tool Crib guardado en un vínculo de sesión
+ * (orden ↔ plano). Suficiente para print OT y adjuntar al reporte
+ * sin volver a consultar el catálogo.
+ */
+export interface OrderDrawingSnapshot {
+  drawingId: string;
+  partId: string;
+  partNumber: string;
+  revision: string;
+  pdfUrl: string | null;
+  stlUrl: string | null;
+  sourcePath: string;
+  customer: string;
+  description: string;
+  sourceType: 'network' | 'storage';
+  effectiveFromUTC: string | null;
+}
+
+/** Estado del vínculo orden↔plano en la sesión del navegador. */
+export type OrderDrawingLinkStatus = 'linked' | 'no_match' | 'manual';
+
+/**
+ * Vínculo de sesión: una línea de orden Odoo con el plano CAD (OT) y/o
+ * el plano preferido para el reporte (ISO-first) ya resueltos.
+ * Clave: `${orderId}:${lineIndex}`.
+ */
+export interface OrderDrawingLink {
+  key: string;
+  orderId: string;
+  lineIndex: number;
+  soNumber: string;
+  poNumber: string;
+  pieza: string;
+  numeroParte: string;
+  qtyPending: number;
+  /** Mejor CAD (no-ISO) para imprimir OT; null si no hay match usable. */
+  cadDrawing: OrderDrawingSnapshot | null;
+  /**
+   * Plano para adjuntar al reporte (ISO-first vía selectLibraryDrawingMatch).
+   * Puede ser ISO o CAD si no hay ISO con score suficiente.
+   */
+  reportDrawing: OrderDrawingSnapshot | null;
+  matchScore: number;
+  matchedAt: string;
+  status: OrderDrawingLinkStatus;
 }

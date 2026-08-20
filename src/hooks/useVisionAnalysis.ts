@@ -10,6 +10,7 @@ import type {
   BoundingBox,
   ExtractedOrder,
   Order,
+  OrderDrawingLink,
   WorkshopPdfUpload,
   ToolcribActiveDrawingView,
 } from '../types';
@@ -43,10 +44,20 @@ import {
   cropIsometricView,
   cropToBoxRaw,
 } from '../lib/imageProcessing';
+import {
+  canGenerateAiIsometric,
+  generateIsometricImageFromDrawing,
+  ISOMETRIC_GEN_PROMPT_VERSION,
+} from '../lib/generateIsometricImage';
+import {
+  getReportDrawingSnapshot,
+  viewFromSnapshot,
+} from '../lib/orderDrawingBridge';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
 const BLUEPRINT_PROMPT_VERSION = 'blueprints-v15-multi-piece-variants';
+const MAX_ISO_GEN_CONCURRENCY = 3;
 const SMV_VISION_APP_VERSION = `smv-vision@${__APP_VERSION__}`;
 const MAX_BLUEPRINT_CONCURRENCY = 8;
 // Umbral para el segundo pase de refinamiento del bounding box.
@@ -131,6 +142,10 @@ export interface VisionAnalysisHook {
   // File actions
   ingestWorkshopFiles: (files: FileList | File[]) => Promise<void>;
   handleAttachToolcribDrawing: (attachment: ToolcribAttachment) => void;
+  /** Adjunta planos de vínculos del bridge e indexa semillas para la auditoría. */
+  seedFromBridgeLinks: (links: readonly OrderDrawingLink[]) => Promise<void>;
+  seededBridgeLinks: readonly OrderDrawingLink[];
+  removeSeededBridgeLink: (key: string) => void;
   removeFile: (type: 'workshop', fileId?: string) => void;
   buildDropHandlers: (
     zone: 'workshop',
@@ -142,6 +157,14 @@ export interface VisionAnalysisHook {
   };
   // Analysis actions
   extractInfo: () => Promise<void>;
+  /**
+   * Genera (o regenera) una vista 3D con IA a partir del plano 2D de la orden.
+   * Fail-soft: errores van a `error` / log; no rompe el reporte.
+   */
+  generateAiIsometricForOrder: (order: Order) => Promise<void>;
+  /** Clave de la orden que está generando 3D IA ahora, o null. */
+  aiIsoGeneratingKey: string | null;
+  isAiIsoGenerating: (order: Order) => boolean;
   // Export actions
   downloadPdf: () => void;
   downloadCsv: () => void;
@@ -179,6 +202,12 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   // Mapa pdfId -> drawingId para dibujos adjuntados desde la biblioteca Tool Crib.
   // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
   const [toolcribPdfToDrawing, setToolcribPdfToDrawing] = useState<Record<string, string>>({});
+  /** Vínculos enviados desde Órdenes (sesión); la auditoría los prioriza. */
+  const [seededBridgeLinks, setSeededBridgeLinks] = useState<OrderDrawingLink[]>([]);
+  const seededBridgeLinksRef = useRef<OrderDrawingLink[]>([]);
+  useEffect(() => {
+    seededBridgeLinksRef.current = seededBridgeLinks;
+  }, [seededBridgeLinks]);
 
 
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
@@ -196,6 +225,8 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   // Modal con la imagen completa del plano cuando el usuario hace click en la
   // miniatura isométrica. Null = cerrado.
   const [previewOrder, setPreviewOrder] = useState<Order | null>(null);
+  /** Orden en curso de generación 3D IA (`orderAiKey`), o null. */
+  const [aiIsoGeneratingKey, setAiIsoGeneratingKey] = useState<string | null>(null);
 
   // ── Modo edición del reporte (preview editable antes de imprimir) ──────────
   // `editMode` activa la edición inline sobre la hoja. `originalResults` es el
@@ -344,6 +375,57 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     setToolcribPdfToDrawing((prev) => ({ ...prev, [pdfId]: attachment.drawingId }));
     setError(null);
   }, [attachedToolcribDrawingIds]);
+
+  const removeSeededBridgeLink = useCallback((key: string) => {
+    setSeededBridgeLinks((prev) => prev.filter((l) => l.key !== key));
+  }, []);
+
+  const seedFromBridgeLinks = useCallback(async (links: readonly OrderDrawingLink[]) => {
+    const alreadyAttached = new Set(Object.values(toolcribPdfToDrawing));
+    const errors: string[] = [];
+
+    for (const link of links) {
+      const snap = getReportDrawingSnapshot(link);
+      if (!snap) {
+        errors.push(`${link.soNumber}: sin plano`);
+        continue;
+      }
+      if (!snap.pdfUrl) {
+        errors.push(`${snap.partNumber}: sin URL`);
+        continue;
+      }
+      if (!alreadyAttached.has(snap.drawingId)) {
+        try {
+          const dataUrl = await fetchPdfAsDataUrl(snap.pdfUrl);
+          const displayName = `${snap.partNumber.trim()} (Rev ${snap.revision.trim()}).pdf`;
+          const pdfId = `toolcrib-${snap.drawingId}-${crypto.randomUUID()}`;
+          const relativePath = snap.sourcePath.length > 0 ? snap.sourcePath : displayName;
+          setWorkshopPdfs((prev) => [
+            ...prev,
+            { id: pdfId, name: displayName, relativePath, dataUrl },
+          ]);
+          setToolcribPdfToDrawing((prev) => ({ ...prev, [pdfId]: snap.drawingId }));
+          alreadyAttached.add(snap.drawingId);
+        } catch {
+          errors.push(`No se pudo descargar ${snap.partNumber}`);
+        }
+      }
+    }
+
+    setSeededBridgeLinks((prev) => {
+      const byKey = new Map(prev.map((l) => [l.key, l]));
+      for (const link of links) {
+        byKey.set(link.key, link);
+      }
+      return Array.from(byKey.values());
+    });
+
+    if (errors.length > 0) {
+      setError(errors.join(' · '));
+    } else {
+      setError(null);
+    }
+  }, [toolcribPdfToDrawing]);
 
   const copyResults = async () => {
     if (!results) return;
@@ -605,6 +687,37 @@ No inventes información.` },
           );
           if (hasManualMatch) continue;
 
+          // Preferir vínculo enviado desde Órdenes (bridge) sobre re-match ciego.
+          const seeded = seededBridgeLinksRef.current.find((l) => {
+            if (l.soNumber !== order.orden) return false;
+            if (l.numeroParte && order.numero_parte) {
+              return l.numeroParte === order.numero_parte;
+            }
+            return l.pieza === order.pieza;
+          });
+          const seededSnap = seeded ? getReportDrawingSnapshot(seeded) : null;
+          if (seededSnap) {
+            const seededView =
+              library.find((v) => v.drawingId === seededSnap.drawingId) ??
+              viewFromSnapshot(seededSnap);
+            matchByOrder.set(order, {
+              drawingId: seededView.drawingId,
+              partId: seededView.partId,
+              score: seeded?.matchScore ?? 100,
+            });
+            if (
+              seededView.pdfUrl &&
+              !autoAttachedIds.has(seededView.drawingId) &&
+              !toFetchMap.has(seededView.drawingId)
+            ) {
+              toFetchMap.set(seededView.drawingId, {
+                bestView: seededView,
+                pdfId: `toolcrib-${seededView.drawingId}-${crypto.randomUUID()}`,
+              });
+            }
+            continue;
+          }
+
           // ISO-first: si algún ISO supera el umbral, gana sobre cualquier plano CAD.
           const { view: bestView, score: bestScore } =
             selectLibraryDrawingMatch(orderSignals, library, librarySignals);
@@ -732,6 +845,8 @@ No inventes información.` },
       // Best-match tracking per order index, mutated as blueprints complete.
       // `isIso` permite que un ISO proteja su posición contra planos CAD con score mayor.
       const bestMatchByOrder = new Map<number, { score: number; fileId: string; isIso: boolean }>();
+      /** Enrichment parcial por índice — evita depender del setState async para el fallback IA. */
+      const orderEnrichmentByIdx = new Map<number, Partial<Order>>();
       const matchedBlueprintFileIds = new Set<string>();
       let completedBlueprints = 0;
       const totalBlueprints = currentWorkshopPdfs.length;
@@ -810,6 +925,7 @@ No inventes información.` },
               sourcePdfName: result.fileLabel,
               sourcePdfPath: result.fileLabel,
               isometricView,
+              isometricSource: isometricView ? 'crop' : undefined,
               matchScore: match.score,
               sourceImageDataUrl: result.analysis.image || undefined,
             },
@@ -817,6 +933,10 @@ No inventes información.` },
         }
 
         if (updates.length === 0) return;
+        for (const u of updates) {
+          const prev = orderEnrichmentByIdx.get(u.orderIdx) ?? {};
+          orderEnrichmentByIdx.set(u.orderIdx, { ...prev, ...u.partial });
+        }
         setResults((prev) => {
           if (!prev) return prev;
           const next = [...prev];
@@ -971,6 +1091,79 @@ Reglas de extracción (ESTILO UT2033):
         aiBlueprintMs += entry.metrics.aiBlueprintMs;
       });
 
+      // 3b. Fallback IA: sin ISO/eDrawing real, generar imagen 3D etiquetada.
+      const cadOnlyIdxs: number[] = [];
+      for (const [idx, match] of bestMatchByOrder) {
+        if (match.isIso) continue;
+        const enrichment = orderEnrichmentByIdx.get(idx);
+        if (
+          !canGenerateAiIsometric({
+            sourceImageDataUrl: enrichment?.sourceImageDataUrl,
+            isometricView: enrichment?.isometricView,
+            sourcePdfName: enrichment?.sourcePdfName,
+          })
+        ) {
+          continue;
+        }
+        cadOnlyIdxs.push(idx);
+      }
+      if (cadOnlyIdxs.length > 0) {
+        setExtractingStep(`Generando vistas 3D (IA): 0/${cadOnlyIdxs.length}`);
+        let isoGenDone = 0;
+        await runWithConcurrencyLimit(
+          cadOnlyIdxs,
+          MAX_ISO_GEN_CONCURRENCY,
+          async (orderIdx) => {
+            const enrichment = orderEnrichmentByIdx.get(orderIdx);
+            const source =
+              enrichment?.sourceImageDataUrl ??
+              enrichment?.isometricView ??
+              null;
+            if (!source) {
+              isoGenDone += 1;
+              setExtractingStep(`Generando vistas 3D (IA): ${isoGenDone}/${cadOnlyIdxs.length}`);
+              return;
+            }
+            try {
+              const hash = await createDocumentHash(source);
+              const cached = await readCachedValue<string>(
+                'iso-gen',
+                hash,
+                ISOMETRIC_GEN_PROMPT_VERSION,
+              );
+              let generated = cached;
+              if (!generated) {
+                generated = await generateIsometricImageFromDrawing(ai, {
+                  sourceImageDataUrl: source,
+                });
+                if (generated) {
+                  await writeCachedValue('iso-gen', hash, ISOMETRIC_GEN_PROMPT_VERSION, generated);
+                }
+              }
+              if (generated) {
+                const partial: Partial<Order> = {
+                  isometricView: generated,
+                  isometricSource: 'ai-generated',
+                };
+                const prev = orderEnrichmentByIdx.get(orderIdx) ?? {};
+                orderEnrichmentByIdx.set(orderIdx, { ...prev, ...partial });
+                setResults((prevResults) => {
+                  if (!prevResults) return prevResults;
+                  const next = [...prevResults];
+                  next[orderIdx] = { ...next[orderIdx], ...partial };
+                  return next;
+                });
+              }
+            } catch (e) {
+              log.warn('[smv-vision][iso-gen] falló para orden', orderIdx, e);
+            } finally {
+              isoGenDone += 1;
+              setExtractingStep(`Generando vistas 3D (IA): ${isoGenDone}/${cadOnlyIdxs.length}`);
+            }
+          },
+        );
+      }
+
       // 4. Final summary
       setExtractingStep('Generando reporte final...');
       const mergeStart = performance.now();
@@ -1013,6 +1206,7 @@ Reglas de extracción (ESTILO UT2033):
             promptVersions: {
               order: ORDER_PROMPT_VERSION,
               blueprint: BLUEPRINT_PROMPT_VERSION,
+              isoGen: ISOMETRIC_GEN_PROMPT_VERSION,
             },
             documentHashes: { orderReportSha256, blueprintSha256List },
             summary: auditSummary,
@@ -1048,6 +1242,7 @@ Reglas de extracción (ESTILO UT2033):
             promptVersions: {
               order: ORDER_PROMPT_VERSION,
               blueprint: BLUEPRINT_PROMPT_VERSION,
+              isoGen: ISOMETRIC_GEN_PROMPT_VERSION,
             },
             documentHashes: { orderReportSha256, blueprintSha256List },
             summary: null,
@@ -1071,6 +1266,80 @@ Reglas de extracción (ESTILO UT2033):
   const snapshotOriginalOnce = useCallback(() => {
     setOriginalResults((prev) => prev ?? (results ? [...results] : null));
   }, [results]);
+
+  const orderAiKey = useCallback((order: Order): string => {
+    return `${order.orden}::${order.pieza}::${order.numero_parte ?? ''}::${order.sourcePdfName ?? ''}`;
+  }, []);
+
+  /**
+   * Genera vista 3D con Gemini a partir del plano 2D de una orden.
+   * Usa cache IndexedDB; marca `isometricSource: 'ai-generated'`.
+   */
+  const generateAiIsometricForOrder = useCallback(
+    async (order: Order): Promise<void> => {
+      if (!canGenerateAiIsometric(order)) {
+        setError(
+          'No se puede generar 3D IA: falta imagen del plano 2D, o el plano ya es un ISO real.',
+        );
+        return;
+      }
+      const source = order.sourceImageDataUrl ?? order.isometricView;
+      if (!source) return;
+
+      const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? '').trim();
+      if (!geminiApiKey) {
+        setError('Falta configurar VITE_GEMINI_API_KEY para generar vistas 3D con IA.');
+        return;
+      }
+
+      const key = orderAiKey(order);
+      setAiIsoGeneratingKey(key);
+      setError(null);
+      try {
+        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+        const hash = await createDocumentHash(source);
+        const cached = await readCachedValue<string>(
+          'iso-gen',
+          hash,
+          ISOMETRIC_GEN_PROMPT_VERSION,
+        );
+        let generated = cached;
+        if (!generated) {
+          generated = await generateIsometricImageFromDrawing(ai, {
+            sourceImageDataUrl: source,
+          });
+          if (generated) {
+            await writeCachedValue('iso-gen', hash, ISOMETRIC_GEN_PROMPT_VERSION, generated);
+          }
+        }
+        if (!generated) {
+          setError('Gemini no devolvió una imagen 3D. Intenta de nuevo o revisa el plano.');
+          return;
+        }
+        snapshotOriginalOnce();
+        setResults((prev) => {
+          if (!prev) return prev;
+          return prev.map((row) =>
+            row === order || orderAiKey(row) === key
+              ? {
+                  ...row,
+                  isometricView: generated,
+                  isometricSource: 'ai-generated',
+                  haSidoAuditada: true,
+                }
+              : row,
+          );
+        });
+      } catch (e) {
+        log.warn('[smv-vision][iso-gen] generateAiIsometricForOrder falló', e);
+        const message = e instanceof Error ? e.message : String(e);
+        setError(`Error generando vista 3D IA: ${message}`);
+      } finally {
+        setAiIsoGeneratingKey(null);
+      }
+    },
+    [orderAiKey, snapshotOriginalOnce],
+  );
 
   const handleEditCantidad = useCallback(
     (order: Order, nuevaCantidad: string) => {
@@ -1140,6 +1409,12 @@ Reglas de extracción (ESTILO UT2033):
     // Actions
     extractInfo, ingestWorkshopFiles,
     handleAttachToolcribDrawing,
+    seedFromBridgeLinks,
+    seededBridgeLinks,
+    removeSeededBridgeLink,
+    generateAiIsometricForOrder,
+    aiIsoGeneratingKey,
+    isAiIsoGenerating: (order: Order) => aiIsoGeneratingKey === orderAiKey(order),
     removeFile, buildDropHandlers,
     downloadPdf, downloadCsv, downloadJson,
     downloadSingleOrderPdf, copyResults,

@@ -14,9 +14,13 @@ import {
   ChevronRight,
   List,
   X,
+  Printer,
+  FileSearch,
+  Send,
 } from 'lucide-react';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
+import { ToolcribPrintModal } from './ToolcribPrintModal';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Button } from './ui/button';
@@ -32,10 +36,26 @@ import {
   listOrdersToInvoice,
   listWorkOrderStatusBySoNumbers,
   type OdooOrderView,
+  type OdooOrderLineView,
   type ProductionStatus,
 } from '../lib/firebase/odooOrders';
-import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
+import { recordToolcribPrintLogFireAndForget } from '../lib/firebase/toolcrib';
+import {
+  makeOrderDrawingLinkKey,
+  parseOdooLineLabels,
+} from '../lib/orderDrawingBridge';
+import type { OrderDrawingLink, ToolcribActiveDrawingView } from '../types';
 import { useSyncMeta } from '../hooks/useSyncMeta';
+import type { UseToolcribCatalogResult } from '../hooks/useToolcribCatalog';
+import type { UseOrderDrawingBridgeResult } from '../hooks/useOrderDrawingBridge';
+import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
+
+export interface OdooOrdersPanelProps {
+  catalog: UseToolcribCatalogResult;
+  bridge: UseOrderDrawingBridgeResult;
+  onSendToReport: (link: OrderDrawingLink) => Promise<void>;
+  onOpenBiblioteca: (query: string, linkKey: string) => void;
+}
 
 function exportDeliverySlip(order: OdooOrderView): void {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
@@ -220,7 +240,12 @@ function exportPdf(orders: OdooOrderView[], productionMap: Map<string, Productio
   doc.save(`ordenes-odoo-${generatedAt.toISOString().slice(0, 10)}.pdf`);
 }
 
-export function OdooOrdersPanel() {
+export function OdooOrdersPanel({
+  catalog,
+  bridge,
+  onSendToReport,
+  onOpenBiblioteca,
+}: OdooOrdersPanelProps) {
   const [orders, setOrders] = useState<OdooOrderView[]>([]);
   const [productionMap, setProductionMap] = useState<Map<string, ProductionStatus>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -228,6 +253,12 @@ export function OdooOrdersPanel() {
   const [syncingOdoo, setSyncingOdoo] = useState(false);
   const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
   const [invoicePanelOpen, setInvoicePanelOpen] = useState(false);
+  const [printDrawing, setPrintDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const [printSoNumber, setPrintSoNumber] = useState('');
+  const [printCantidad, setPrintCantidad] = useState('');
+  const [lineBusyKey, setLineBusyKey] = useState<string | null>(null);
+  const [lineActionError, setLineActionError] = useState<string | null>(null);
+  const [sendingKey, setSendingKey] = useState<string | null>(null);
 
   // Vistas y Filtros por Requisitor
   const [viewMode, setViewMode] = useState<'all' | 'by_requisitor'>('all');
@@ -238,6 +269,134 @@ export function OdooOrdersPanel() {
   const syncTriggeredAt = useRef<Date | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { meta } = useSyncMeta();
+
+  const catalogErrorMessage = useCallback((): string => {
+    return catalog.errorReason === 'not-configured'
+      ? 'Firebase no está configurado para la biblioteca.'
+      : catalog.errorReason === 'not-authenticated'
+        ? 'Inicia sesión para buscar planos en la biblioteca.'
+        : 'No fue posible cargar la biblioteca de planos.';
+  }, [catalog.errorReason]);
+
+  const ensureCatalogViews = useCallback(async (): Promise<readonly ToolcribActiveDrawingView[] | null> => {
+    if (catalog.status === 'ready') {
+      return catalog.views;
+    }
+    if (catalog.status === 'loading') {
+      setLineActionError('Cargando catálogo de planos…');
+      return null;
+    }
+    const loaded = await catalog.reload();
+    if (!loaded) {
+      setLineActionError(catalogErrorMessage());
+      return null;
+    }
+    return loaded;
+  }, [catalog, catalogErrorMessage]);
+
+  const resolveLineLink = useCallback(
+    (
+      order: OdooOrderView,
+      line: OdooOrderLineView,
+      lineIdx: number,
+      library: readonly ToolcribActiveDrawingView[],
+    ) => {
+      const { pieza, numeroParte } = parseOdooLineLabels(line.product, line.description || '');
+      return bridge.resolveAndStore(
+        {
+          orderId: order.id,
+          lineIndex: lineIdx,
+          soNumber: order.name,
+          poNumber: order.client_order_ref ?? '',
+          pieza,
+          numeroParte,
+          qtyPending: line.qty_pending,
+        },
+        library,
+        undefined,
+      );
+    },
+    [bridge],
+  );
+
+  const handlePrintLinePlano = useCallback(
+    async (order: OdooOrderView, line: OdooOrderLineView, lineIdx: number) => {
+      const key = makeOrderDrawingLinkKey(order.id, lineIdx);
+      setLineBusyKey(key);
+      setLineActionError(null);
+
+      const library = await ensureCatalogViews();
+      if (!library) {
+        setLineBusyKey(null);
+        return;
+      }
+
+      const link = resolveLineLink(order, line, lineIdx, library);
+      const cadView = bridge.getCadViewForPrint(link);
+      if (!cadView) {
+        setLineActionError('No hay plano CAD en biblioteca para esta pieza.');
+        setLineBusyKey(null);
+        return;
+      }
+
+      setPrintSoNumber(order.name);
+      setPrintCantidad(String(line.qty_pending));
+      setPrintDrawing(cadView);
+      setLineBusyKey(null);
+    },
+    [ensureCatalogViews, resolveLineLink, bridge],
+  );
+
+  const handleSendLineToReport = useCallback(
+    async (order: OdooOrderView, line: OdooOrderLineView, lineIdx: number) => {
+      const key = makeOrderDrawingLinkKey(order.id, lineIdx);
+      setSendingKey(key);
+      setLineActionError(null);
+
+      const library = await ensureCatalogViews();
+      if (!library) {
+        setSendingKey(null);
+        return;
+      }
+
+      const link = resolveLineLink(order, line, lineIdx, library);
+      const reportSnap = bridge.getReportSnapshot(link);
+      if (!reportSnap) {
+        setLineActionError('No hay plano (ISO/CAD) para enviar al reporte.');
+        setSendingKey(null);
+        return;
+      }
+      if (!reportSnap.pdfUrl) {
+        setLineActionError(`El plano ${reportSnap.partNumber} no tiene URL descargable.`);
+        setSendingKey(null);
+        return;
+      }
+
+      try {
+        await onSendToReport(link);
+      } catch {
+        setLineActionError('No se pudo enviar al reporte. Revisa la conexión.');
+      } finally {
+        setSendingKey(null);
+      }
+    },
+    [ensureCatalogViews, resolveLineLink, bridge, onSendToReport],
+  );
+
+  const handleOpenBibliotecaForLine = useCallback(
+    (order: OdooOrderView, line: OdooOrderLineView, lineIdx: number) => {
+      const library = catalog.views;
+      resolveLineLink(order, line, lineIdx, library);
+      const { pieza, numeroParte, productLabel } = parseOdooLineLabels(
+        line.product,
+        line.description || '',
+      );
+      const query = (numeroParte || productLabel || pieza).trim();
+      const linkKey = makeOrderDrawingLinkKey(order.id, lineIdx);
+      onOpenBiblioteca(query, linkKey);
+    },
+    [catalog.views, resolveLineLink, onOpenBiblioteca],
+  );
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -444,12 +603,21 @@ export function OdooOrdersPanel() {
               <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
                 <TableHead className="px-5 py-2 font-bold w-1/3 text-ink-dim h-auto">Producto</TableHead>
                 <TableHead className="px-5 py-2 font-bold text-ink-dim h-auto">Descripción</TableHead>
-                <TableHead className="px-5 py-2 font-bold text-center w-24 text-ink-dim h-auto">Pendiente</TableHead>
+                <TableHead className="px-5 py-2 font-bold text-center w-28 text-ink-dim h-auto">Pendiente</TableHead>
+                <TableHead className="px-5 py-2 font-bold text-center min-w-[220px] text-ink-dim h-auto">Plano</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {order.order_lines.map((line, idx) => {
                 const fullyDelivered = line.qty_pending <= 0;
+                const lineKey = makeOrderDrawingLinkKey(order.id, idx);
+                const isMatching = lineBusyKey === lineKey;
+                const isSending = sendingKey === lineKey;
+                const link = bridge.links[lineKey];
+                const partLabel =
+                  link?.cadDrawing?.partNumber ??
+                  link?.reportDrawing?.partNumber ??
+                  null;
                 return (
                   <TableRow
                     key={idx}
@@ -488,12 +656,86 @@ export function OdooOrdersPanel() {
                         </div>
                       )}
                     </TableCell>
+                    <TableCell className="px-5 py-3 text-center align-top">
+                      {!fullyDelivered && (
+                        <div className="flex flex-col items-stretch gap-1.5 min-w-[200px]">
+                          {link && link.status !== 'no_match' && partLabel ? (
+                            <span
+                              className="font-mono text-[9px] text-ok uppercase tracking-wide truncate"
+                              title={`Score ${link.matchScore}`}
+                            >
+                              {partLabel}
+                              {link.matchScore > 0 ? ` · ${link.matchScore}` : ''}
+                              {link.status === 'manual' ? ' · manual' : ''}
+                            </span>
+                          ) : link?.status === 'no_match' ? (
+                            <span className="font-mono text-[9px] text-warn uppercase tracking-wide">
+                              Sin plano
+                            </span>
+                          ) : null}
+                          <div className="flex flex-wrap justify-center gap-1">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              disabled={lineBusyKey !== null || sendingKey !== null}
+                              onClick={() => void handlePrintLinePlano(order, line, idx)}
+                              className="inline-flex items-center gap-1"
+                              title="Buscar plano CAD e imprimir OT"
+                            >
+                              {isMatching ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Printer size={12} />
+                              )}
+                              <span className="text-[9px] font-black uppercase tracking-widest">
+                                Imprimir
+                              </span>
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              disabled={lineBusyKey !== null || sendingKey !== null}
+                              onClick={() => void handleSendLineToReport(order, line, idx)}
+                              className="inline-flex items-center gap-1"
+                              title="Adjuntar plano al reporte y abrir Generar Reporte"
+                            >
+                              {isSending ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Send size={12} />
+                              )}
+                              <span className="text-[9px] font-black uppercase tracking-widest">
+                                Reporte
+                              </span>
+                            </Button>
+                            {(link?.status === 'no_match' || !link || !link.cadDrawing) && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={lineBusyKey !== null || sendingKey !== null}
+                                onClick={() => handleOpenBibliotecaForLine(order, line, idx)}
+                                className="inline-flex items-center gap-1"
+                                title="Buscar plano en Biblioteca"
+                              >
+                                <FileSearch size={12} />
+                                <span className="text-[9px] font-black uppercase tracking-widest">
+                                  Biblioteca
+                                </span>
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </TableCell>
                   </TableRow>
                 );
               })}
               {order.order_lines.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={3} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
+                  <TableCell colSpan={4} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
                     No hay líneas de producto en esta orden
                   </TableCell>
                 </TableRow>
@@ -652,6 +894,20 @@ export function OdooOrdersPanel() {
 
       {/* ── Contenido Principal ── */}
       <main className="flex-1 overflow-y-auto p-6">
+        {lineActionError && (
+          <div className="mb-4 flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span>{lineActionError}</span>
+            <button
+              type="button"
+              className="ml-auto text-ink-dim hover:text-ink"
+              onClick={() => setLineActionError(null)}
+              aria-label="Cerrar"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4">
             <Loader2 size={32} className="animate-spin text-accent" />
@@ -758,6 +1014,27 @@ export function OdooOrdersPanel() {
         onClose={() => setInvoicePanelOpen(false)}
         orders={orders}
         productionMap={productionMap}
+      />
+
+      <ToolcribPrintModal
+        drawing={printDrawing}
+        initialSoNumber={printSoNumber}
+        initialCantidad={printCantidad}
+        onClose={() => {
+          setPrintDrawing(null);
+          setPrintSoNumber('');
+          setPrintCantidad('');
+        }}
+        onSuccess={() => {
+          if (printDrawing) {
+            recordToolcribPrintLogFireAndForget({
+              drawingId: printDrawing.drawingId,
+              partId: printDrawing.partId,
+              copies: 1,
+              orderRef: printSoNumber || null,
+            });
+          }
+        }}
       />
     </div>
   );

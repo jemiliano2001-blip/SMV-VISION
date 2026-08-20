@@ -272,6 +272,34 @@ export function selectLibraryDrawingMatch(
   };
 }
 
+/**
+ * Selecciona el mejor plano CAD (no-ISO) del catálogo para impresión OT.
+ * Ignora entradas ISO aunque tengan score más alto — el tornero necesita el
+ * plano con cotas, no la vista isométrica del análisis.
+ *
+ * Un match solo es utilizable si `score >= MIN_BLUEPRINT_MATCH_SCORE`.
+ */
+export function selectCadDrawingForPrint(
+  orderSignals: PieceMatchSignals,
+  library: readonly ToolcribActiveDrawingView[],
+  signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
+): LibraryDrawingMatch {
+  let bestView: ToolcribActiveDrawingView | null = null;
+  let bestScore = 0;
+
+  for (const view of library) {
+    if (isIsoDrawingView(view)) continue;
+    const signals = signalsByDrawingId?.get(view.drawingId) ?? extractLibrarySignals(view);
+    const score = scorePieceMatch(orderSignals, signals);
+    if (score > bestScore) {
+      bestScore = score;
+      bestView = view;
+    }
+  }
+
+  return { view: bestView, score: bestScore };
+}
+
 function calculatePieceMatchScore(orderPiece: string, blueprintPiece: string): number {
   const normalizedOrder = normalizePieceLabel(orderPiece);
   const normalizedBlueprint = normalizePieceLabel(blueprintPiece);

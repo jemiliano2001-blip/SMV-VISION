@@ -29,6 +29,7 @@ import {
   Eye,
   X,
   Trash2,
+  Box,
 } from 'lucide-react';
 import Fuse from 'fuse.js';
 
@@ -39,8 +40,10 @@ import {
 } from '../lib/firebase/toolcrib';
 import type { ToolcribActiveDrawingView } from '../types';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { isIsoDrawingView } from '../lib/matching';
 import { ToolcribUploadModal } from './ToolcribUploadModal';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
+import { StlViewerModal } from './StlViewerModal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
@@ -66,6 +69,19 @@ export interface ToolcribLibraryPanelProps {
    * inserciones y reflejar el estado en la UI.
    */
   attachedDrawingIds?: ReadonlySet<string>;
+  /**
+   * Si true, oculta planos ISO (`.iso` / `*.iso.pdf`) de la lista.
+   * Usar en Biblioteca (impresión OT); dejar false en Reporte para adjuntar.
+   */
+  excludeIsoForPrint?: boolean;
+  /** Prefill del buscador (p. ej. al llegar desde Órdenes). */
+  initialSearchTerm?: string;
+  /**
+   * Vínculo pendiente de Biblioteca: muestra "Usar para orden X"
+   * en cada fila cuando hay un link activo desde Órdenes.
+   */
+  pendingLinkLabel?: string | null;
+  onUseForPendingOrder?: (view: ToolcribActiveDrawingView) => void;
 }
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -92,17 +108,29 @@ function buildDisplayName(view: ToolcribActiveDrawingView): string {
 export function ToolcribLibraryPanel({
   onAttachDrawing,
   attachedDrawingIds,
+  excludeIsoForPrint = false,
+  initialSearchTerm = '',
+  pendingLinkLabel = null,
+  onUseForPendingOrder,
 }: ToolcribLibraryPanelProps): ReactElement {
   const [status, setStatus] = useState<LoadStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [views, setViews] = useState<ToolcribActiveDrawingView[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(initialSearchTerm);
   const [isOpen, setIsOpen] = useState<boolean>(true);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [printDrawing, setPrintDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [updateDrawing, setUpdateDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [rowState, setRowState] = useState<Record<string, RowActionState>>({});
   const [previewDrawing, setPreviewDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const [stlDrawing, setStlDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+
+  useEffect(() => {
+    if (initialSearchTerm.trim().length > 0) {
+      setSearchTerm(initialSearchTerm);
+      setIsOpen(true);
+    }
+  }, [initialSearchTerm]);
 
   const loadLibrary = useCallback(async () => {
     setStatus('loading');
@@ -125,9 +153,13 @@ export function ToolcribLibraryPanel({
       }
       return;
     }
-    setViews(result.value);
+    // En modo impresión OT ocultamos ISO… excepto los que traen STL (visor 3D).
+    const loaded = excludeIsoForPrint
+      ? result.value.filter((view) => !isIsoDrawingView(view) || Boolean(view.stlUrl))
+      : result.value;
+    setViews(loaded);
     setStatus('ready');
-  }, []);
+  }, [excludeIsoForPrint]);
 
   useEffect(() => {
     if (status === 'idle') {
@@ -152,18 +184,26 @@ export function ToolcribLibraryPanel({
       includeScore: true,
     });
 
-    // Sort logic to prioritize exact matches or `.iso` files for identical scores
-    return fuse.search(term).sort((a, b) => {
-      const aIso = a.item.partNumber.toLowerCase().includes('.iso') || (a.item.sourcePath || '').toLowerCase().includes('.iso');
-      const bIso = b.item.partNumber.toLowerCase().includes('.iso') || (b.item.sourcePath || '').toLowerCase().includes('.iso');
+    const results = fuse.search(term);
+    if (excludeIsoForPrint) {
+      return results
+        .sort((a, b) => (a.score || 0) - (b.score || 0))
+        .map((result) => result.item);
+    }
 
-      // If one is an .iso file and scores are relatively close, give it a tiny priority
-      if (aIso && !bIso && Math.abs((a.score || 0) - (b.score || 0)) < 0.1) return -1;
-      if (!aIso && bIso && Math.abs((a.score || 0) - (b.score || 0)) < 0.1) return 1;
+    // En modo adjuntar (Reporte): priorizar `.iso` cuando los scores son cercanos.
+    return results
+      .sort((a, b) => {
+        const aIso = isIsoDrawingView(a.item);
+        const bIso = isIsoDrawingView(b.item);
 
-      return (a.score || 0) - (b.score || 0);
-    }).map(result => result.item);
-  }, [searchTerm, views]);
+        if (aIso && !bIso && Math.abs((a.score || 0) - (b.score || 0)) < 0.1) return -1;
+        if (!aIso && bIso && Math.abs((a.score || 0) - (b.score || 0)) < 0.1) return 1;
+
+        return (a.score || 0) - (b.score || 0);
+      })
+      .map((result) => result.item);
+  }, [searchTerm, views, excludeIsoForPrint]);
 
 
 
@@ -391,6 +431,17 @@ export function ToolcribLibraryPanel({
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex items-center justify-end gap-2">
+                                {view.stlUrl && (
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={() => setStlDrawing(view)}
+                                    title="Abrir vista 3D (STL)"
+                                  >
+                                    <Box size={12} />
+                                    <span className="ml-1 hidden sm:inline">3D</span>
+                                  </Button>
+                                )}
                                 <Button
                                   variant="outline"
                                   size="xs"
@@ -414,7 +465,15 @@ export function ToolcribLibraryPanel({
                                   variant="outline"
                                   size="xs"
                                   onClick={() => setPrintDrawing(view)}
-                                  disabled={rowActionState.status === 'printing'}
+                                  disabled={
+                                    rowActionState.status === 'printing' ||
+                                    (excludeIsoForPrint && isIsoDrawingView(view))
+                                  }
+                                  title={
+                                    excludeIsoForPrint && isIsoDrawingView(view)
+                                      ? 'ISO no se imprime como OT — usa el CAD'
+                                      : 'Imprimir OT'
+                                  }
                                 >
                                   {rowActionState.status === 'printing' ? (
                                     <Loader2 size={12} className="animate-spin" />
@@ -423,6 +482,19 @@ export function ToolcribLibraryPanel({
                                   )}
                                   <span className="ml-1 hidden sm:inline">Imprimir</span>
                                 </Button>
+                                {pendingLinkLabel && onUseForPendingOrder && (
+                                  <Button
+                                    variant="default"
+                                    size="xs"
+                                    onClick={() => onUseForPendingOrder(view)}
+                                    title={`Usar este plano para ${pendingLinkLabel}`}
+                                  >
+                                    <CheckCircle2 size={12} />
+                                    <span className="ml-1 hidden sm:inline">
+                                      Usar para {pendingLinkLabel}
+                                    </span>
+                                  </Button>
+                                )}
                                 <Button
                                   variant="outline"
                                   size="xs"
@@ -562,6 +634,13 @@ export function ToolcribLibraryPanel({
           </div>
         </div>
       )}
+
+      <StlViewerModal
+        open={stlDrawing !== null && Boolean(stlDrawing.stlUrl)}
+        stlUrl={stlDrawing?.stlUrl ?? null}
+        title={stlDrawing ? `${stlDrawing.partNumber} · Rev ${stlDrawing.revision}` : ''}
+        onClose={() => setStlDrawing(null)}
+      />
     </div>
   );
 }

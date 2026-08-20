@@ -9,6 +9,7 @@ import {
   selectBestBlueprintMatch,
   isIsoDrawingView,
   selectLibraryDrawingMatch,
+  selectCadDrawingForPrint,
   MIN_BLUEPRINT_MATCH_SCORE,
 } from '../matching';
 import type { ToolcribActiveDrawingView, BlueprintSpec } from '../../types';
@@ -239,6 +240,7 @@ describe('extractLibrarySignals', () => {
       sourceType: 'network',
       sourcePath: '/path/to/file.pdf',
       pdfUrl: 'http://...',
+      stlUrl: null,
       effectiveFromUTC: null,
     };
     const signals = extractLibrarySignals(view);
@@ -257,6 +259,7 @@ describe('extractLibrarySignals', () => {
       sourceType: 'network',
       sourcePath: '',
       pdfUrl: null,
+      stlUrl: null,
       effectiveFromUTC: null,
     };
     const signals = extractLibrarySignals(view);
@@ -276,6 +279,7 @@ describe('extractLibrarySignals', () => {
       sourceType: 'network',
       sourcePath: '/WCD-003-1797-02.pdf',
       pdfUrl: null,
+      stlUrl: null,
       effectiveFromUTC: null,
     };
     const signals = extractLibrarySignals(view);
@@ -382,6 +386,7 @@ describe('isIsoDrawingView / selectLibraryDrawingMatch', () => {
     sourceType: 'network',
     sourcePath: '',
     pdfUrl: null,
+    stlUrl: null,
     effectiveFromUTC: null,
     ...overrides,
   });
@@ -444,5 +449,54 @@ describe('isIsoDrawingView / selectLibraryDrawingMatch', () => {
     const withoutMap = selectLibraryDrawingMatch(orderSignals, views);
     expect(withMap.view?.drawingId).toBe(withoutMap.view?.drawingId);
     expect(withMap.score).toBe(withoutMap.score);
+  });
+});
+
+describe('selectCadDrawingForPrint', () => {
+  const makeView = (overrides: Partial<ToolcribActiveDrawingView>): ToolcribActiveDrawingView => ({
+    partId: 'p1',
+    partNumber: 'PART',
+    customer: 'SUPRAJIT',
+    description: '',
+    drawingId: 'd1',
+    revision: '01',
+    sourceType: 'network',
+    sourcePath: '',
+    pdfUrl: null,
+    stlUrl: null,
+    effectiveFromUTC: null,
+    ...overrides,
+  });
+
+  it('ignores ISO drawings even when they score at/above threshold', () => {
+    const cad = makeView({ drawingId: 'cad', partNumber: '90-1012-05' });
+    const iso = makeView({ drawingId: 'iso', partNumber: 'PIVOT PIN.iso' });
+    const orderSignals = extractOrderSignals('PIVOT PIN', '90-1012-05');
+
+    const result = selectCadDrawingForPrint(orderSignals, [iso, cad]);
+    expect(result.view?.drawingId).toBe('cad');
+    expect(result.score).toBeGreaterThanOrEqual(MIN_BLUEPRINT_MATCH_SCORE);
+  });
+
+  it('returns null view when only ISO drawings are available', () => {
+    const iso = makeView({ drawingId: 'iso', partNumber: 'PIVOT PIN.iso' });
+    const orderSignals = extractOrderSignals('PIVOT PIN');
+    const result = selectCadDrawingForPrint(orderSignals, [iso]);
+    expect(result.view).toBeNull();
+    expect(result.score).toBe(0);
+  });
+
+  it('returns null view and score 0 for an empty library', () => {
+    const orderSignals = extractOrderSignals('PIVOT PIN', '90-1012-05');
+    const result = selectCadDrawingForPrint(orderSignals, []);
+    expect(result.view).toBeNull();
+    expect(result.score).toBe(0);
+  });
+
+  it('returns score below threshold when CAD descriptors do not overlap', () => {
+    const weak = makeView({ drawingId: 'weak', partNumber: 'TUERCA HEXAGONAL' });
+    const orderSignals = extractOrderSignals('PIEZA TOTALMENTE DISTINTA');
+    const result = selectCadDrawingForPrint(orderSignals, [weak]);
+    expect(result.score).toBeLessThan(MIN_BLUEPRINT_MATCH_SCORE);
   });
 });

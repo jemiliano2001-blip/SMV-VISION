@@ -46,6 +46,11 @@ export interface ToolcribDrawing {
   sourcePath: string;
   /** URL HTTP(S) accesible desde navegador (opcional). */
   pdfUrl: string | null;
+  /**
+   * URL del STL exportado desde eDrawings (opcional). Usado por el visor 3D
+   * en Biblioteca; null si la revisión no tiene malla.
+   */
+  stlUrl: string | null;
   /** Hash SHA-256 del contenido del PDF maestro (opcional, recomendado). */
   checksumSha256: string | null;
   effectiveFromUTC: string | null;
@@ -245,6 +250,7 @@ export function normalizeToolcribDrawing(
     sourceType: normalizeSourceType(raw.sourceType),
     sourcePath,
     pdfUrl: readOptionalString(raw.pdfUrl, URL_MAX_LEN),
+    stlUrl: readOptionalString(raw.stlUrl, URL_MAX_LEN),
     checksumSha256: readChecksum(raw.checksumSha256),
     effectiveFromUTC: normalizeTimestamp(raw.effectiveFromUTC),
     createdAtUTC: normalizeTimestamp(raw.createdAtUTC),

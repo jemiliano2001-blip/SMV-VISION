@@ -302,6 +302,7 @@ export async function listActiveDrawingViews(options?: {
         sourceType: drawing.sourceType,
         sourcePath: drawing.sourcePath,
         pdfUrl: drawing.pdfUrl,
+        stlUrl: drawing.stlUrl,
         effectiveFromUTC: drawing.effectiveFromUTC,
       });
     }
@@ -451,6 +452,7 @@ export async function createPartAndDrawing(
       sourceType: payload.sourceType,
       sourcePath: payload.sourcePath,
       pdfUrl: payload.pdfUrl,
+      stlUrl: null,
       checksumSha256: null,
       createdAtUTC: serverTimestamp(),
       createdByUid: uid,

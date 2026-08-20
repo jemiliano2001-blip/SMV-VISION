@@ -30,7 +30,7 @@ import {
 } from '../lib/matching';
 import { isHotStampCatalogEntry, isHotStampPiece } from '../lib/hotStamp';
 import { listActiveDrawingViews } from '../lib/firebase/toolcrib';
-import { listOrdersToInvoice } from '../lib/firebase/odooOrders';
+import { listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX } from '../lib/firebase/odooOrders';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
@@ -599,7 +599,7 @@ No inventes información.` },
       const orderAiStart = performance.now();
       
       const [odooResult, libResult] = await Promise.all([
-        listOrdersToInvoice(),
+        listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX }),
         listActiveDrawingViews({ customer: 'SUPRAJIT' }),
       ]);
       

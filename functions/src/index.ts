@@ -14,7 +14,7 @@
  *    autenticado (request.auth) aunque el invoker sea público.
  *
  * Pipeline:
- *   1. search_read en sale.order (partner ilike SUPRAJIT).
+ *   1. search_read en sale.order (invoice_status in to invoice / upselling).
  *   2. Trae líneas (sale.order.line), remisiones (stock.picking) y sus
  *      movimientos (stock.move) en llamadas masivas.
  *   3. Calcula la cantidad pendiente por línea desde los traslados.
@@ -22,7 +22,7 @@
  *   5. Upsert de órdenes de trabajo → colección `workOrders` (badge de
  *      producción), deduplicadas por `SO::parte`, archivando las que ya
  *      no aplican.
- *   6. Escribe un heartbeat en `syncMeta/odoo` (lo lee el chip de estado).
+ *   6. Escribe heartbeat + catálogo `partners` en `syncMeta/odoo`.
  *
  * Credenciales: ODOO_URL/ODOO_DB/ODOO_USER vienen de functions/.env;
  * ODOO_API_KEY es un secreto de Secret Manager (defineSecret).
@@ -115,12 +115,59 @@ interface OdooConfig {
   password: string;
 }
 
+interface SyncPartnerSummary {
+  key: string;
+  name: string;
+  toInvoiceCount: number;
+}
+
 interface SyncResult {
   ordersProcessed: number;
   headersWritten: number;
   created: number;
   updated: number;
   archived: number;
+  partners: SyncPartnerSummary[];
+}
+
+/** Llave indexable del cliente (partner) para filtros en Firestore. */
+function normalizePartnerKey(partner: string): string {
+  return partner.trim().toUpperCase();
+}
+
+/** Misma regla que `toInvoice` en el upsert de encabezados. */
+function isActiveToInvoiceOrder(order: SaleOrder): boolean {
+  const isPendingInvoice =
+    order.invoice_status === "to invoice" ||
+    order.invoice_status === "upselling";
+  let hasPendingPhysicalWork = true;
+  if (order.deliveries.length > 0) {
+    hasPendingPhysicalWork = order.deliveries.some(
+      (d) => d.state !== "done" && d.state !== "cancel",
+    );
+  }
+  return isPendingInvoice && hasPendingPhysicalWork;
+}
+
+function buildPartnerSummaries(orders: SaleOrder[]): SyncPartnerSummary[] {
+  const byKey = new Map<string, SyncPartnerSummary>();
+  for (const order of orders) {
+    if (!isActiveToInvoiceOrder(order)) continue;
+    const key = normalizePartnerKey(order.partner);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.toInvoiceCount += 1;
+    } else {
+      byKey.set(key, {
+        key,
+        name: order.partner.trim() || "Sin cliente",
+        toInvoiceCount: 1,
+      });
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, "es"),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -254,7 +301,10 @@ function toError(err: unknown): Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
-  const domain = [["partner_id.name", "ilike", "SUPRAJIT"]];
+  // Todas las compañías con facturación pendiente (no solo SUPRAJIT).
+  const domain = [
+    ["invoice_status", "in", ["to invoice", "upselling"]],
+  ];
   const fields = [
     "name",
     "date_order",
@@ -443,21 +493,13 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
       // Firestore no permite '/' en IDs → "2026/S00288" se vuelve "2026_S00288".
       const docId = order.name.replace(/\//g, "_");
 
-      const isPendingInvoice =
-        order.invoice_status === "to invoice" ||
-        order.invoice_status === "upselling";
-      let hasPendingPhysicalWork = true;
-      if (order.deliveries.length > 0) {
-        hasPendingPhysicalWork = order.deliveries.some(
-          (d) => d.state !== "done" && d.state !== "cancel",
-        );
-      }
-      const isActiveOrder = isPendingInvoice && hasPendingPhysicalWork;
+      const isActiveOrder = isActiveToInvoiceOrder(order);
 
       const payload = {
         name: order.name,
         date_order: order.date_order !== false ? order.date_order : null,
         partner: order.partner,
+        partnerKey: normalizePartnerKey(order.partner),
         client_order_ref: order.client_order_ref,
         requisitor: order.requisitor,
         invoice_status: order.invoice_status,
@@ -731,9 +773,9 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
   await connectOdoo(odoo);
   logger.info("✅ Conexión a Odoo exitosa.");
 
-  // 1. Encabezados de las órdenes de SUPRAJIT.
+  // 1. Encabezados de órdenes pendientes de factura (todas las compañías).
   const orders = await fetchSaleOrders(odoo);
-  logger.info(`🔍 ${orders.length} órdenes de SUPRAJIT encontradas.`);
+  logger.info(`🔍 ${orders.length} órdenes pendientes de factura encontradas.`);
   if (orders.length === 0) {
     return {
       ordersProcessed: 0,
@@ -741,6 +783,7 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
       created: 0,
       updated: 0,
       archived: 0,
+      partners: [],
     };
   }
 
@@ -766,14 +809,16 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
   // 4 + 5. Escribir encabezados y órdenes de trabajo.
   const headersWritten = await upsertSaleOrders(db, orders);
   const wo = await upsertWorkOrders(db, orders);
+  const partners = buildPartnerSummaries(orders);
 
   logger.info(
     `🚀 Sync OK — odooSaleOrders: ${headersWritten} | ` +
+    `compañías con pendientes: ${partners.length} | ` +
     `OTs creadas: ${wo.created}, actualizadas: ${wo.updated}, ` +
     `archivadas: ${wo.archived}`,
   );
 
-  return { ordersProcessed: orders.length, headersWritten, ...wo };
+  return { ordersProcessed: orders.length, headersWritten, partners, ...wo };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -806,6 +851,7 @@ export const syncSuprajitOrders = onSchedule(
         otsCreated: r.created,
         otsUpdated: r.updated,
         otsArchived: r.archived,
+        partners: r.partners,
       });
     } catch (error) {
       logger.error("❌ Error crítico sincronizando con Odoo:", error);
@@ -813,6 +859,7 @@ export const syncSuprajitOrders = onSchedule(
         ordersProcessed: 0,
         status: "error",
         errorMessage: String(error),
+        partners: [],
       });
     }
   },
@@ -854,6 +901,7 @@ export const triggerOdooSync = onCall(
         otsCreated: r.created,
         otsUpdated: r.updated,
         otsArchived: r.archived,
+        partners: r.partners,
       });
 
       return { ok: true, ...r };
@@ -863,6 +911,7 @@ export const triggerOdooSync = onCall(
         ordersProcessed: 0,
         status: "error",
         errorMessage: String(error),
+        partners: [],
       });
       return { ok: false, error: String(error) };
     }

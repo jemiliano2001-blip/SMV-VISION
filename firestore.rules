@@ -1,14 +1,19 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // SMV-VISION → Firestore database "(default)" en proyecto smv-brain.
+    // SMV-Hub usa la DB nombrada "compras-americanas" (reglas aparte).
+    // NUNCA desplegar las reglas del Hub sobre (default): dejan sin acceso
+    // a odooSaleOrders / toolcrib* / purchases (deny por catch-all).
+    //
     // App privada — solo usuarios autenticados (cuentas creadas a mano en
     // Firebase Console → Authentication). No hay registro público.
     //
     // Principio: mínimo privilegio por colección. Las colecciones que solo
-    // escribe el backend (scripts/syncOdoo.ts, Cloud Function) usan el Admin
-    // SDK, que IGNORA estas reglas — por eso aquí quedan como solo lectura.
-    // La validación de forma de los documentos vive en los validators de
-    // TypeScript; las reglas garantizan identidad y superficie de escritura.
+    // escribe el backend (Cloud Function) usan el Admin SDK, que IGNORA
+    // estas reglas — por eso aquí quedan como solo lectura.
+    // La validación de forma vive en validators TS; las reglas garantizan
+    // identidad y superficie de escritura.
 
     function isSignedIn() {
       return request.auth != null;

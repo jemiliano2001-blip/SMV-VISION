@@ -4,11 +4,42 @@ import { getFirestoreClient } from './client';
 const SYNC_META_COLLECTION = 'syncMeta';
 const SYNC_META_DOC = 'odoo';
 
+/** Compañía (partner Odoo) con órdenes pendientes, escrita por el sync. */
+export interface OdooSyncPartner {
+  key: string;
+  name: string;
+  toInvoiceCount: number;
+}
+
 export interface OdooSyncMeta {
   lastSyncAt: Date;
   ordersProcessed: number;
   status: 'ok' | 'error';
   errorMessage?: string;
+  /** Catálogo liviano de compañías con pendientes (botones en Órdenes). */
+  partners: OdooSyncPartner[];
+}
+
+function normalizePartners(raw: unknown): OdooSyncPartner[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OdooSyncPartner[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const row = item as Record<string, unknown>;
+    const key = typeof row.key === 'string' ? row.key.trim() : '';
+    const name = typeof row.name === 'string' ? row.name.trim() : '';
+    const toInvoiceCount =
+      typeof row.toInvoiceCount === 'number' && Number.isFinite(row.toInvoiceCount)
+        ? Math.max(0, Math.floor(row.toInvoiceCount))
+        : 0;
+    if (!key) continue;
+    out.push({
+      key,
+      name: name || key,
+      toInvoiceCount,
+    });
+  }
+  return out;
 }
 
 /**
@@ -43,6 +74,7 @@ export function subscribeToOdooSyncMeta(
         ordersProcessed: data.ordersProcessed as number,
         status: data.status as 'ok' | 'error',
         errorMessage: data.errorMessage as string | undefined,
+        partners: normalizePartners(data.partners),
       });
     },
     () => cb(null), // error handler — treat as "no data"

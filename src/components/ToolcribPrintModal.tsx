@@ -5,7 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { openStampedPlanoOt } from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
-import { listOrdersToInvoice, type OdooOrderView } from '../lib/firebase/odooOrders';
+import { listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
 import {
   extractLibrarySignals,
   extractOrderSignals,
@@ -50,7 +50,7 @@ export function ToolcribPrintModal({
       setNotas('');
       setError(null);
       setIsLoadingOrders(true);
-      listOrdersToInvoice()
+      listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX })
         .then((res) => {
           if (res.ok) {
             setOdooOrders(res.value);

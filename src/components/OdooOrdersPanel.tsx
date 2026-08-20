@@ -17,6 +17,7 @@ import {
   Printer,
   FileSearch,
   Send,
+  Building2,
 } from 'lucide-react';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
@@ -248,7 +249,7 @@ export function OdooOrdersPanel({
 }: OdooOrdersPanelProps) {
   const [orders, setOrders] = useState<OdooOrderView[]>([]);
   const [productionMap, setProductionMap] = useState<Map<string, ProductionStatus>>(new Map());
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncingOdoo, setSyncingOdoo] = useState(false);
   const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
@@ -260,6 +261,9 @@ export function OdooOrdersPanel({
   const [lineActionError, setLineActionError] = useState<string | null>(null);
   const [sendingKey, setSendingKey] = useState<string | null>(null);
 
+  // Compañía (partner) — vacío hasta elegir; no carga todas las órdenes de golpe.
+  const [selectedPartnerKey, setSelectedPartnerKey] = useState<string | null>(null);
+
   // Vistas y Filtros por Requisitor
   const [viewMode, setViewMode] = useState<'all' | 'by_requisitor'>('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -269,6 +273,7 @@ export function OdooOrdersPanel({
   const syncTriggeredAt = useRef<Date | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { meta } = useSyncMeta();
+  const partners = meta?.partners ?? [];
 
   const catalogErrorMessage = useCallback((): string => {
     return catalog.errorReason === 'not-configured'
@@ -398,10 +403,10 @@ export function OdooOrdersPanel({
     [catalog.views, resolveLineLink, onOpenBiblioteca],
   );
 
-  const fetchOrders = useCallback(async () => {
+  const fetchOrders = useCallback(async (partnerKey: string) => {
     setLoading(true);
     setError(null);
-    const result = await listOrdersToInvoice();
+    const result = await listOrdersToInvoice({ partnerKey });
     if (result.ok) {
       setOrders(result.value);
       const soNumbers = result.value.map((o) => o.name);
@@ -421,6 +426,16 @@ export function OdooOrdersPanel({
     setLoading(false);
   }, []);
 
+  const selectPartner = useCallback(
+    (partnerKey: string) => {
+      setSelectedPartnerKey(partnerKey);
+      setSearchTerm('');
+      setSelectedRequisitor('ALL');
+      void fetchOrders(partnerKey);
+    },
+    [fetchOrders],
+  );
+
   useEffect(() => {
     if (!syncingOdoo || !meta || !syncTriggeredAt.current) return;
     if (meta.lastSyncAt > syncTriggeredAt.current) {
@@ -428,9 +443,18 @@ export function OdooOrdersPanel({
       setSyncElapsedSeconds(0);
       syncTriggeredAt.current = null;
       if (syncTimeoutRef.current) clearInterval(syncTimeoutRef.current);
-      void fetchOrders();
+      if (selectedPartnerKey) {
+        const stillThere = meta.partners.some((p) => p.key === selectedPartnerKey);
+        if (stillThere) {
+          void fetchOrders(selectedPartnerKey);
+        } else {
+          setSelectedPartnerKey(null);
+          setOrders([]);
+          setProductionMap(new Map());
+        }
+      }
     }
-  }, [meta, syncingOdoo, fetchOrders]);
+  }, [meta, syncingOdoo, fetchOrders, selectedPartnerKey]);
 
   const startSyncTimer = useCallback(() => {
     setSyncingOdoo(true);
@@ -474,9 +498,16 @@ export function OdooOrdersPanel({
     };
   }, []);
 
+  // Si la compañía seleccionada ya no aparece en el catálogo del sync, limpiar.
   useEffect(() => {
-    void fetchOrders();
-  }, [fetchOrders]);
+    if (!selectedPartnerKey || !meta) return;
+    if (meta.partners.length === 0) return;
+    if (!meta.partners.some((p) => p.key === selectedPartnerKey)) {
+      setSelectedPartnerKey(null);
+      setOrders([]);
+      setProductionMap(new Map());
+    }
+  }, [meta, selectedPartnerKey]);
 
   // Lista de Requisitores únicos para el filtro selector
   const uniqueRequisitores = useMemo(() => {
@@ -809,88 +840,132 @@ export function OdooOrdersPanel({
         </div>
       </header>
 
-      {/* ── Subheader / Barra de Navegación y Filtros por Requisitor ── */}
-      <section className="shrink-0 border-b-2 border-line bg-surface-2 px-6 py-3 flex items-center justify-between flex-wrap gap-4">
-        {/* Selector de Modo de Vista */}
-        <div className="flex items-center border-2 border-line bg-surface p-0.5 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setViewMode('all')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
-              viewMode === 'all'
-                ? 'bg-[#0D2B4D] text-white shadow-sm'
-                : 'text-ink-dim hover:text-ink hover:bg-surface-2'
-            }`}
-          >
-            <List size={14} />
-            <span>Todas las Órdenes</span>
-            <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
-              {orders.length}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setViewMode('by_requisitor')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
-              viewMode === 'by_requisitor'
-                ? 'bg-[#0D2B4D] text-white shadow-sm'
-                : 'text-ink-dim hover:text-ink hover:bg-surface-2'
-            }`}
-          >
-            <Users size={14} />
-            <span>Por Requisitor</span>
-            <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
-              {uniqueRequisitores.length}
-            </span>
-          </button>
+      {/* ── Compañías (partners) — carga perezosa ── */}
+      <section className="shrink-0 border-b-2 border-line bg-surface px-6 py-3">
+        <div className="flex items-center gap-2 mb-2">
+          <Building2 size={14} className="text-accent" />
+          <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim">
+            Compañía
+          </span>
         </div>
-
-        {/* Barra de Filtros y Búsqueda */}
-        <div className="flex items-center gap-3 flex-wrap">
-          {/* Selector Filtro de Requisitor */}
-          <div className="flex items-center gap-2 bg-surface border-2 border-line px-3 py-1 text-xs">
-            <User size={14} className="text-accent" />
-            <span className="font-mono text-[10px] uppercase font-bold text-ink-dim">Ingeniero:</span>
-            <select
-              value={selectedRequisitor}
-              onChange={(e) => setSelectedRequisitor(e.target.value)}
-              className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer"
-            >
-              <option value="ALL">TODOS ({orders.length})</option>
-              {uniqueRequisitores.map((req) => {
-                const count = orders.filter((o) => (o.requisitor || 'Sin Requisitor') === req).length;
-                return (
-                  <option key={req} value={req}>
-                    {req} ({count})
-                  </option>
-                );
-              })}
-            </select>
+        {partners.length === 0 ? (
+          <p className="font-mono text-[11px] text-ink-dim uppercase tracking-wider">
+            Sin compañías en el último sync. Pulsa Refrescar para sincronizar Odoo.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {partners.map((partner) => {
+              const selected = selectedPartnerKey === partner.key;
+              return (
+                <button
+                  key={partner.key}
+                  type="button"
+                  onClick={() => selectPartner(partner.key)}
+                  className={`flex items-center gap-2 px-3 py-1.5 border-2 text-[11px] font-black uppercase tracking-wider transition-colors ${
+                    selected
+                      ? 'border-accent bg-accent text-bg'
+                      : 'border-line bg-surface-2 text-ink hover:border-accent hover:text-accent'
+                  }`}
+                >
+                  <span className="max-w-[220px] truncate">{partner.name}</span>
+                  <span
+                    className={`px-1.5 py-0.5 font-mono text-[9px] font-bold ${
+                      selected ? 'bg-bg text-accent' : 'bg-accent text-bg'
+                    }`}
+                  >
+                    {partner.toInvoiceCount}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-
-          {/* Caja de Búsqueda Rápida */}
-          <div className="relative flex items-center">
-            <Search size={14} className="absolute left-3 text-ink-dim" />
-            <input
-              type="text"
-              placeholder="Buscar SO, PO, requisitor, pieza…"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-surface border-2 border-line pl-8 pr-8 py-1 font-mono text-xs text-ink placeholder:text-ink-dim focus:outline-none focus:border-accent w-64 uppercase"
-            />
-            {searchTerm && (
-              <button
-                type="button"
-                onClick={() => setSearchTerm('')}
-                className="absolute right-2 text-ink-dim hover:text-ink"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-        </div>
+        )}
       </section>
+
+      {/* ── Subheader / Barra de Navegación y Filtros por Requisitor ── */}
+      {selectedPartnerKey && (
+        <section className="shrink-0 border-b-2 border-line bg-surface-2 px-6 py-3 flex items-center justify-between flex-wrap gap-4">
+          {/* Selector de Modo de Vista */}
+          <div className="flex items-center border-2 border-line bg-surface p-0.5 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setViewMode('all')}
+              className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+                viewMode === 'all'
+                  ? 'bg-[#0D2B4D] text-white shadow-sm'
+                  : 'text-ink-dim hover:text-ink hover:bg-surface-2'
+              }`}
+            >
+              <List size={14} />
+              <span>Todas las Órdenes</span>
+              <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
+                {orders.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode('by_requisitor')}
+              className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+                viewMode === 'by_requisitor'
+                  ? 'bg-[#0D2B4D] text-white shadow-sm'
+                  : 'text-ink-dim hover:text-ink hover:bg-surface-2'
+              }`}
+            >
+              <Users size={14} />
+              <span>Por Requisitor</span>
+              <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
+                {uniqueRequisitores.length}
+              </span>
+            </button>
+          </div>
+
+          {/* Barra de Filtros y Búsqueda */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Selector Filtro de Requisitor */}
+            <div className="flex items-center gap-2 bg-surface border-2 border-line px-3 py-1 text-xs">
+              <User size={14} className="text-accent" />
+              <span className="font-mono text-[10px] uppercase font-bold text-ink-dim">Ingeniero:</span>
+              <select
+                value={selectedRequisitor}
+                onChange={(e) => setSelectedRequisitor(e.target.value)}
+                className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer"
+              >
+                <option value="ALL">TODOS ({orders.length})</option>
+                {uniqueRequisitores.map((req) => {
+                  const count = orders.filter((o) => (o.requisitor || 'Sin Requisitor') === req).length;
+                  return (
+                    <option key={req} value={req}>
+                      {req} ({count})
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Caja de Búsqueda Rápida */}
+            <div className="relative flex items-center">
+              <Search size={14} className="absolute left-3 text-ink-dim" />
+              <input
+                type="text"
+                placeholder="Buscar SO, PO, requisitor, pieza…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="bg-surface border-2 border-line pl-8 pr-8 py-1 font-mono text-xs text-ink placeholder:text-ink-dim focus:outline-none focus:border-accent w-64 uppercase"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 text-ink-dim hover:text-ink"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ── Contenido Principal ── */}
       <main className="flex-1 overflow-y-auto p-6">
@@ -918,6 +993,16 @@ export function OdooOrdersPanel({
             <AlertCircle size={48} />
             <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
           </div>
+        ) : !selectedPartnerKey ? (
+          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-12 text-center max-w-2xl mx-auto">
+            <Building2 size={48} className="text-line" />
+            <p className="font-display font-black text-2xl uppercase italic">
+              Elige una compañía para ver sus órdenes
+            </p>
+            <p className="font-mono text-xs uppercase tracking-widest">
+              Los botones de arriba cargan solo las órdenes de esa compañía.
+            </p>
+          </div>
         ) : filteredOrders.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-12 text-center max-w-2xl mx-auto">
             <CloudDownload size={48} className="text-line" />
@@ -925,7 +1010,7 @@ export function OdooOrdersPanel({
             <p className="font-mono text-xs uppercase tracking-widest">
               {searchTerm || selectedRequisitor !== 'ALL'
                 ? 'Ninguna orden coincide con los filtros de búsqueda aplicados.'
-                : 'Todas las órdenes de Odoo están facturadas o no hay datos sincronizados.'}
+                : 'Todas las órdenes de esta compañía están facturadas o no hay datos sincronizados.'}
             </p>
             {(searchTerm || selectedRequisitor !== 'ALL') && (
               <Button

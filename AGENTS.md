@@ -124,6 +124,8 @@ Key modules:
 
 Security rules (`firestore.rules`): least-privilege per collection with default deny. `odooSaleOrders` / `syncMeta` / `workOrders` are read-only from the client (written only by the Admin SDK, which bypasses rules). `toolcribPrintLogs` and `analysisRuns` are create-only and immutable, with the auth uid enforced in rules (`printedByUid` / `userUid` / `createdByUid` must equal `request.auth.uid`). `purchases` is full CRUD for any signed-in user. Data *shape* validation lives in TypeScript validators; rules enforce identity and write surface.
 
+**Dual-database (`smv-brain`) — crítico:** Vision usa Firestore `(default)`; SMV-Hub usa la DB nombrada `compras-americanas`. Son reglas independientes. Nunca desplegar las reglas del Hub sobre `(default)` (borran acceso a `odooSaleOrders` / toolcrib / purchases → "Error al leer la base de datos"). Deploy Vision: `firebase deploy --only firestore:rules` desde este repo (apunta a `(default)` en `firebase.json`).
+
 **Two-query join**: `listActiveDrawingViews` issues exactly two Firestore reads — one for parts, one for all active drawings (`isActive == true`) — then joins them in memory by `partId`. No N+1.
 
 ### Web Worker (`src/workers/pdfImageWorker.ts`)
@@ -225,3 +227,18 @@ When you need context not already in this project:
 4. For context on related SMV projects, read `wiki/entities/projects-overview.md`
 
 Do NOT read the wiki for general coding questions or things already in this AGENTS.md.
+
+## Learned User Preferences
+
+- Prefiere español casual y directo; antes de implementar features no triviales, usar brainstorming/plan y esperar aprobación explícita.
+- En Órdenes Odoo: sincronizar todas las compañías con pendientes de factura; la UI no carga órdenes hasta elegir una compañía (botones); no cargar “Todas” por defecto.
+- Remisión real sigue fuera de alcance por ahora; priorizar capacidades nuevas que conecten Biblioteca ↔ Órdenes ↔ Reporte (puente orden–plano).
+
+## Learned Workspace Facts
+
+- Proyecto Firebase `smv-brain` tiene dos Firestore DBs: Vision usa `(default)`; SMV-Hub usa `compras-americanas`. Nunca desplegar reglas del Hub sobre `(default)` (rompe `odooSaleOrders` / toolcrib / purchases). Deploy Vision: `firebase deploy --only firestore:rules` desde este repo.
+- El sync Odoo trae todas las órdenes con `invoice_status` pendiente (no solo SUPRAJIT), escribe `partnerKey` en `odooSaleOrders` y `partners[]` en `syncMeta/odoo`; Órdenes carga por `partnerKey` al elegir compañía.
+- Reporte, Tool Crib print suggestions y Entregas sin OC siguen centrados en SUPRAJIT (`REPORT_PARTNER_KEY_PREFIX`).
+- Biblioteca oculta planos ISO al imprimir (`excludeIsoForPrint`); en Reporte (adjuntar) los ISO siguen visibles. Imprimir OT desde Órdenes usa matcher CAD (`selectCadDrawingForPrint`).
+- Order–Drawing Bridge es estado de sesión en `App` (no Firestore): vincula línea de orden ↔ plano CAD/ISO para Imprimir OT y Enviar a reporte entre las tres vistas.
+- Pipeline eDrawings: `npm run toolcrib:edrawings-iso` genera `{PART}.ISO.pdf` desde companions; fallback Gemini genera isométrica si solo hay CAD (badge IA); catálogo puede exponer `stlUrl` con visor 3D en Biblioteca.

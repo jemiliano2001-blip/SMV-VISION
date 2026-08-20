@@ -124,6 +124,8 @@ Key modules:
 
 Security rules (`firestore.rules`): least-privilege per collection with default deny. `odooSaleOrders` / `syncMeta` / `workOrders` are read-only from the client (written only by the Admin SDK, which bypasses rules). `toolcribPrintLogs` and `analysisRuns` are create-only and immutable, with the auth uid enforced in rules (`printedByUid` / `userUid` / `createdByUid` must equal `request.auth.uid`). `purchases` is full CRUD for any signed-in user. Data *shape* validation lives in TypeScript validators; rules enforce identity and write surface.
 
+**Dual-database (`smv-brain`) — crítico:** Vision usa Firestore `(default)`; SMV-Hub usa la DB nombrada `compras-americanas`. Son reglas independientes. Nunca desplegar las reglas del Hub sobre `(default)` (borran acceso a `odooSaleOrders` / toolcrib / purchases → "Error al leer la base de datos"). Deploy Vision: `firebase deploy --only firestore:rules` desde este repo (apunta a `(default)` en `firebase.json`).
+
 **Two-query join**: `listActiveDrawingViews` issues exactly two Firestore reads — one for parts, one for all active drawings (`isActive == true`) — then joins them in memory by `partId`. No N+1.
 
 ### Web Worker (`src/workers/pdfImageWorker.ts`)

@@ -29,7 +29,15 @@ import { isToolcribDebugUnauthAllowed } from './env';
 
 export const ODOO_ORDERS_COLLECTION = 'odooSaleOrders';
 
+/** Prefijo de partnerKey para reporte / Tool Crib (sigue centrado en SUPRAJIT). */
+export const REPORT_PARTNER_KEY_PREFIX = 'SUPRAJIT';
+
 const DEFAULT_MAX = 1000;
+
+/** Llave indexable del cliente (misma regla que la Cloud Function). */
+export function normalizePartnerKey(partner: string): string {
+  return partner.trim().toUpperCase();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Tipos públicos
@@ -61,6 +69,8 @@ export interface OdooOrderView {
   date_order: string | null;
   /** Nombre del cliente (partner). */
   partner: string;
+  /** Partner normalizado (trim + uppercase) para filtros Firestore. */
+  partnerKey: string;
   /** Referencia del cliente / PO. Null si no tiene. */
   client_order_ref: string | null;
   /** Requisitor o Ingeniero solicitante de la orden en Odoo. */
@@ -152,6 +162,12 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
     name: raw['name'] as string,
     date_order: typeof raw['date_order'] === 'string' ? raw['date_order'] : null,
     partner: typeof raw['partner'] === 'string' ? raw['partner'] : 'Sin cliente',
+    partnerKey:
+      typeof raw['partnerKey'] === 'string' && raw['partnerKey'].trim() !== ''
+        ? raw['partnerKey'].trim().toUpperCase()
+        : normalizePartnerKey(
+            typeof raw['partner'] === 'string' ? raw['partner'] : 'Sin cliente',
+          ),
     client_order_ref: typeof raw['client_order_ref'] === 'string' ? raw['client_order_ref'] : null,
     requisitor: typeof raw['requisitor'] === 'string' && raw['requisitor'].trim() !== '' ? raw['requisitor'].trim() : null,
     invoice_status: typeof raw['invoice_status'] === 'string' ? raw['invoice_status'] : 'no',
@@ -168,29 +184,55 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Devuelve ÚNICAMENTE las órdenes pendientes de facturación (toInvoice === true).
- * Estas son las que representan trabajos activos para SMV-Vision.
+ * Devuelve órdenes pendientes de facturación (`toInvoice === true`).
+ *
+ * Requiere filtro de compañía:
+ * - `partnerKey`: match exacto (botones en Órdenes).
+ * - `partnerKeyPrefix`: rango Firestore (reporte / Tool Crib → SUPRAJIT*).
  *
  * Ordenadas por fecha de orden descendente.
  */
-export async function listOrdersToInvoice(options?: {
+export async function listOrdersToInvoice(options: {
   max?: number;
+  partnerKey?: string;
+  partnerKeyPrefix?: string;
 }): Promise<OdooOrderResult<OdooOrderView[]>> {
   const database = db();
   if (!database) return { ok: false, reason: 'not-configured' };
   if (!isAuthed()) return { ok: false, reason: 'not-authenticated' };
 
-  try {
-    // Filtra por `toInvoice === true`, campo que el script syncOdoo.ts calcula.
-    // LÓGICA BASADA EN ESTADO DE FACTURACIÓN:
-    // Solo órdenes marcadas en Odoo como 'A facturar' ('to invoice') o 'upselling'.
-    // Las órdenes se muestran siempre hasta que se facturan por completo, incluso
-    // si sus remisiones (físicas) ya están entregadas, para poder solicitar facturas.
-    const q = query(
-      collection(database, ODOO_ORDERS_COLLECTION),
-      where('toInvoice', '==', true),
-      fbLimit(Math.min(options?.max ?? DEFAULT_MAX, DEFAULT_MAX)),
+  const partnerKey =
+    typeof options.partnerKey === 'string' && options.partnerKey.trim() !== ''
+      ? normalizePartnerKey(options.partnerKey)
+      : null;
+  const partnerKeyPrefix =
+    typeof options.partnerKeyPrefix === 'string' && options.partnerKeyPrefix.trim() !== ''
+      ? normalizePartnerKey(options.partnerKeyPrefix)
+      : null;
+
+  if (!partnerKey && !partnerKeyPrefix) {
+    console.warn(
+      '[smv-vision][odoo-orders] listOrdersToInvoice requiere partnerKey o partnerKeyPrefix',
     );
+    return { ok: false, reason: 'read-failed' };
+  }
+
+  try {
+    const max = Math.min(options.max ?? DEFAULT_MAX, DEFAULT_MAX);
+    const constraints = partnerKey
+      ? [
+          where('toInvoice', '==', true),
+          where('partnerKey', '==', partnerKey),
+          fbLimit(max),
+        ]
+      : [
+          where('toInvoice', '==', true),
+          where('partnerKey', '>=', partnerKeyPrefix as string),
+          where('partnerKey', '<=', `${partnerKeyPrefix as string}\uf8ff`),
+          fbLimit(max),
+        ];
+
+    const q = query(collection(database, ODOO_ORDERS_COLLECTION), ...constraints);
 
     const snap = await getDocs(q);
     const out: OdooOrderView[] = [];
@@ -199,7 +241,6 @@ export async function listOrdersToInvoice(options?: {
       if (normalized) out.push(normalized);
     });
 
-    // Ordenar en memoria (descendente por fecha) para no requerir índice compuesto en Firestore
     out.sort((a, b) => {
       const dateA = a.date_order || '';
       const dateB = b.date_order || '';

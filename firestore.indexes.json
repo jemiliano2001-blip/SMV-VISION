@@ -81,6 +81,14 @@
         { "fieldPath": "archived", "order": "ASCENDING" },
         { "fieldPath": "dueDate", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "odooSaleOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "toInvoice", "order": "ASCENDING" },
+        { "fieldPath": "partnerKey", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-import { listOrdersToInvoice, listEntregasSinOC } from '../lib/firebase/odooOrders';
+import { listEntregasSinOC } from '../lib/firebase/odooOrders';
 import { formatRelativeTime } from '../lib/age';
 import { useSyncMeta } from '../hooks/useSyncMeta';
 import type { AnalysisRunSummary } from '../types';
@@ -24,9 +24,10 @@ export interface InicioViewProps {
 }
 
 /** Por cifra: `undefined` = cargando · `null` = la consulta falló · número = dato bueno. */
-interface Counts {
-  pendientes: number | null;
-  sinOc: number | null;
+function show(n: number | null | undefined): string {
+  if (n === undefined) return '…';
+  if (n === null) return '—';
+  return String(n);
 }
 
 const container = {
@@ -38,28 +39,22 @@ const item = {
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 30 } },
 } as const;
 
-function show(n: number | null | undefined): string {
-  if (n === undefined) return '…';
-  if (n === null) return '—';
-  return String(n);
-}
-
 export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): ReactElement {
   const now = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const { meta } = useSyncMeta();
-  const [counts, setCounts] = useState<Counts | undefined>(undefined);
+  const [sinOc, setSinOc] = useState<number | null | undefined>(undefined);
 
-  // ponytail: relee en cada visita — App.tsx desmonta Inicio al navegar. Sin caché ni
-  // auto-refresh. Si la doble lectura de listEntregasSinOC (hasta 1000 docs, filtra en
-  // cliente) llega a molestar, subir el estado a App.tsx; hoy nadie lo ha medido.
+  // Pendientes: suma de syncMeta.partners (sin cargar todas las órdenes).
+  const pendientes: number | null | undefined = meta
+    ? meta.partners.reduce((sum, p) => sum + p.toInvoiceCount, 0)
+    : undefined;
+
+  // Entregas sin OC: sigue leyendo Firestore (filtro SUPRAJIT en cliente).
   useEffect(() => {
     let alive = true;
-    void Promise.all([listOrdersToInvoice(), listEntregasSinOC()]).then(([pend, sin]) => {
+    void listEntregasSinOC().then((sin) => {
       if (!alive) return;
-      setCounts({
-        pendientes: pend.ok ? pend.value.length : null,
-        sinOc: sin.ok ? sin.value.length : null,
-      });
+      setSinOc(sin.ok ? sin.value.length : null);
     });
     return () => { alive = false; };
   }, []);
@@ -86,15 +81,15 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <StatCard
           icon={CloudDownload}
-          value={show(counts?.pendientes)}
+          value={show(pendientes)}
           label="Órdenes pendientes"
           onClick={() => onNavigate('odoo')}
         />
         <StatCard
           icon={FileWarning}
-          value={show(counts?.sinOc)}
+          value={show(sinOc)}
           label="Entregas sin OC"
-          tone={counts?.sinOc ? 'text-warn' : undefined}
+          tone={sinOc ? 'text-warn' : undefined}
           onClick={() => onNavigate('entregas-sin-oc')}
         />
         <StatCard

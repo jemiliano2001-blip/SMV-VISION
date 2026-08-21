@@ -87,7 +87,10 @@ function EditableCantidad({
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
   const [biblioSearchPrefill, setBiblioSearchPrefill] = useState('');
-  const [cropAdjustOrder, setCropAdjustOrder] = useState<Order | null>(null);
+  const [cropAdjustTarget, setCropAdjustTarget] = useState<{
+    order: Order;
+    resultIndex: number;
+  } | null>(null);
   const [quickPurchaseData, setQuickPurchaseData] = useState<{
     soNumber?: string;
     poNumber?: string;
@@ -554,7 +557,12 @@ export default function App() {
                                       {order.sourceImageDataUrl && (
                                         <button
                                           type="button"
-                                          onClick={() => setCropAdjustOrder(order)}
+                                          onClick={() => {
+                                            const resultIndex = vision.results?.indexOf(order) ?? -1;
+                                            if (resultIndex >= 0) {
+                                              setCropAdjustTarget({ order, resultIndex });
+                                            }
+                                          }}
                                           title="Ajustar manualmente el encuadre / recorte del plano"
                                           className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors"
                                         >
@@ -840,11 +848,12 @@ export default function App() {
 
       {/* Modal de edición y ajuste interactivo de encuadre / recorte */}
       <CropAdjustModal
-        order={cropAdjustOrder}
-        open={cropAdjustOrder !== null}
-        onClose={() => setCropAdjustOrder(null)}
-        onSaveCrop={(order, newBox, newCroppedUrl) => {
-          vision.handleUpdateOrderCrop(order, newBox, newCroppedUrl);
+        order={cropAdjustTarget?.order ?? null}
+        open={cropAdjustTarget !== null}
+        onClose={() => setCropAdjustTarget(null)}
+        onSaveCrop={(_order, newBox, newCroppedUrl) => {
+          if (!cropAdjustTarget) return;
+          vision.handleUpdateOrderCrop(cropAdjustTarget.resultIndex, newBox, newCroppedUrl);
         }}
       />
 

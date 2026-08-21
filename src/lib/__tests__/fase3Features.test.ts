@@ -73,4 +73,13 @@ describe('generateOrdersCsv', () => {
     expect(csv).toContain('"D2"');
     expect(csv).toContain('"60 HRC"');
   });
+
+  it('neutralizes spreadsheet formulas from Odoo fields', () => {
+    const csv = generateOrdersCsv([{
+      pieza: '=HYPERLINK("https://malicious.example", "abrir")',
+      cantidad: '1', orden: '2026/S00101', fecha: '2026-08-21', prioridad: 'Normal',
+    }]);
+
+    expect(csv).toContain(`"'=HYPERLINK(""https://malicious.example"", ""abrir"")"`);
+  });
 });

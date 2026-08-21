@@ -83,7 +83,9 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
         next = applyManualDrawingToLink(base, view);
 
         // Guardar alias en Firestore para recordar el match en el futuro
-        const pattern = (base.pieza || base.numeroParte || '').trim();
+        // El número de parte es la identidad más estable; si no existe,
+        // guardamos la descripción completa, nunca una coincidencia parcial.
+        const pattern = (base.numeroParte || base.pieza || '').trim();
         if (pattern) {
           void savePartAlias({
             pattern,

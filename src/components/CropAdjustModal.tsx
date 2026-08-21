@@ -11,6 +11,8 @@ import { Crop, RotateCcw, Check } from 'lucide-react';
 import { cropIsometricView, isValidBoundingBox } from '../lib/imageProcessing';
 import type { BoundingBox, Order } from '../types';
 
+const DEFAULT_MANUAL_BOX: BoundingBox = [125, 125, 875, 875];
+
 export interface CropAdjustModalProps {
   order: Order | null;
   open: boolean;
@@ -24,7 +26,7 @@ export function CropAdjustModal({
   onClose,
   onSaveCrop,
 }: CropAdjustModalProps) {
-  const [box, setBox] = useState<BoundingBox>([100, 100, 900, 900]);
+  const [box, setBox] = useState<BoundingBox>(DEFAULT_MANUAL_BOX);
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function CropAdjustModal({
       const initialBox: BoundingBox =
         order.isometricBoundingBox && isValidBoundingBox(order.isometricBoundingBox)
           ? order.isometricBoundingBox
-          : [100, 100, 900, 900];
+          : DEFAULT_MANUAL_BOX;
       setBox(initialBox);
     }
   }, [order, open]);
@@ -101,14 +103,19 @@ export function CropAdjustModal({
 
   const handleResetToAi = () => {
     if (order?.isometricBoundingBox) {
-      setBox(order.isometricBoundingBox);
+      setBox(
+        isValidBoundingBox(order.isometricBoundingBox)
+          ? order.isometricBoundingBox
+          : DEFAULT_MANUAL_BOX,
+      );
     } else {
-      setBox([100, 100, 900, 900]);
+      setBox(DEFAULT_MANUAL_BOX);
     }
   };
 
   const handleSave = async () => {
     if (!order || !order.sourceImageDataUrl) return;
+    if (!isValidBoundingBox(box)) return;
     setSaving(true);
     try {
       const newCroppedUrl = await cropIsometricView(order.sourceImageDataUrl, box);
@@ -124,6 +131,7 @@ export function CropAdjustModal({
   if (!order || !order.sourceImageDataUrl) return null;
 
   const [ymin, xmin, ymax, xmax] = box;
+  const boxIsValid = isValidBoundingBox(box);
   const boxStyle: React.CSSProperties = {
     top: `${(ymin / 1000) * 100}%`,
     left: `${(xmin / 1000) * 100}%`,
@@ -211,6 +219,11 @@ export function CropAdjustModal({
             </div>
 
             <div className="space-y-2 pt-4 border-t border-line">
+              {!boxIsValid && (
+                <p className="font-mono text-[10px] text-danger leading-relaxed">
+                  Selecciona un área más proporcionada y de al menos 5% del plano.
+                </p>
+              )}
               <Button
                 type="button"
                 variant="outline"
@@ -237,7 +250,7 @@ export function CropAdjustModal({
           <Button
             type="button"
             onClick={() => void handleSave()}
-            disabled={saving}
+            disabled={saving || !boxIsValid}
             className="bg-accent text-bg border-2 border-accent hover:bg-accent/80 text-[11px] font-black uppercase tracking-wider h-9 shadow-hard flex items-center gap-1.5"
           >
             <Check size={14} />

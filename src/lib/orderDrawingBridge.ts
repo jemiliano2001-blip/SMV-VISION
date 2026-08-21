@@ -12,6 +12,7 @@ import {
   selectLibraryDrawingMatch,
   type PieceMatchSignals,
 } from './matching';
+import { normalizeAliasKey } from './aliasKey';
 import type {
   OrderDrawingLink,
   OrderDrawingSnapshot,
@@ -81,15 +82,15 @@ export function resolveOrderDrawingLink(
 
   // 1. Verificar primero si coincide con algún alias aprendido
   if (aliases && aliases.length > 0) {
-    const rawPattern = `${input.pieza} ${input.numeroParte}`.trim().toUpperCase();
-    const matchedAlias = aliases.find((a) => {
-      const p = a.pattern.toUpperCase();
-      return (
-        rawPattern.includes(p) ||
-        input.pieza.toUpperCase().includes(p) ||
-        (input.numeroParte && input.numeroParte.toUpperCase().includes(p))
-      );
-    });
+    // Un alias es una decisión explícita del operador: solo debe aplicar a la
+    // misma pieza o número de parte, nunca a una subcadena genérica (p. ej.
+    // "PUNZON" no puede reclamar todos los punzones futuros).
+    const aliasCandidates = new Set(
+      [input.numeroParte, input.pieza]
+        .map(normalizeAliasKey)
+        .filter((value) => value.length > 0),
+    );
+    const matchedAlias = aliases.find((a) => aliasCandidates.has(normalizeAliasKey(a.pattern)));
 
     if (matchedAlias) {
       const aliasView = library.find(

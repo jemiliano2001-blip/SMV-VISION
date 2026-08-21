@@ -11,7 +11,13 @@ import { getOrderAgeDays } from './age';
 
 function escapeCsvCell(value: unknown): string {
   if (value === null || value === undefined) return '""';
-  const str = String(value).replace(/[\r\n]+/g, ' ').trim();
+  let str = String(value).replace(/[\r\n]+/g, ' ').trim();
+  // Excel interpreta celdas que comienzan con estos caracteres como fórmulas,
+  // incluso cuando vienen entre comillas en un CSV. Los datos provienen de
+  // Odoo y deben mantenerse como texto al exportarlos.
+  if (/^[=+\-@]/.test(str)) {
+    str = `'${str}`;
+  }
   if (str.includes('"') || str.includes(',') || str.includes(';')) {
     return `"${str.replace(/"/g, '""')}"`;
   }

@@ -54,6 +54,7 @@ import {
   viewFromSnapshot,
 } from '../lib/orderDrawingBridge';
 import { downloadOrdersCsv } from '../lib/excelExport';
+import { applyOrderCropAtIndex } from '../lib/orderCrop';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -178,7 +179,7 @@ export interface VisionAnalysisHook {
   handleExcludeOrder: (order: Order) => void;
   handleRestoreOrder: (entry: { order: Order }) => void;
   handleRestoreAll: () => void;
-  handleUpdateOrderCrop: (order: Order, newBox: BoundingBox, newCroppedUrl: string) => void;
+  handleUpdateOrderCrop: (resultIndex: number, newBox: BoundingBox, newCroppedUrl: string) => void;
   // Display setters
   setResultsFilter: (v: string) => void;
   setFilterUrgentOnly: (v: boolean) => void;
@@ -1364,22 +1365,9 @@ Reglas de extracción (ESTILO UT2033):
   }, [originalResults]);
 
   const handleUpdateOrderCrop = useCallback(
-    (order: Order, newBox: BoundingBox, newCroppedUrl: string) => {
+    (resultIndex: number, newBox: BoundingBox, newCroppedUrl: string) => {
       snapshotOriginalOnce();
-      setResults((prev) => {
-        if (!prev) return prev;
-        return prev.map((o) => {
-          if (o.orden === order.orden && o.pieza === order.pieza) {
-            return {
-              ...o,
-              isometricBoundingBox: newBox,
-              isometricView: newCroppedUrl,
-              isometricSource: 'crop',
-            };
-          }
-          return o;
-        });
-      });
+      setResults((prev) => applyOrderCropAtIndex(prev, resultIndex, newBox, newCroppedUrl));
     },
     [snapshotOriginalOnce],
   );

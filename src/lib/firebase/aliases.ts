@@ -24,6 +24,8 @@ import {
 import { getCurrentUserUid } from './auth';
 import { getFirestoreClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
+export { normalizeAliasKey } from '../aliasKey';
+import { normalizeAliasKey } from '../aliasKey';
 
 export const PART_ALIASES_COLLECTION = 'partAliases';
 
@@ -53,17 +55,6 @@ function resolveDb(): Firestore | null {
 
 function isAuthed(): boolean {
   return getCurrentUserUid() !== null || isToolcribDebugUnauthAllowed();
-}
-
-/** Normaliza la clave del alias (colapsa espacios y mayúsculas). */
-export function normalizeAliasKey(pattern: string): string {
-  return pattern
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9\-/. ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 /** Genera un ID determinista seguro para el documento Firestore. */

@@ -88,6 +88,35 @@ describe('normalizeAliasKey & alias memory matching', () => {
     expect(link.matchScore).toBe(100);
     expect(link.cadDrawing?.partNumber).toBe('90-CUSTOM-01');
   });
+
+  it('does not apply a generic alias as a substring match', () => {
+    const input: ResolveOrderDrawingInput = {
+      orderId: 'SO-101',
+      lineIndex: 0,
+      soNumber: '2026/S00101',
+      poNumber: 'PO-1000',
+      pieza: 'PUNZON DE CORTE 90-1012-06',
+      numeroParte: '90-1012-06',
+      qtyPending: 1,
+    };
+    const libraryView: ToolcribActiveDrawingView = {
+      partId: 'p_other', partNumber: '90-1012-05', customer: 'SUPRAJIT',
+      description: 'PUNZON DE CORTE', drawingId: 'dwg_other', revision: 'A',
+      sourceType: 'storage', sourcePath: '90-1012-05.pdf', pdfUrl: null,
+      stlUrl: null, effectiveFromUTC: null,
+    };
+    const correctView: ToolcribActiveDrawingView = {
+      ...libraryView,
+      partId: 'p_correct', partNumber: '90-1012-06', drawingId: 'dwg_correct',
+      sourcePath: '90-1012-06.pdf',
+    };
+
+    const link = resolveOrderDrawingLink(input, [libraryView, correctView], undefined, undefined, [
+      { pattern: 'PUNZON', partNumber: '90-1012-05', drawingId: 'dwg_other' },
+    ]);
+
+    expect(link.cadDrawing?.drawingId).toBe('dwg_correct');
+  });
 });
 
 describe('createStampedPlanoOtBatch', () => {

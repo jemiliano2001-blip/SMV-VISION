@@ -33,13 +33,20 @@ export function parseBlueprintResponse(text: string): BlueprintSpec[] {
   if (!Array.isArray(parsed)) {
     return [];
   }
-  return parsed
-    .filter(isRecord)
-    .map((item) => {
-      const piece = asString(item.pieza_detectada);
-      const box = parseBoundingBox(item.isometricBoundingBox);
-      if (!piece || !box) return null;
-      return { pieza_detectada: piece, isometricBoundingBox: box } satisfies BlueprintSpec;
-    })
-    .filter((item): item is BlueprintSpec => item !== null);
+  const specs: BlueprintSpec[] = [];
+  for (const item of parsed) {
+    if (!isRecord(item)) continue;
+    const piece = asString(item.pieza_detectada);
+    const box = parseBoundingBox(item.isometricBoundingBox);
+    if (!piece || !box) continue;
+    specs.push({
+      pieza_detectada: piece,
+      isometricBoundingBox: box,
+      material: asString(item.material) || null,
+      dureza: asString(item.dureza) || null,
+      tratamiento: asString(item.tratamiento) || null,
+      acabado: asString(item.acabado) || null,
+    });
+  }
+  return specs;
 }

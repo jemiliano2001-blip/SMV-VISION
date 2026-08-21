@@ -36,10 +36,12 @@ import { isToolcribDebugUnauthAllowed } from './env';
 import {
   normalizeToolcribDrawing,
   normalizeToolcribPart,
+  normalizeToolcribPrintLog,
   validateToolcribPrintLogInput,
   type ToolcribDrawing,
   type ToolcribPart,
   type ToolcribPrintLogInput,
+  type ToolcribPrintLogRecord,
   type ValidationIssue,
 } from './toolcribValidators';
 
@@ -50,6 +52,8 @@ export const TOOLCRIB_PRINT_LOGS_COLLECTION = 'toolcribPrintLogs';
 /** Tope defensivo para evitar reads masivos en v1. */
 const DEFAULT_PARTS_LIMIT = 500;
 const DEFAULT_DRAWINGS_LIMIT = 1000;
+
+export type { ToolcribPrintLogRecord };
 
 export type ToolcribFailureReason =
   | 'not-configured'
@@ -372,6 +376,80 @@ export function recordToolcribPrintLogFireAndForget(
   recordToolcribPrintLog(input).catch((error) => {
     console.warn('[smv-vision][toolcrib] fire-and-forget atrapó error inesperado', error);
   });
+}
+
+/**
+ * Lista los registros de impresión más recientes de toda la biblioteca (hasta `max`).
+ * Permite a la UI computar estadísticas de impresión rápidamente sin N+1 reads.
+ */
+export async function listRecentPrintLogs(options?: {
+  max?: number;
+}): Promise<ToolcribResult<ToolcribPrintLogRecord[]>> {
+  const db = resolveFirestoreOrFail();
+  if (!db) {
+    return { ok: false, reason: 'not-configured' };
+  }
+
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) {
+    return { ok: false, reason: 'not-authenticated' };
+  }
+
+  try {
+    const q = query(
+      collection(db, TOOLCRIB_PRINT_LOGS_COLLECTION),
+      orderBy('printedAtUTC', 'desc'),
+      limit(options?.max ?? 300),
+    );
+    const snapshot = await getDocs(q);
+    const logs: ToolcribPrintLogRecord[] = [];
+    snapshot.forEach((docSnap) => {
+      const normalized = normalizeToolcribPrintLog(docSnap.id, docSnap.data());
+      if (normalized) logs.push(normalized);
+    });
+    return { ok: true, value: logs };
+  } catch (error) {
+    console.warn('[smv-vision][toolcrib] listRecentPrintLogs falló', error);
+    return { ok: false, reason: 'read-failed' };
+  }
+}
+
+/**
+ * Lista los registros de impresión para un dibujo específico.
+ */
+export async function listPrintLogsForDrawing(
+  drawingId: string,
+  options?: { max?: number },
+): Promise<ToolcribResult<ToolcribPrintLogRecord[]>> {
+  if (typeof drawingId !== 'string' || drawingId.trim().length === 0) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  const db = resolveFirestoreOrFail();
+  if (!db) {
+    return { ok: false, reason: 'not-configured' };
+  }
+
+  if (!getCurrentUserUid() && !isToolcribDebugUnauthAllowed()) {
+    return { ok: false, reason: 'not-authenticated' };
+  }
+
+  try {
+    const q = query(
+      collection(db, TOOLCRIB_PRINT_LOGS_COLLECTION),
+      where('drawingId', '==', drawingId.trim()),
+      limit(options?.max ?? 50),
+    );
+    const snapshot = await getDocs(q);
+    const logs: ToolcribPrintLogRecord[] = [];
+    snapshot.forEach((docSnap) => {
+      const normalized = normalizeToolcribPrintLog(docSnap.id, docSnap.data());
+      if (normalized) logs.push(normalized);
+    });
+    logs.sort((a, b) => (b.printedAtUTC ?? '').localeCompare(a.printedAtUTC ?? ''));
+    return { ok: true, value: logs };
+  } catch (error) {
+    console.warn('[smv-vision][toolcrib] listPrintLogsForDrawing falló', error);
+    return { ok: false, reason: 'read-failed' };
+  }
 }
 
 export async function uploadDrawingPdf(

@@ -35,6 +35,11 @@ export interface Order {
   /** Dibujo del catálogo Tool Crib emparejado con esta orden (si hubo match). */
   matchedDrawingId?: string;
   matchedPartId?: string;
+  /** Metadatos técnicos extraídos del cajetín del plano por IA */
+  material?: string | null;
+  dureza?: string | null;
+  tratamiento?: string | null;
+  acabado?: string | null;
 }
 
 export interface ExtractedOrder {
@@ -50,6 +55,10 @@ export interface ExtractedOrder {
 export interface BlueprintSpec {
   pieza_detectada: string;
   isometricBoundingBox: BoundingBox;
+  material?: string | null;
+  dureza?: string | null;
+  tratamiento?: string | null;
+  acabado?: string | null;
 }
 
 export interface BlueprintAnalysis {

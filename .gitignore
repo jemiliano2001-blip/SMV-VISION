@@ -17,3 +17,4 @@ scratch/
 TOOL CRIB/
 TOOL CRIB - copia/
 firestore-debug.log
+.cursor/

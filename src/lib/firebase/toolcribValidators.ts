@@ -65,6 +65,17 @@ export interface ToolcribPrintLogInput {
   orderRef: string | null;
 }
 
+export interface ToolcribPrintLogRecord {
+  id: string;
+  drawingId: string;
+  partId: string;
+  copies: number;
+  orderRef: string | null;
+  origin: ToolcribPrintOrigin | string;
+  printedByUid: string | null;
+  printedAtUTC: string | null;
+}
+
 export interface ValidatedToolcribPrintLogInput extends ToolcribPrintLogInput {
   origin: ToolcribPrintOrigin;
 }
@@ -255,6 +266,38 @@ export function normalizeToolcribDrawing(
     effectiveFromUTC: normalizeTimestamp(raw.effectiveFromUTC),
     createdAtUTC: normalizeTimestamp(raw.createdAtUTC),
     createdByUid: readOptionalString(raw.createdByUid, UID_MAX_LEN),
+  };
+}
+
+/**
+ * Normaliza un documento crudo de `toolcribPrintLogs` a la forma canónica.
+ */
+export function normalizeToolcribPrintLog(
+  id: string,
+  raw: unknown,
+): ToolcribPrintLogRecord | null {
+  if (!isPlainObject(raw)) {
+    return null;
+  }
+  if (typeof id !== 'string' || id.length === 0) {
+    return null;
+  }
+  if (!isNonEmptyString(raw.drawingId) || !isNonEmptyString(raw.partId)) {
+    return null;
+  }
+
+  return {
+    id,
+    drawingId: readStringOr(raw.drawingId, '', DRAWING_ID_MAX_LEN),
+    partId: readStringOr(raw.partId, '', PART_ID_MAX_LEN),
+    copies:
+      typeof raw.copies === 'number' && Number.isFinite(raw.copies)
+        ? Math.max(1, Math.round(raw.copies))
+        : 1,
+    orderRef: readOptionalString(raw.orderRef, ORDER_REF_MAX_LEN),
+    origin: readStringOr(raw.origin, 'toolcrib-v1-ui', 64),
+    printedByUid: readOptionalString(raw.printedByUid, UID_MAX_LEN),
+    printedAtUTC: normalizeTimestamp(raw.printedAtUTC),
   };
 }
 

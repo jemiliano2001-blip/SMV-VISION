@@ -1,20 +1,31 @@
 /**
  * InicioView — portada / resumen.
  *
- * Contesta "¿qué hay hoy?" con tres cifras que ya viven en Firestore y ofrece
- * accesos rápidos a las demás vistas.
+ * Contesta "¿qué hay hoy?" con cifras en vivo de Firestore, métricas de carga
+ * por requisitor, semáforo de antigüedad de órdenes y accesos rápidos.
  */
 
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { motion } from 'motion/react';
 import {
-  ScanLine, Library, ArrowRight, CloudDownload, ShoppingCart, FileWarning, RefreshCw,
+  ScanLine,
+  Library,
+  ArrowRight,
+  CloudDownload,
+  ShoppingCart,
+  FileWarning,
+  RefreshCw,
+  Clock,
+  Users,
+  Boxes,
+  Activity,
   type LucideIcon,
 } from 'lucide-react';
 
-import { listEntregasSinOC } from '../lib/firebase/odooOrders';
-import { formatRelativeTime } from '../lib/age';
+import { listEntregasSinOC, listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
+import { formatRelativeTime, getOrderAgeDays } from '../lib/age';
 import { useSyncMeta } from '../hooks/useSyncMeta';
+import { BarChart, type BarChartEntry } from './charts/BarChart';
 import type { AnalysisRunSummary } from '../types';
 import type { AppView } from './shell/AppShell';
 
@@ -40,14 +51,41 @@ const item = {
 } as const;
 
 export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): ReactElement {
-  const now = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const now = new Date().toLocaleDateString('es-MX', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
   const { meta } = useSyncMeta();
   const [sinOc, setSinOc] = useState<number | null | undefined>(undefined);
+  const [orders, setOrders] = useState<OdooOrderView[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(true);
 
   // Pendientes: suma de syncMeta.partners (sin cargar todas las órdenes).
   const pendientes: number | null | undefined = meta
     ? meta.partners.reduce((sum, p) => sum + p.toInvoiceCount, 0)
     : undefined;
+
+  // Cargar órdenes activas para métricas de carga y semáforo de antigüedad
+  useEffect(() => {
+    let alive = true;
+    setLoadingOrders(true);
+    listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX })
+      .then((res) => {
+        if (!alive) return;
+        if (res.ok) {
+          setOrders(res.value);
+        }
+      })
+      .finally(() => {
+        if (alive) setLoadingOrders(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Entregas sin OC: sigue leyendo Firestore (filtro SUPRAJIT en cliente).
   useEffect(() => {
@@ -56,8 +94,62 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       if (!alive) return;
       setSinOc(sin.ok ? sin.value.length : null);
     });
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
+
+  // Piezas totales pendientes
+  const totalPieces = useMemo(() => {
+    if (orders.length === 0) return loadingOrders ? undefined : 0;
+    return orders.reduce((sum, o) => {
+      return sum + o.order_lines.reduce((lSum, l) => lSum + Math.max(0, l.qty_pending), 0);
+    }, 0);
+  }, [orders, loadingOrders]);
+
+  // Carga por requisitor (Top 5)
+  const requisitorChartData = useMemo<BarChartEntry[]>(() => {
+    const counts = new Map<string, number>();
+    for (const o of orders) {
+      const req = o.requisitor?.trim() || 'Sin requisitor';
+      const pieces = o.order_lines.reduce(
+        (sum, l) => sum + (l.qty_pending > 0 ? l.qty_pending : 0),
+        0,
+      );
+      counts.set(req, (counts.get(req) ?? 0) + (pieces > 0 ? pieces : 1));
+    }
+    return Array.from(counts.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5);
+  }, [orders]);
+
+  // Semáforo de antigüedad
+  const agingStats = useMemo(() => {
+    let recent = 0; // < 7 días
+    let mid = 0; // 7 - 15 días
+    let critical = 0; // > 15 días
+    for (const o of orders) {
+      const age = o.date_order ? getOrderAgeDays(o.date_order) : 0;
+      if (age === null || age < 7) {
+        recent += 1;
+      } else if (age <= 15) {
+        mid += 1;
+      } else {
+        critical += 1;
+      }
+    }
+    const total = orders.length || 1;
+    return {
+      recent,
+      mid,
+      critical,
+      totalOrders: orders.length,
+      pctRecent: Math.round((recent / total) * 100),
+      pctMid: Math.round((mid / total) * 100),
+      pctCritical: Math.round((critical / total) * 100),
+    };
+  }, [orders]);
 
   return (
     <motion.div
@@ -69,7 +161,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       {/* ── Encabezado ── */}
       <motion.header variants={item} className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">Resumen</p>
+          <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">Centro de Control</p>
           <h1 className="font-display font-black text-5xl lg:text-6xl uppercase italic tracking-[-2px] leading-none">
             Inicio
           </h1>
@@ -77,12 +169,19 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         <p className="font-mono text-[11px] text-ink-dim capitalize">{now}</p>
       </motion.header>
 
-      {/* ── Qué hay hoy ── */}
-      <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      {/* ── Métricas Principales (KPI Cards) ── */}
+      <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard
           icon={CloudDownload}
           value={show(pendientes)}
           label="Órdenes pendientes"
+          onClick={() => onNavigate('odoo')}
+        />
+        <StatCard
+          icon={Boxes}
+          value={show(totalPieces)}
+          label="Piezas por entregar"
+          tone="text-accent"
           onClick={() => onNavigate('odoo')}
         />
         <StatCard
@@ -101,23 +200,186 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         />
       </motion.section>
 
+      {/* ── Widgets Operativos: Carga por Requisitor & Semáforo de Antigüedad ── */}
+      <motion.section variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Widget 1: Carga de Piezas por Requisitor */}
+        <div className="corner-ticks bg-surface border-2 border-line p-5 flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-line/60">
+            <div className="flex items-center gap-2">
+              <Users size={16} className="text-accent" />
+              <h2 className="font-display font-bold uppercase text-sm tracking-wide">
+                Carga por Requisitor / Ingeniero
+              </h2>
+            </div>
+            <span className="font-mono text-[10px] text-ink-dim uppercase">Piezas pendientes</span>
+          </div>
+
+          <div className="py-2">
+            {loadingOrders ? (
+              <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Calculando distribución…</p>
+            ) : requisitorChartData.length === 0 ? (
+              <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Sin órdenes activas.</p>
+            ) : (
+              <BarChart data={requisitorChartData} colorVar="--color-accent" />
+            )}
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-line/40 flex items-center justify-between">
+            <span className="font-mono text-[10px] text-ink-dim">
+              Mostrando top {requisitorChartData.length} solicitantes
+            </span>
+            <button
+              type="button"
+              onClick={() => onNavigate('odoo')}
+              className="inline-flex items-center gap-1 font-mono text-[10px] uppercase font-bold text-accent hover:underline"
+            >
+              <span>Ver en Órdenes</span>
+              <ArrowRight size={12} />
+            </button>
+          </div>
+        </div>
+
+        {/* Widget 2: Semáforo de Antigüedad (Aging) */}
+        <div className="corner-ticks bg-surface border-2 border-line p-5 flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-line/60">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-accent" />
+              <h2 className="font-display font-bold uppercase text-sm tracking-wide">
+                Semáforo de Antigüedad (Aging)
+              </h2>
+            </div>
+            <span className="font-mono text-[10px] text-ink-dim uppercase">
+              {agingStats.totalOrders} {agingStats.totalOrders === 1 ? 'orden' : 'órdenes'}
+            </span>
+          </div>
+
+          <div className="space-y-3 py-1">
+            {/* Barra segmentada */}
+            <div className="h-3 w-full bg-surface-2 border border-line flex overflow-hidden">
+              <div
+                style={{ width: `${agingStats.pctRecent}%` }}
+                className="bg-ok h-full transition-all"
+                title={`< 7 días: ${agingStats.recent} órdenes (${agingStats.pctRecent}%)`}
+              />
+              <div
+                style={{ width: `${agingStats.pctMid}%` }}
+                className="bg-warn h-full transition-all"
+                title={`7–15 días: ${agingStats.mid} órdenes (${agingStats.pctMid}%)`}
+              />
+              <div
+                style={{ width: `${agingStats.pctCritical}%` }}
+                className="bg-danger h-full transition-all"
+                title={`> 15 días: ${agingStats.critical} órdenes (${agingStats.pctCritical}%)`}
+              />
+            </div>
+
+            {/* Desglose de 3 columnas */}
+            <div className="grid grid-cols-3 gap-2 pt-2 text-center">
+              <div className="bg-surface-2 border border-line p-2.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-ok mb-1" />
+                <p className="font-display font-black text-xl text-ok leading-none">{agingStats.recent}</p>
+                <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&lt; 7 días</p>
+                <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctRecent}%</p>
+              </div>
+
+              <div className="bg-surface-2 border border-line p-2.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-warn mb-1" />
+                <p className="font-display font-black text-xl text-warn leading-none">{agingStats.mid}</p>
+                <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">7–15 días</p>
+                <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctMid}%</p>
+              </div>
+
+              <div className="bg-surface-2 border border-line p-2.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-danger mb-1" />
+                <p className="font-display font-black text-xl text-danger leading-none">{agingStats.critical}</p>
+                <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&gt; 15 días</p>
+                <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctCritical}%</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-line/40 flex items-center justify-between">
+            <span className="font-mono text-[10px] text-ink-dim">
+              {agingStats.critical > 0 ? (
+                <strong className="text-danger">{agingStats.critical} órdenes requieren atención urgente</strong>
+              ) : (
+                <span className="text-ok">Tiempos de entrega en rango normal</span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => onNavigate('odoo')}
+              className="inline-flex items-center gap-1 font-mono text-[10px] uppercase font-bold text-accent hover:underline"
+            >
+              <span>Ver Órdenes</span>
+              <ArrowRight size={12} />
+            </button>
+          </div>
+        </div>
+      </motion.section>
+
+      {/* ── Accesos Rápidos y Última Auditoría ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ── Accesos rápidos ── */}
+        {/* Accesos rápidos */}
         <motion.section variants={item} className="space-y-3">
-          <QuickAction icon={ScanLine} title="Generar Reporte" desc="Auditar planos y generar reporte PDF" onClick={() => onNavigate('reporte')} />
-          <QuickAction icon={Library} title="Biblioteca" desc="Catálogo de planos Tool Crib" onClick={() => onNavigate('biblioteca')} />
-          <QuickAction icon={ShoppingCart} title="Compras" desc="Catálogo de compras" onClick={() => onNavigate('compras')} />
+          <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-1">Módulos del Taller</p>
+          <QuickAction
+            icon={ScanLine}
+            title="Generar Reporte"
+            desc="Auditar planos y generar reporte PDF con recorte de isométricos"
+            onClick={() => onNavigate('reporte')}
+          />
+          <QuickAction
+            icon={Library}
+            title="Biblioteca Tool Crib"
+            desc="Catálogo de planos CAD/ISO, visor 3D STL e historial de impresiones"
+            onClick={() => onNavigate('biblioteca')}
+          />
+          <QuickAction
+            icon={ShoppingCart}
+            title="Compras & Materiales"
+            desc="Catálogo de metales, ensambles, herramientas e insumos"
+            onClick={() => onNavigate('compras')}
+          />
         </motion.section>
 
-        {/* ── Última corrida (solo si auditaste en esta sesión) ── */}
+        {/* Resumen del sistema o última auditoría */}
         <motion.section variants={item} className="space-y-3">
-          {analysisSummary && (
-            <div className="corner-ticks bg-surface border-2 border-line p-4">
-              <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mb-3">Última auditoría</p>
+          <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-1">Estado de Sesión</p>
+          {analysisSummary ? (
+            <div className="corner-ticks bg-surface border-2 border-line p-5">
+              <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mb-3">Última auditoría de visión</p>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <Stat n={analysisSummary.totalOrders} l="Órdenes" />
                 <Stat n={analysisSummary.totalAudited} l="Auditadas" tone="text-accent" />
                 <Stat n={analysisSummary.totalAnalyzed} l="Planos" />
+              </div>
+            </div>
+          ) : (
+            <div className="corner-ticks bg-surface border-2 border-line p-5 flex flex-col justify-between h-[calc(100%-24px)]">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Activity size={16} className="text-ok" />
+                  <h3 className="font-display font-bold uppercase text-sm">Flujo de Producción Activo</h3>
+                </div>
+                <p className="font-mono text-xs text-ink-dim leading-relaxed">
+                  Sistema conectado a Firestore y Odoo. Puedes iniciar la auditoría de planos o consultar el catálogo de Tool Crib para imprimir órdenes de trabajo.
+                </p>
+              </div>
+
+              <div className="pt-4 border-t border-line/60 flex items-center justify-between">
+                <span className="font-mono text-[10px] text-ink-dim flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-ok animate-pulse" />
+                  Listo para auditar
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('reporte')}
+                  className="font-mono text-[11px] font-bold text-accent uppercase hover:underline inline-flex items-center gap-1"
+                >
+                  <span>Iniciar reporte</span>
+                  <ArrowRight size={12} />
+                </button>
               </div>
             </div>
           )}

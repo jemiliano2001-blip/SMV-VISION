@@ -136,3 +136,57 @@ export async function openStampedPlanoOt(
   }
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+export interface BatchPlanoOtItem {
+  pdfDataUrl: string;
+  stamp: PlanoOtStamp;
+  partNumber?: string;
+  revision?: string;
+}
+
+/**
+ * Genera un PDF combinado con todas las órdenes de trabajo selladas.
+ */
+export async function createStampedPlanoOtBatch(
+  items: BatchPlanoOtItem[],
+): Promise<Uint8Array> {
+  if (items.length === 0) {
+    throw new Error('No hay planos seleccionados para imprimir.');
+  }
+
+  const mergedDoc = await PDFDocument.create();
+
+  for (const item of items) {
+    const stampedBytes = await stampPlanoOt(item.pdfDataUrl, item.stamp);
+    const subDoc = await PDFDocument.load(stampedBytes);
+    const copiedPages = await mergedDoc.copyPages(subDoc, subDoc.getPageIndices());
+    for (const page of copiedPages) {
+      mergedDoc.addPage(page);
+    }
+  }
+
+  return mergedDoc.save();
+}
+
+/**
+ * Abre el lote de planos sellados en una sola pestaña para impresión continua en taller.
+ */
+export async function openStampedPlanoOtBatch(
+  items: BatchPlanoOtItem[],
+): Promise<void> {
+  const bytes = await createStampedPlanoOtBatch(items);
+  const buffer = bytes.slice().buffer;
+  const blob = new Blob([buffer], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!win) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lote-ots-${items.length}-planos.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+

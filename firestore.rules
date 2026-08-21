@@ -75,6 +75,11 @@ service cloud.firestore {
       allow read, create, update, delete: if isSignedIn();
     }
 
+    // ── Memoria de alias de piezas (puente orden-plano) ───────────────────
+    match /partAliases/{aliasId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
     // ── Todo lo demás: denegado ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

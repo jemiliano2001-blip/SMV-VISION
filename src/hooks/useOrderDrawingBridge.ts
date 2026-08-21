@@ -3,7 +3,7 @@
  * Resolve puro en `lib/orderDrawingBridge.ts`; este hook solo guarda el Map.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   applyManualDrawingToLink,
   getCadDrawingSnapshot,
@@ -14,12 +14,14 @@ import {
   viewFromSnapshot,
 } from '../lib/orderDrawingBridge';
 import type { PieceMatchSignals } from '../lib/matching';
+import { listPartAliases, savePartAlias, type PartAliasDoc } from '../lib/firebase/aliases';
 import type { OrderDrawingLink, ToolcribActiveDrawingView } from '../types';
 
 export interface UseOrderDrawingBridgeResult {
   links: Readonly<Record<string, OrderDrawingLink>>;
   linkList: readonly OrderDrawingLink[];
   pendingKey: string | null;
+  aliases: readonly PartAliasDoc[];
   resolveAndStore: (
     input: ResolveOrderDrawingInput,
     library: readonly ToolcribActiveDrawingView[],
@@ -39,6 +41,19 @@ export interface UseOrderDrawingBridgeResult {
 export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
   const [links, setLinks] = useState<Record<string, OrderDrawingLink>>({});
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [aliases, setAliases] = useState<PartAliasDoc[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    void listPartAliases().then((res) => {
+      if (alive && res.ok) {
+        setAliases(res.value);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const resolveAndStore = useCallback(
     (
@@ -46,11 +61,17 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
       library: readonly ToolcribActiveDrawingView[],
       signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
     ): OrderDrawingLink => {
-      const link = resolveOrderDrawingLink(input, library, signalsByDrawingId);
+      const link = resolveOrderDrawingLink(
+        input,
+        library,
+        signalsByDrawingId,
+        undefined,
+        aliases,
+      );
       setLinks((prev) => ({ ...prev, [link.key]: link }));
       return link;
     },
-    [],
+    [aliases],
   );
 
   const upsertManual = useCallback(
@@ -60,6 +81,31 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
         const base = prev[key];
         if (!base) return prev;
         next = applyManualDrawingToLink(base, view);
+
+        // Guardar alias en Firestore para recordar el match en el futuro
+        const pattern = (base.pieza || base.numeroParte || '').trim();
+        if (pattern) {
+          void savePartAlias({
+            pattern,
+            partNumber: view.partNumber,
+            drawingId: view.drawingId,
+          }).then((res) => {
+            if (res.ok) {
+              setAliases((cur) => [
+                ...cur.filter((a) => a.pattern.toUpperCase() !== pattern.toUpperCase()),
+                {
+                  id: res.value.id,
+                  pattern,
+                  partNumber: view.partNumber,
+                  drawingId: view.drawingId,
+                  createdAtUTC: new Date().toISOString(),
+                  createdByUid: null,
+                },
+              ]);
+            }
+          });
+        }
+
         return { ...prev, [key]: next };
       });
       return next;
@@ -102,6 +148,7 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
     links,
     linkList,
     pendingKey,
+    aliases,
     resolveAndStore,
     upsertManual,
     removeLink,

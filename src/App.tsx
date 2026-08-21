@@ -23,6 +23,8 @@ import {
   ZoomOut,
   Maximize,
   Sparkles,
+  Crop,
+  ShoppingCart,
 } from 'lucide-react';
 import { Order, type OrderDrawingLink } from './types';
 import { canGenerateAiIsometric } from './lib/generateIsometricImage';
@@ -33,6 +35,8 @@ import { InicioView } from './components/InicioView';
 import { BibliotecaView } from './components/BibliotecaView';
 import { ComprasPanel } from './components/ComprasPanel';
 import { EntregasSinOCPanel } from './components/EntregasSinOCPanel';
+import { CropAdjustModal } from './components/CropAdjustModal';
+import { QuickPurchaseModal } from './components/QuickPurchaseModal';
 import { formatAgeDays, getOrderAgeDays } from './lib/age';
 import { useVisionAnalysis } from './hooks/useVisionAnalysis';
 import { useToolcribCatalog } from './hooks/useToolcribCatalog';
@@ -83,6 +87,16 @@ function EditableCantidad({
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
   const [biblioSearchPrefill, setBiblioSearchPrefill] = useState('');
+  const [cropAdjustOrder, setCropAdjustOrder] = useState<Order | null>(null);
+  const [quickPurchaseData, setQuickPurchaseData] = useState<{
+    soNumber?: string;
+    poNumber?: string;
+    pieza?: string;
+    numeroParte?: string;
+    cantidad?: number | string;
+    material?: string | null;
+  } | null>(null);
+  const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
 
   const vision = useVisionAnalysis();
   const catalog = useToolcribCatalog();
@@ -492,6 +506,32 @@ export default function App() {
                                     <p className="text-[10px] text-gray-500 font-mono italic">
                                       {order.sourcePdfName || "Sin plano asociado"}
                                     </p>
+
+                                    {/* Metadatos técnicos extraídos del cajetín */}
+                                    {(order.material || order.dureza || order.tratamiento || order.acabado) && (
+                                      <div className="flex items-center gap-1.5 mt-2 flex-wrap font-mono text-[9px]">
+                                        {order.material && (
+                                          <span className="bg-zinc-100 text-zinc-800 border border-zinc-300 px-1.5 py-0.5 font-bold" title="Material especificado">
+                                            🔩 {order.material}
+                                          </span>
+                                        )}
+                                        {order.dureza && (
+                                          <span className="bg-amber-50 text-amber-900 border border-amber-300 px-1.5 py-0.5 font-bold" title="Dureza especificada">
+                                            ⚡ {order.dureza}
+                                          </span>
+                                        )}
+                                        {order.tratamiento && (
+                                          <span className="bg-orange-50 text-orange-900 border border-orange-300 px-1.5 py-0.5 font-bold" title="Tratamiento térmico">
+                                            🔥 {order.tratamiento}
+                                          </span>
+                                        )}
+                                        {order.acabado && (
+                                          <span className="bg-blue-50 text-blue-900 border border-blue-300 px-1.5 py-0.5 font-bold" title="Acabado superficial">
+                                            ✨ {order.acabado}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
 
                                   <div className="flex flex-col items-end gap-2 shrink-0">
@@ -510,29 +550,60 @@ export default function App() {
                                       />
                                     </button>
                                   )}
-                                  {canGenerateAiIsometric(order) && (
-                                    <button
-                                      type="button"
-                                      onClick={() => void vision.generateAiIsometricForOrder(order)}
-                                      disabled={
-                                        vision.isExtracting ||
-                                        vision.aiIsoGeneratingKey !== null
-                                      }
-                                      title={
-                                        order.isometricSource === 'ai-generated'
-                                          ? 'Regenerar vista 3D con IA desde el plano 2D'
-                                          : 'Generar vista 3D con IA desde el plano 2D (no usar para acotar)'
-                                      }
-                                      className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-accent hover:text-bg disabled:opacity-50"
-                                    >
-                                      {vision.isAiIsoGenerating(order) ? (
-                                        <Loader2 size={11} className="animate-spin" />
-                                      ) : (
-                                        <Sparkles size={11} />
+                                    <div className="flex items-center gap-1">
+                                      {order.sourceImageDataUrl && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setCropAdjustOrder(order)}
+                                          title="Ajustar manualmente el encuadre / recorte del plano"
+                                          className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors"
+                                        >
+                                          <Crop size={11} />
+                                          Encuadre
+                                        </button>
                                       )}
-                                      {order.isometricSource === 'ai-generated' ? 'Regen 3D' : '3D IA'}
-                                    </button>
-                                  )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setQuickPurchaseData({
+                                            soNumber: order.orden.split('\n')[0],
+                                            poNumber: order.poNumber,
+                                            pieza: order.pieza,
+                                            numeroParte: order.numero_parte,
+                                            cantidad: order.cantidad.split('\n')[0],
+                                            material: order.material,
+                                          });
+                                        }}
+                                        title="Requisitar material en Compras"
+                                        className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:border-accent hover:text-accent transition-colors"
+                                      >
+                                        <ShoppingCart size={11} />
+                                        Comprar
+                                      </button>
+                                      {canGenerateAiIsometric(order) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void vision.generateAiIsometricForOrder(order)}
+                                          disabled={
+                                            vision.isExtracting ||
+                                            vision.aiIsoGeneratingKey !== null
+                                          }
+                                          title={
+                                            order.isometricSource === 'ai-generated'
+                                              ? 'Regenerar vista 3D con IA desde el plano 2D'
+                                              : 'Generar vista 3D con IA desde el plano 2D (no usar para acotar)'
+                                          }
+                                          className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-accent hover:text-bg disabled:opacity-50"
+                                        >
+                                          {vision.isAiIsoGenerating(order) ? (
+                                            <Loader2 size={11} className="animate-spin" />
+                                          ) : (
+                                            <Sparkles size={11} />
+                                          )}
+                                          {order.isometricSource === 'ai-generated' ? 'Regen 3D' : '3D IA'}
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                 </td>
 
@@ -764,6 +835,35 @@ export default function App() {
               </TransformWrapper>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Modal de edición y ajuste interactivo de encuadre / recorte */}
+      <CropAdjustModal
+        order={cropAdjustOrder}
+        open={cropAdjustOrder !== null}
+        onClose={() => setCropAdjustOrder(null)}
+        onSaveCrop={(order, newBox, newCroppedUrl) => {
+          vision.handleUpdateOrderCrop(order, newBox, newCroppedUrl);
+        }}
+      />
+
+      {/* Modal de Requisición Rápida de Compras */}
+      <QuickPurchaseModal
+        open={quickPurchaseData !== null}
+        defaultData={quickPurchaseData}
+        onClose={() => setQuickPurchaseData(null)}
+        onSuccess={() => {
+          setPurchaseToast('✓ Requisición guardada con éxito en Compras.');
+          setTimeout(() => setPurchaseToast(null), 4000);
+        }}
+      />
+
+      {/* Toast de confirmación de compra */}
+      {purchaseToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-[#0D2B4D] text-white border-2 border-accent shadow-hard px-4 py-2.5 font-mono text-xs flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <span className="text-accent font-bold">✓</span>
+          <span>{purchaseToast}</span>
         </div>
       )}
     </>

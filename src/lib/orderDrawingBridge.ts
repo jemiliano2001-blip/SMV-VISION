@@ -67,6 +67,7 @@ export interface ResolveOrderDrawingInput {
 
 /**
  * Resuelve CAD (print) + reportDrawing (ISO-first) contra el catálogo.
+ * Soporta memoria persistente de alias aprendidos (`aliases`).
  * No muta estado — el caller decide si upsert al Map de sesión.
  */
 export function resolveOrderDrawingLink(
@@ -74,8 +75,50 @@ export function resolveOrderDrawingLink(
   library: readonly ToolcribActiveDrawingView[],
   signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
   matchedAt: string = new Date().toISOString(),
+  aliases?: readonly { pattern: string; partNumber: string; drawingId: string }[],
 ): OrderDrawingLink {
   const key = makeOrderDrawingLinkKey(input.orderId, input.lineIndex);
+
+  // 1. Verificar primero si coincide con algún alias aprendido
+  if (aliases && aliases.length > 0) {
+    const rawPattern = `${input.pieza} ${input.numeroParte}`.trim().toUpperCase();
+    const matchedAlias = aliases.find((a) => {
+      const p = a.pattern.toUpperCase();
+      return (
+        rawPattern.includes(p) ||
+        input.pieza.toUpperCase().includes(p) ||
+        (input.numeroParte && input.numeroParte.toUpperCase().includes(p))
+      );
+    });
+
+    if (matchedAlias) {
+      const aliasView = library.find(
+        (v) =>
+          (matchedAlias.drawingId && v.drawingId === matchedAlias.drawingId) ||
+          v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase(),
+      );
+      if (aliasView) {
+        const snap = snapshotFromView(aliasView);
+        return {
+          key,
+          orderId: input.orderId,
+          lineIndex: input.lineIndex,
+          soNumber: input.soNumber,
+          poNumber: input.poNumber,
+          pieza: input.pieza,
+          numeroParte: input.numeroParte,
+          qtyPending: input.qtyPending,
+          cadDrawing: snap,
+          reportDrawing: snap,
+          matchScore: 100,
+          matchedAt,
+          status: 'manual',
+        };
+      }
+    }
+  }
+
+  // 2. Evaluador heurístico estándar
   const orderSignals = extractOrderSignals(input.pieza, input.numeroParte || undefined);
 
   const cadMatch = selectCadDrawingForPrint(orderSignals, library, signalsByDrawingId);

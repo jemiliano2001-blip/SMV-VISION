@@ -53,10 +53,11 @@ import {
   getReportDrawingSnapshot,
   viewFromSnapshot,
 } from '../lib/orderDrawingBridge';
+import { downloadOrdersCsv } from '../lib/excelExport';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
-const BLUEPRINT_PROMPT_VERSION = 'blueprints-v15-multi-piece-variants';
+const BLUEPRINT_PROMPT_VERSION = 'blueprints-v16-title-block-meta';
 const MAX_ISO_GEN_CONCURRENCY = 3;
 const SMV_VISION_APP_VERSION = `smv-vision@${__APP_VERSION__}`;
 const MAX_BLUEPRINT_CONCURRENCY = 8;
@@ -177,6 +178,7 @@ export interface VisionAnalysisHook {
   handleExcludeOrder: (order: Order) => void;
   handleRestoreOrder: (entry: { order: Order }) => void;
   handleRestoreAll: () => void;
+  handleUpdateOrderCrop: (order: Order, newBox: BoundingBox, newCroppedUrl: string) => void;
   // Display setters
   setResultsFilter: (v: string) => void;
   setFilterUrgentOnly: (v: boolean) => void;
@@ -447,35 +449,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
 
   const downloadCsv = () => {
     if (!results) return;
-    // Escape RFC 4180: envolver en comillas si el campo contiene coma, comilla
-    // o salto de línea; duplicar comillas internas. Las celdas multi-línea
-    // (cantidad, orden, fecha en órdenes agregadas) se colapsan a " | " para
-    // que Excel no parta el registro en filas separadas.
-    const escapeCell = (raw: string | undefined): string => {
-      const value = (raw ?? '').replace(/\r?\n/g, ' | ');
-      if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-      return value;
-    };
-    const header = ['Pieza', 'Numero de parte', 'Cantidad', 'SO', 'Fecha', 'Prioridad', 'Plano', 'Score'];
-    const rows = results.map((order) => [
-      escapeCell(order.pieza),
-      escapeCell(order.numero_parte),
-      escapeCell(order.cantidad),
-      escapeCell(order.orden),
-      escapeCell(order.fecha),
-      escapeCell(order.prioridad),
-      escapeCell(order.sourcePdfName),
-      escapeCell(typeof order.matchScore === 'number' ? String(order.matchScore) : ''),
-    ].join(','));
-    // BOM UTF-8 → Excel detecta encoding y los acentos no se rompen.
-    const csv = '﻿' + [header.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadOrdersCsv(results);
   };
 
   const downloadJson = () => {
@@ -928,6 +902,10 @@ No inventes información.` },
               isometricSource: isometricView ? 'crop' : undefined,
               matchScore: match.score,
               sourceImageDataUrl: result.analysis.image || undefined,
+              material: match.spec?.material || undefined,
+              dureza: match.spec?.dureza || undefined,
+              tratamiento: match.spec?.tratamiento || undefined,
+              acabado: match.spec?.acabado || undefined,
             },
           });
         }
@@ -1003,16 +981,22 @@ No inventes información.` },
                 role: 'user',
                 parts: [
                   { text: `Analiza este plano de taller y devuelve EXCLUSIVAMENTE un JSON array.
-Campos: pieza_detectada, isometricBoundingBox [ymin, xmin, ymax, xmax] (0 a 1000).
+Campos por objeto:
+- pieza_detectada: nombre o código de la pieza
+- isometricBoundingBox: [ymin, xmin, ymax, xmax] (0 a 1000)
+- material: string o null (ej. "D2", "4140", "O1", "ACERO INOX 304", "ALUMINIO 6061-T6", etc., según lo indicado en el cajetín o notas)
+- dureza: string o null (ej. "58-60 HRC", "60-62 RC", "40 HRC", etc.)
+- tratamiento: string o null (ej. "TEMPLE Y REVENIDO", "NITRURADO", "PAVONADO", "ANODIZADO", "CROMO DURO", etc.)
+- acabado: string o null (ej. "RECTIFICADO", "PULIDO ESPEJO", "ELECTROPULIDO", etc.)
 
 Reglas de extracción (ESTILO UT2033):
-1) Identifica el "Código de Parte" o "Número de Dibujo". Búscalo en el Cajetín (Title Block), esquina INFERIOR DERECHA.
+1) Identifica el "Código de Parte" o "Número de Dibujo" y metadatos técnicos en el Cajetín (Title Block), esquina INFERIOR DERECHA o en la tabla de materiales.
 2) PRIORIDAD ABSOLUTA: Elige la Vista Isométrica 3D (el dibujo que muestra la pieza con volumen). Si existe, el bounding box DEBE ser sobre esta vista. Usa una vista 2D solo si no hay isométrica.
 3) GEOMETRÍA LIMPIA: El bounding box debe contener ÚNICAMENTE la geometría sólida de la pieza.
 4) REGLA CRÍTICA: Excluye ABSOLUTAMENTE todas las líneas de dimensión (cotas), flechas, números de medidas, líneas de extensión y notas de texto que rodeen la pieza. El recorte debe verse "limpio" como una foto de catálogo.
 5) Excluye el marco del plano, marcas de coordenadas en los bordes, cajetines y logos.
 6) El bounding box debe estar bien centrado sobre la masa física de la pieza.
-7) MULTI-PIEZA — REGLA OBLIGATORIA: si el plano contiene varias piezas (común en planos de variantes por tamaño, p.ej. HEX SWAGE BLOCK 7/32, 9/32, 3/8, 1/4, 5/16, 13/32, 7/16; o conjuntos de remaches, navajas, blocks, etc.), DEBES devolver UNA entrada por cada variante con su PROPIO bounding box centrado en SU geometría. NO devuelvas una sola entrada que englobe a todas. En "pieza_detectada" incluye el sufijo distintivo (tamaño, fracción, código, letra) que diferencia cada variante (ej: "HEX SWAGE BLOCK 7/32", "HEX SWAGE BLOCK 9/32"). Si no puedes leer el sufijo, usa un índice claro ("PIEZA 1", "PIEZA 2") pero sigue devolviendo una entrada por pieza distinta.
+7) MULTI-PIEZA — REGLA OBLIGATORIA: si el plano contiene varias piezas (común en planos de variantes por tamaño, p.ej. HEX SWAGE BLOCK 7/32, 9/32, 3/8, 1/4, 5/16, 13/32, 7/16; o conjuntos de remaches, navajas, blocks, etc.), DEBES devolver UNA entrada por cada variante con su PROPIO bounding box centrado en SU geometría. NO devuelvas una sola entrada que englobe a todas. En "pieza_detectada" incluye el sufijo distintivo (tamaño, fracción, código, letra) que diferencia cada variante.
 8) Si solo hay una pieza con varias vistas (frontal, lateral, isométrica), devuelve UNA sola entrada con el bbox de la vista isométrica.
 9) Si no hay vistas útiles, devuelve [].
 10) No inventes información.` },
@@ -1031,6 +1015,10 @@ Reglas de extracción (ESTILO UT2033):
                         type: Type.ARRAY,
                         items: { type: Type.NUMBER },
                       },
+                      material: { type: Type.STRING },
+                      dureza: { type: Type.STRING },
+                      tratamiento: { type: Type.STRING },
+                      acabado: { type: Type.STRING },
                     },
                     required: ["pieza_detectada", "isometricBoundingBox"]
                   }
@@ -1375,6 +1363,27 @@ Reglas de extracción (ESTILO UT2033):
     setOriginalResults(null);
   }, [originalResults]);
 
+  const handleUpdateOrderCrop = useCallback(
+    (order: Order, newBox: BoundingBox, newCroppedUrl: string) => {
+      snapshotOriginalOnce();
+      setResults((prev) => {
+        if (!prev) return prev;
+        return prev.map((o) => {
+          if (o.orden === order.orden && o.pieza === order.pieza) {
+            return {
+              ...o,
+              isometricBoundingBox: newBox,
+              isometricView: newCroppedUrl,
+              isometricSource: 'crop',
+            };
+          }
+          return o;
+        });
+      });
+    },
+    [snapshotOriginalOnce],
+  );
+
   const auditedCount = useMemo(
     () => (results ? results.filter((r) => r.haSidoAuditada).length : 0),
     [results],
@@ -1419,7 +1428,7 @@ Reglas de extracción (ESTILO UT2033):
     downloadPdf, downloadCsv, downloadJson,
     downloadSingleOrderPdf, copyResults,
     snapshotOriginalOnce, handleEditCantidad, handleExcludeOrder,
-    handleRestoreOrder, handleRestoreAll,
+    handleRestoreOrder, handleRestoreAll, handleUpdateOrderCrop,
     // Setters
     setResultsFilter, setFilterUrgentOnly, setFilterMissingOnly,
     setDraggingZone, setEditMode, setPreviewOrder, setError,

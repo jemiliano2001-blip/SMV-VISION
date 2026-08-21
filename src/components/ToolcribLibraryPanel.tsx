@@ -35,14 +35,17 @@ import Fuse from 'fuse.js';
 
 import {
   listActiveDrawingViews,
+  listRecentPrintLogs,
   recordToolcribPrintLogFireAndForget,
   inactivatePart,
 } from '../lib/firebase/toolcrib';
 import type { ToolcribActiveDrawingView } from '../types';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { formatRelativeTime } from '../lib/age';
 import { isIsoDrawingView } from '../lib/matching';
 import { ToolcribUploadModal } from './ToolcribUploadModal';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
+import { ToolcribHistoryModal } from './ToolcribHistoryModal';
 import { StlViewerModal } from './StlViewerModal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Input } from './ui/input';
@@ -105,6 +108,58 @@ function buildDisplayName(view: ToolcribActiveDrawingView): string {
   return `${base} (Rev ${revision}).pdf`;
 }
 
+export type PartFamily =
+  | 'all'
+  | 'punzones'
+  | 'matrices'
+  | 'bujes'
+  | 'placas'
+  | 'cuchillas'
+  | 'ensambles'
+  | 'otros';
+
+export const FAMILIES: { id: PartFamily; label: string }[] = [
+  { id: 'all', label: 'Todos' },
+  { id: 'punzones', label: 'Punzones / Marcas' },
+  { id: 'matrices', label: 'Matrices / Dados' },
+  { id: 'bujes', label: 'Bujes' },
+  { id: 'placas', label: 'Placas / Calces' },
+  { id: 'cuchillas', label: 'Gavilanes / Cuchillas' },
+  { id: 'ensambles', label: 'Ensambles / Nidos' },
+  { id: 'otros', label: 'Otros' },
+];
+
+export function matchesFamily(view: ToolcribActiveDrawingView, family: PartFamily): boolean {
+  if (family === 'all') return true;
+  const text = `${view.partNumber} ${view.description} ${view.sourcePath}`.toUpperCase();
+
+  switch (family) {
+    case 'punzones':
+      return /PUNZON|HOT\s*STAMP|PUNCH|MARCA|ESTAMP/i.test(text);
+    case 'matrices':
+      return /MATRIZ|DIE|INSERT|CAVIDAD|DADO/i.test(text);
+    case 'bujes':
+      return /BUJE|BUSHING|CASQUILLO/i.test(text);
+    case 'placas':
+      return /PLACA|PLATE|CALCE|SHIM|BASE/i.test(text);
+    case 'cuchillas':
+      return /GAVILAN|CUCHILLA|BLADE|CORTE|SHEAR/i.test(text);
+    case 'ensambles':
+      return /ENSAMBLE|NIDO|FIXTURE|JIG|ASSEMBLY|DISPOSITIVO/i.test(text);
+    case 'otros':
+      return !/PUNZON|HOT\s*STAMP|PUNCH|MARCA|ESTAMP|MATRIZ|DIE|INSERT|CAVIDAD|DADO|BUJE|BUSHING|CASQUILLO|PLACA|PLATE|CALCE|SHIM|BASE|GAVILAN|CUCHILLA|BLADE|CORTE|SHEAR|ENSAMBLE|NIDO|FIXTURE|JIG|ASSEMBLY|DISPOSITIVO/i.test(
+        text,
+      );
+  }
+}
+
+export interface DrawingPrintStat {
+  count: number;
+  totalCopies: number;
+  lastPrintedAtUTC: string | null;
+  lastOrderRef: string | null;
+}
+
 export function ToolcribLibraryPanel({
   onAttachDrawing,
   attachedDrawingIds,
@@ -117,9 +172,12 @@ export function ToolcribLibraryPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [views, setViews] = useState<ToolcribActiveDrawingView[]>([]);
   const [searchTerm, setSearchTerm] = useState(initialSearchTerm);
+  const [selectedFamily, setSelectedFamily] = useState<PartFamily>('all');
+  const [printStats, setPrintStats] = useState<Map<string, DrawingPrintStat>>(new Map());
   const [isOpen, setIsOpen] = useState<boolean>(true);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [printDrawing, setPrintDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const [historyDrawing, setHistoryDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [updateDrawing, setUpdateDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [rowState, setRowState] = useState<Record<string, RowActionState>>({});
   const [previewDrawing, setPreviewDrawing] = useState<ToolcribActiveDrawingView | null>(null);
@@ -159,6 +217,25 @@ export function ToolcribLibraryPanel({
       : result.value;
     setViews(loaded);
     setStatus('ready');
+
+    // Cargar estadísticas de impresión de fondo
+    void listRecentPrintLogs().then((logsRes) => {
+      if (logsRes.ok) {
+        const stats = new Map<string, DrawingPrintStat>();
+        for (const log of logsRes.value) {
+          const existing = stats.get(log.drawingId) ?? {
+            count: 0,
+            totalCopies: 0,
+            lastPrintedAtUTC: log.printedAtUTC,
+            lastOrderRef: log.orderRef,
+          };
+          existing.count += 1;
+          existing.totalCopies += log.copies;
+          stats.set(log.drawingId, existing);
+        }
+        setPrintStats(stats);
+      }
+    });
   }, [excludeIsoForPrint]);
 
   useEffect(() => {
@@ -167,13 +244,40 @@ export function ToolcribLibraryPanel({
     }
   }, [loadLibrary, status]);
 
+  // Conteos por familia para los chips
+  const familyCounts = useMemo(() => {
+    const counts: Record<PartFamily, number> = {
+      all: views.length,
+      punzones: 0,
+      matrices: 0,
+      bujes: 0,
+      placas: 0,
+      cuchillas: 0,
+      ensambles: 0,
+      otros: 0,
+    };
+    for (const v of views) {
+      for (const f of FAMILIES) {
+        if (f.id !== 'all' && matchesFamily(v, f.id)) {
+          counts[f.id] += 1;
+        }
+      }
+    }
+    return counts;
+  }, [views]);
+
   const filteredViews = useMemo(() => {
+    // 1. Filtrado por familia
+    const familyMatched = selectedFamily === 'all'
+      ? views
+      : views.filter((v) => matchesFamily(v, selectedFamily));
+
     const term = normalizeSearchTerm(searchTerm);
     if (term.length === 0) {
-      return views;
+      return familyMatched;
     }
 
-    const fuse = new Fuse(views, {
+    const fuse = new Fuse(familyMatched, {
       keys: [
         { name: 'partNumber', weight: 2 },
         { name: 'description', weight: 1 },
@@ -203,7 +307,7 @@ export function ToolcribLibraryPanel({
         return (a.score || 0) - (b.score || 0);
       })
       .map((result) => result.item);
-  }, [searchTerm, views, excludeIsoForPrint]);
+  }, [searchTerm, views, selectedFamily, excludeIsoForPrint]);
 
 
 
@@ -354,6 +458,38 @@ export function ToolcribLibraryPanel({
             </div>
           </div>
 
+          {/* Chips de filtro por familia de pieza */}
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {FAMILIES.map((family) => {
+              const isSelected = selectedFamily === family.id;
+              const count = familyCounts[family.id];
+              if (family.id !== 'all' && count === 0) return null;
+              return (
+                <button
+                  key={family.id}
+                  type="button"
+                  onClick={() => setSelectedFamily(family.id)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border transition-all ${
+                    isSelected
+                      ? 'bg-primary text-primary-foreground border-primary font-bold shadow-sm'
+                      : 'bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
+                  }`}
+                >
+                  <span>{family.label}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                      isSelected
+                        ? 'bg-primary-foreground/20 text-primary-foreground'
+                        : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           {errorMessage && (
             <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -400,12 +536,36 @@ export function ToolcribLibraryPanel({
                       filteredViews.map((view) => {
                         const rowActionState = rowState[view.drawingId] ?? { status: 'idle' };
                         const isAttached = attachedDrawingIds?.has(view.drawingId) === true;
+                        const pStat = printStats.get(view.drawingId);
                         
                         return (
                           <TableRow key={view.drawingId}>
                             <TableCell className="font-medium whitespace-nowrap">
-                              <div className="flex flex-col">
-                                <span>{view.partNumber}</span>
+                              <div className="flex flex-col items-start">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{view.partNumber}</span>
+                                  {isIsoDrawingView(view) && (
+                                    <span className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 text-[9px] font-mono px-1 py-0.5 rounded">
+                                      ISO
+                                    </span>
+                                  )}
+                                </div>
+                                {pStat && pStat.count > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setHistoryDrawing(view)}
+                                    className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded bg-muted/60 hover:bg-accent/10 border border-border hover:border-accent text-[10px] font-mono text-muted-foreground hover:text-accent transition-colors"
+                                    title={`Impreso ${pStat.count} ${pStat.count === 1 ? 'vez' : 'veces'} (${pStat.totalCopies} copias). Clic para ver historial.`}
+                                  >
+                                    <Printer size={10} className="text-accent" />
+                                    <span>{pStat.count}x OT</span>
+                                    {pStat.lastPrintedAtUTC && (
+                                      <span className="opacity-75">
+                                        · {formatRelativeTime(new Date(pStat.lastPrintedAtUTC))}
+                                      </span>
+                                    )}
+                                  </button>
+                                )}
                                 {rowActionState.status === 'error' && rowActionState.message && (
                                   <span className="text-xs text-destructive mt-1 font-normal whitespace-normal">
                                     {rowActionState.message}
@@ -577,8 +737,15 @@ export function ToolcribLibraryPanel({
               copies: 1,
               orderRef: null,
             });
+            // Refrescar estadísticas de impresión
+            void loadLibrary();
           }
         }}
+      />
+
+      <ToolcribHistoryModal
+        drawing={historyDrawing}
+        onClose={() => setHistoryDrawing(null)}
       />
 
       {previewDrawing?.pdfUrl && (

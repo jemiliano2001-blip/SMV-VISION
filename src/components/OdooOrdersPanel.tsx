@@ -18,10 +18,16 @@ import {
   FileSearch,
   Send,
   Building2,
+  CheckSquare,
+  Square,
+  Sparkles,
+  AlertTriangle,
+  ShoppingCart,
 } from 'lucide-react';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
+import { QuickPurchaseModal } from './QuickPurchaseModal';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Button } from './ui/button';
@@ -50,6 +56,9 @@ import { useSyncMeta } from '../hooks/useSyncMeta';
 import type { UseToolcribCatalogResult } from '../hooks/useToolcribCatalog';
 import type { UseOrderDrawingBridgeResult } from '../hooks/useOrderDrawingBridge';
 import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
+import { checkRevisionDiscrepancy } from '../lib/matching';
+import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
+import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 
 export interface OdooOrdersPanelProps {
   catalog: UseToolcribCatalogResult;
@@ -261,6 +270,22 @@ export function OdooOrdersPanel({
   const [lineActionError, setLineActionError] = useState<string | null>(null);
   const [sendingKey, setSendingKey] = useState<string | null>(null);
 
+  // Selección múltiple para Batch Print de OTs
+  const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
+  const [batchPrinting, setBatchPrinting] = useState(false);
+  const [batchPrintStatus, setBatchPrintStatus] = useState<string | null>(null);
+
+  // Requisición rápida de material / Compras
+  const [quickPurchaseData, setQuickPurchaseData] = useState<{
+    soNumber?: string;
+    poNumber?: string;
+    pieza?: string;
+    numeroParte?: string;
+    cantidad?: number | string;
+    material?: string | null;
+  } | null>(null);
+  const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
+
   // Compañía (partner) — vacío hasta elegir; no carga todas las órdenes de golpe.
   const [selectedPartnerKey, setSelectedPartnerKey] = useState<string | null>(null);
 
@@ -402,6 +427,115 @@ export function OdooOrdersPanel({
     },
     [catalog.views, resolveLineLink, onOpenBiblioteca],
   );
+
+  const toggleSelectLine = useCallback((lineKey: string) => {
+    setSelectedLines((prev) => {
+      const next = new Set(prev);
+      if (next.has(lineKey)) {
+        next.delete(lineKey);
+      } else {
+        next.add(lineKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllInOrder = useCallback((order: OdooOrderView) => {
+    setSelectedLines((prev) => {
+      const next = new Set(prev);
+      const orderLineKeys = order.order_lines
+        .map((l, idx) => ({ l, key: makeOrderDrawingLinkKey(order.id, idx) }))
+        .filter(({ l }) => l.qty_pending > 0)
+        .map(({ key }) => key);
+
+      const allSelected = orderLineKeys.length > 0 && orderLineKeys.every((k) => next.has(k));
+      if (allSelected) {
+        orderLineKeys.forEach((k) => next.delete(k));
+      } else {
+        orderLineKeys.forEach((k) => next.add(k));
+      }
+      return next;
+    });
+  }, []);
+
+  const handleBatchPrintOts = useCallback(async () => {
+    if (selectedLines.size === 0) return;
+    setBatchPrinting(true);
+    setLineActionError(null);
+    setBatchPrintStatus(`Preparando catálogo para ${selectedLines.size} OTs…`);
+
+    try {
+      const library = await ensureCatalogViews();
+      if (!library) {
+        setLineActionError('No se pudo cargar el catálogo de planos.');
+        setBatchPrinting(false);
+        setBatchPrintStatus(null);
+        return;
+      }
+
+      const items: BatchPlanoOtItem[] = [];
+      const now = new Date();
+      const fecha = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      let processedCount = 0;
+      for (const order of orders) {
+        for (let idx = 0; idx < order.order_lines.length; idx++) {
+          const line = order.order_lines[idx];
+          const lineKey = makeOrderDrawingLinkKey(order.id, idx);
+          if (!selectedLines.has(lineKey) || line.qty_pending <= 0) continue;
+
+          processedCount += 1;
+          setBatchPrintStatus(`Descargando plano ${processedCount} de ${selectedLines.size}…`);
+
+          const link = resolveLineLink(order, line, idx, library);
+          const cadView = bridge.getCadViewForPrint(link);
+          if (!cadView || !cadView.pdfUrl) {
+            console.warn(`[batch-print] Sin plano accesible para ${line.product}`);
+            continue;
+          }
+
+          try {
+            const pdfDataUrl = await fetchPdfAsDataUrl(cadView.pdfUrl);
+            items.push({
+              pdfDataUrl,
+              stamp: {
+                soNumber: order.name,
+                cantidad: String(line.qty_pending),
+                fecha,
+                notas: line.description ? line.description.slice(0, 80) : undefined,
+              },
+              partNumber: cadView.partNumber,
+              revision: cadView.revision,
+            });
+
+            // Log de impresión audit trail
+            recordToolcribPrintLogFireAndForget({
+              drawingId: cadView.drawingId,
+              partId: cadView.partId,
+              copies: 1,
+              orderRef: order.name,
+            });
+          } catch (err) {
+            console.warn(`[batch-print] Error descargando ${cadView.partNumber}`, err);
+          }
+        }
+      }
+
+      if (items.length === 0) {
+        setLineActionError('Ninguna de las líneas seleccionadas tiene un plano CAD descargable.');
+        return;
+      }
+
+      setBatchPrintStatus(`Combinando y sellando ${items.length} planos…`);
+      await openStampedPlanoOtBatch(items);
+      setSelectedLines(new Set());
+    } catch (err) {
+      setLineActionError(err instanceof Error ? err.message : 'Error al procesar lote de OTs.');
+    } finally {
+      setBatchPrinting(false);
+      setBatchPrintStatus(null);
+    }
+  }, [selectedLines, orders, ensureCatalogViews, resolveLineLink, bridge]);
 
   const fetchOrders = useCallback(async (partnerKey: string) => {
     setLoading(true);
@@ -632,6 +766,23 @@ export function OdooOrdersPanel({
           <Table className="w-full text-left border-collapse">
             <TableHeader>
               <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
+                <TableHead className="w-10 px-3 py-2 text-center h-auto">
+                  <button
+                    type="button"
+                    onClick={() => toggleSelectAllInOrder(order)}
+                    className="text-ink hover:text-accent flex items-center justify-center mx-auto"
+                    title="Seleccionar / deseleccionar todas las líneas de esta orden"
+                  >
+                    {order.order_lines.filter((l) => l.qty_pending > 0).length > 0 &&
+                    order.order_lines
+                      .filter((l) => l.qty_pending > 0)
+                      .every((_, idx) => selectedLines.has(makeOrderDrawingLinkKey(order.id, idx))) ? (
+                      <CheckSquare size={16} className="text-accent" />
+                    ) : (
+                      <Square size={16} className="text-ink-dim" />
+                    )}
+                  </button>
+                </TableHead>
                 <TableHead className="px-5 py-2 font-bold w-1/3 text-ink-dim h-auto">Producto</TableHead>
                 <TableHead className="px-5 py-2 font-bold text-ink-dim h-auto">Descripción</TableHead>
                 <TableHead className="px-5 py-2 font-bold text-center w-28 text-ink-dim h-auto">Pendiente</TableHead>
@@ -649,15 +800,37 @@ export function OdooOrdersPanel({
                   link?.cadDrawing?.partNumber ??
                   link?.reportDrawing?.partNumber ??
                   null;
+                const isSelected = selectedLines.has(lineKey);
+
                 return (
                   <TableRow
                     key={idx}
                     className={`border-b border-line last:border-b-0 transition-colors ${
                       fullyDelivered
                         ? 'opacity-40 bg-ok/5 hover:bg-ok/5'
-                        : 'hover:bg-surface-2/40'
+                        : isSelected
+                          ? 'bg-accent/5 hover:bg-accent/10'
+                          : 'hover:bg-surface-2/40'
                     }`}
                   >
+                    <TableCell className="w-10 px-3 py-3 text-center align-middle">
+                      {!fullyDelivered ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleSelectLine(lineKey)}
+                          className="text-ink hover:text-accent flex items-center justify-center mx-auto"
+                          title={isSelected ? 'Deseleccionar OT' : 'Seleccionar para imprimir en lote'}
+                        >
+                          {isSelected ? (
+                            <CheckSquare size={16} className="text-accent" />
+                          ) : (
+                            <Square size={16} className="text-ink-dim" />
+                          )}
+                        </button>
+                      ) : (
+                        <span className="text-ink-dim opacity-30 text-xs">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="px-5 py-3 align-top">
                       <span className="font-display font-black uppercase tracking-tight text-sm text-ink block">
                         {line.product.split('] ')[1] || line.product}
@@ -669,7 +842,30 @@ export function OdooOrdersPanel({
                       )}
                     </TableCell>
                     <TableCell className="px-5 py-3 font-mono text-xs text-ink align-top leading-snug">
-                      {line.description || '—'}
+                      <div className="space-y-1.5">
+                        <div>{line.description || '—'}</div>
+                        {(() => {
+                          const drawingRev = link?.cadDrawing?.revision ?? link?.reportDrawing?.revision;
+                          if (drawingRev) {
+                            const revCheck = checkRevisionDiscrepancy(
+                              `${line.description || ''} ${line.product || ''}`,
+                              drawingRev,
+                            );
+                            if (revCheck.hasMismatch) {
+                              return (
+                                <div
+                                  className="inline-flex items-center gap-1.5 bg-warn/15 border border-warn text-warn font-mono text-[9px] font-bold px-2 py-0.5"
+                                  title={`Discrepancia detectada: Odoo pide Rev "${revCheck.orderRev}" pero el catálogo tiene Rev "${revCheck.drawingRev}".`}
+                                >
+                                  <AlertTriangle size={11} className="shrink-0" />
+                                  <span>Odoo pide Rev {revCheck.orderRev} (Plano es Rev {revCheck.drawingRev})</span>
+                                </div>
+                              );
+                            }
+                          }
+                          return null;
+                        })()}
+                      </div>
                     </TableCell>
                     <TableCell className="px-5 py-3 text-center align-top">
                       {fullyDelivered ? (
@@ -691,14 +887,21 @@ export function OdooOrdersPanel({
                       {!fullyDelivered && (
                         <div className="flex flex-col items-stretch gap-1.5 min-w-[200px]">
                           {link && link.status !== 'no_match' && partLabel ? (
-                            <span
-                              className="font-mono text-[9px] text-ok uppercase tracking-wide truncate"
-                              title={`Score ${link.matchScore}`}
-                            >
-                              {partLabel}
-                              {link.matchScore > 0 ? ` · ${link.matchScore}` : ''}
-                              {link.status === 'manual' ? ' · manual' : ''}
-                            </span>
+                            <div className="flex flex-col items-center">
+                              <span
+                                className="font-mono text-[9px] text-ok uppercase tracking-wide truncate max-w-[200px]"
+                                title={`Score ${link.matchScore}`}
+                              >
+                                {partLabel}
+                                {link.matchScore > 0 ? ` · ${link.matchScore}` : ''}
+                              </span>
+                              {link.status === 'manual' && (
+                                <span className="inline-flex items-center gap-1 font-mono text-[8px] text-accent font-bold uppercase tracking-wider bg-accent/10 px-1.5 py-0.2 rounded mt-0.5">
+                                  <Sparkles size={9} />
+                                  Alias aprendido
+                                </span>
+                              )}
+                            </div>
                           ) : link?.status === 'no_match' ? (
                             <span className="font-mono text-[9px] text-warn uppercase tracking-wide">
                               Sin plano
@@ -741,6 +944,28 @@ export function OdooOrdersPanel({
                                 Reporte
                               </span>
                             </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => {
+                                const parsed = parseOdooLineLabels(line.product, line.description);
+                                setQuickPurchaseData({
+                                  soNumber: order.name,
+                                  poNumber: order.client_order_ref || undefined,
+                                  pieza: parsed.pieza || line.product,
+                                  numeroParte: parsed.numeroParte || undefined,
+                                  cantidad: line.qty_pending,
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 hover:border-accent hover:text-accent"
+                              title="Requisitar material o insumos para esta orden en Compras"
+                            >
+                              <ShoppingCart size={12} />
+                              <span className="text-[9px] font-black uppercase tracking-widest">
+                                Comprar
+                              </span>
+                            </Button>
                             {(link?.status === 'no_match' || !link || !link.cadDrawing) && (
                               <Button
                                 type="button"
@@ -766,7 +991,7 @@ export function OdooOrdersPanel({
               })}
               {order.order_lines.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
+                  <TableCell colSpan={5} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
                     No hay líneas de producto en esta orden
                   </TableCell>
                 </TableRow>
@@ -810,6 +1035,22 @@ export function OdooOrdersPanel({
                 : `SYNC · ${formatRelativeTime(meta.lastSyncAt)} · ${meta.ordersProcessed} ÓRDENES`}
             </div>
           )}
+          {selectedLines.size > 0 && (
+            <Button
+              variant="ghost"
+              onClick={() => void handleBatchPrintOts()}
+              disabled={batchPrinting}
+              className="flex items-center gap-2 px-4 py-2 border-2 border-ok bg-ok text-bg hover:bg-ok/80 transition-colors disabled:opacity-50 text-[11px] font-black uppercase tracking-widest shadow-hard hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 h-auto rounded-none"
+              title="Combinar y abrir en un solo PDF todas las OTs seleccionadas"
+            >
+              {batchPrinting ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Printer size={14} />
+              )}
+              {batchPrinting ? 'Imprimiendo…' : `Imprimir Lote (${selectedLines.size} OTs)`}
+            </Button>
+          )}
           <Button
             variant="ghost"
             onClick={() => setInvoicePanelOpen(true)}
@@ -839,6 +1080,16 @@ export function OdooOrdersPanel({
           </Button>
         </div>
       </header>
+
+      {/* ── Banner de Progreso Batch Print ── */}
+      {batchPrintStatus && (
+        <div className="bg-accent/15 border-b-2 border-accent px-6 py-2 flex items-center justify-between text-ink font-mono text-xs animate-fadeIn">
+          <div className="flex items-center gap-2">
+            <Loader2 size={14} className="animate-spin text-accent" />
+            <span className="font-bold">{batchPrintStatus}</span>
+          </div>
+        </div>
+      )}
 
       {/* ── Compañías (partners) — carga perezosa ── */}
       <section className="shrink-0 border-b-2 border-line bg-surface px-6 py-3">
@@ -1121,6 +1372,25 @@ export function OdooOrdersPanel({
           }
         }}
       />
+
+      {/* ── Modal de Requisición Rápida de Compras ── */}
+      <QuickPurchaseModal
+        open={quickPurchaseData !== null}
+        defaultData={quickPurchaseData}
+        onClose={() => setQuickPurchaseData(null)}
+        onSuccess={() => {
+          setPurchaseToast('✓ Requisición guardada con éxito en Compras.');
+          setTimeout(() => setPurchaseToast(null), 4000);
+        }}
+      />
+
+      {/* ── Toast de confirmación de compra ── */}
+      {purchaseToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-[#0D2B4D] text-white border-2 border-accent shadow-hard px-4 py-2.5 font-mono text-xs flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <span className="text-accent font-bold">✓</span>
+          <span>{purchaseToast}</span>
+        </div>
+      )}
     </div>
   );
 }

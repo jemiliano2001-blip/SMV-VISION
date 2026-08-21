@@ -387,3 +387,51 @@ export function selectBestBlueprintMatch(
     score: Math.max(fileScore, bestSpecScore),
   };
 }
+
+/**
+ * Extrae la revisión mencionada en una descripción o texto de orden
+ * (ej. "REV B", "REV. 02", "REV-C", "REVISION 1", "REV: 3").
+ */
+export function extractRevisionFromText(text: string): string | null {
+  if (!text || typeof text !== 'string') return null;
+  const match = text.match(/\b(?:REV|REVISION|REVISI[OÓ]N)[.:\s\-#]*([A-Z0-9]{1,4})\b/i);
+  if (match) {
+    const rev = match[1].toUpperCase().trim();
+    if (['DATE', 'PART', 'NUM', 'NO', 'DEL', 'POR', 'PARA'].includes(rev)) return null;
+    return rev;
+  }
+  return null;
+}
+
+export interface RevisionCheckResult {
+  hasMismatch: boolean;
+  orderRev: string | null;
+  drawingRev: string;
+}
+
+/**
+ * Compara la revisión mencionada en la orden de Odoo con la revisión activa del plano.
+ */
+export function checkRevisionDiscrepancy(
+  orderText: string,
+  drawingRevision: string,
+): RevisionCheckResult {
+  const orderRev = extractRevisionFromText(orderText);
+  const dwgRev = (drawingRevision ?? '').trim().toUpperCase();
+
+  if (!orderRev || !dwgRev) {
+    return { hasMismatch: false, orderRev, drawingRev: dwgRev };
+  }
+
+  // Normalizar: ej. "01" vs "1", "A" vs "REV A"
+  const cleanOrderRev = orderRev.replace(/^0+/, '') || orderRev;
+  const cleanDwgRev = dwgRev.replace(/^0+/, '') || dwgRev;
+
+  const hasMismatch = cleanOrderRev !== cleanDwgRev && orderRev !== dwgRev;
+  return {
+    hasMismatch,
+    orderRev,
+    drawingRev: dwgRev,
+  };
+}
+

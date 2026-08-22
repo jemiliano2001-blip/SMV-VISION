@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeToolcribPrintLog } from '../firebase/toolcribValidators';
-import { matchesFamily } from '../../components/ToolcribLibraryPanel';
+import { matchesFamily } from '../toolcribCatalog';
 import type { ToolcribActiveDrawingView } from '../../types';
 
 describe('normalizeToolcribPrintLog', () => {

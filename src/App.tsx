@@ -756,7 +756,9 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}
-              className="h-full overflow-y-auto"
+              className={
+                activeView === 'biblioteca' ? 'h-full overflow-hidden' : 'h-full overflow-y-auto'
+              }
             >
               {activeView === 'inicio' && (
                 <InicioView

@@ -1,7 +1,7 @@
 /**
  * BibliotecaView — destino de primer nivel para navegar/imprimir el catálogo
- * Tool Crib. Reutiliza `ToolcribLibraryPanel` SIN `onAttachDrawing`, por lo que
- * el panel queda en modo solo navegar/imprimir (no adjunta al análisis).
+ * Tool Crib. Reutiliza `ToolcribLibraryPanel` en modo página (sin adjuntar
+ * al análisis): una pieza por fila, CAD+ISO agrupados, lista a viewport.
  */
 
 import type { ReactElement } from 'react';
@@ -26,15 +26,15 @@ export function BibliotecaView({
     : null;
 
   return (
-    <div className="bp-grid-lg min-h-full p-6 lg:p-10 max-w-[1100px]">
-      <header className="mb-8">
+    <div className="bp-grid-lg h-full min-h-0 flex flex-col p-6 lg:p-8 max-w-[1200px]">
+      <header className="mb-4 shrink-0">
         <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">Catálogo Tool Crib</p>
-        <h1 className="font-display font-black text-5xl lg:text-6xl uppercase italic tracking-[-2px] leading-none flex items-center gap-4">
-          <Library size={44} className="text-accent" /> Biblioteca
+        <h1 className="font-display font-black text-4xl lg:text-5xl uppercase italic tracking-[-2px] leading-none flex items-center gap-3">
+          <Library size={36} className="text-accent" /> Biblioteca
         </h1>
-        <p className="font-mono text-[11px] text-ink-dim mt-3 max-w-xl">
-          Busca planos por número de parte, descripción o revisión. Imprime la revisión activa (queda registrado en el audit log).
-          Si hay STL exportado desde eDrawings, abre la vista 3D con el botón <strong>3D</strong>.
+        <p className="font-mono text-[11px] text-ink-dim mt-2 max-w-2xl">
+          Una fila por pieza: CAD para imprimir OT, ISO para ver/reportar, 3D si hay STL.
+          Imprimir queda en el audit log.
         </p>
         {pendingLink && (
           <p className="mt-3 border-2 border-accent bg-accent/10 px-3 py-2 font-mono text-[11px] text-ink max-w-xl">
@@ -43,12 +43,15 @@ export function BibliotecaView({
         )}
       </header>
 
-      <ToolcribLibraryPanel
-        excludeIsoForPrint
-        initialSearchTerm={searchPrefill}
-        pendingLinkLabel={pendingLabel}
-        onUseForPendingOrder={onUseDrawingForPending}
-      />
+      <div className="flex-1 min-h-0">
+        <ToolcribLibraryPanel
+          variant="page"
+          excludeIsoForPrint
+          initialSearchTerm={searchPrefill}
+          pendingLinkLabel={pendingLabel}
+          onUseForPendingOrder={onUseDrawingForPending}
+        />
+      </div>
     </div>
   );
 }

@@ -20,6 +20,7 @@ import {
   getAuth,
   onAuthStateChanged,
   setPersistence,
+  signInWithCustomToken,
   signInWithEmailAndPassword,
   signOut,
   type Auth,
@@ -148,6 +149,28 @@ export async function signInWithEmailPassword(
       reason: 'error',
       message: code ? `${code}: ${message}` : message,
     };
+  }
+}
+
+
+/**
+ * Inicia sesión utilizando un Firebase Custom Token (Single Sign-On desde SMV Hub).
+ */
+export async function signInWithSsoToken(
+  customToken: string
+): Promise<SignInResult> {
+  const auth = resolveAuth();
+  if (!auth) {
+    return { ok: false, reason: 'not-configured' };
+  }
+
+  try {
+    const credential = await signInWithCustomToken(auth, customToken);
+    return { ok: true, user: credential.user };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Error desconocido';
+    console.error('[smv-vision][auth] signInWithCustomToken falló', error);
+    return { ok: false, reason: 'error', message };
   }
 }
 

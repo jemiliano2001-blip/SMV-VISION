@@ -12,11 +12,11 @@
  *   inicializar, se bloquea con pantalla de error (nunca se deja pasar).
  */
 
-import { useCallback, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
 import { AlertCircle, Loader2, LogIn, ShieldCheck, Mail, Lock, Ghost, ShieldAlert } from 'lucide-react';
 
 import { isFirebaseConfigured } from '../lib/firebase/env';
-import { signInWithEmailPassword, useFirebaseUser } from '../lib/firebase/auth';
+import { signInWithEmailPassword, signInWithSsoToken, useFirebaseUser } from '../lib/firebase/auth';
 import { validateSignInCredentials } from '../lib/firebase/authValidators';
 
 interface AuthGateProps {
@@ -28,6 +28,39 @@ export function AuthGate({ children }: AuthGateProps): ReactElement {
   const [signingIn, setSigningIn] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isBypassed, setIsBypassed] = useState<boolean>(false);
+
+  // Detección y procesamiento de SSO token proveniente de SMV Hub
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash.startsWith('#')
+      ? window.location.hash.slice(1)
+      : window.location.hash;
+    if (!hash) return;
+
+    const params = new URLSearchParams(hash);
+    const ssoToken = params.get('sso_token');
+    if (ssoToken) {
+      setSigningIn(true);
+      setErrorMessage(null);
+      signInWithSsoToken(ssoToken)
+        .then((res) => {
+          if (res.ok) {
+            const urlLimpia = window.location.pathname + window.location.search;
+            window.history.replaceState(null, '', urlLimpia);
+          } else {
+            setErrorMessage(res.message || 'No fue posible autenticar con el token SSO.');
+          }
+        })
+        .catch((err) => {
+          console.error('[smv-vision][auth] error procesando SSO token:', err);
+          setErrorMessage('Error al procesar el token SSO.');
+        })
+        .finally(() => {
+          setSigningIn(false);
+        });
+    }
+  }, []);
+
 
   const handleSignInEmail = useCallback(async (email: string, pass: string) => {
     setErrorMessage(null);

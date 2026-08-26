@@ -13,7 +13,15 @@ import type {
   WorkshopPdfUpload,
   ToolcribActiveDrawingView,
 } from '../types';
-import { createDocumentHash, readCachedValue, writeCachedValue } from '../lib/documentAnalysis/cache';
+import {
+  createDocumentHash,
+  readCachedValue,
+  writeCachedValue,
+  saveLatestAuditSession,
+  loadLatestAuditSession,
+  clearLatestAuditSession,
+  type SavedAuditSession,
+} from '../lib/documentAnalysis/cache';
 import { runWithConcurrencyLimit } from '../lib/documentAnalysis/concurrency';
 import { rasterizeAndNormalizePdf } from '../lib/documentAnalysis/pdfWorkerClient';
 import { recordAnalysisRunFireAndForget } from '../lib/firebase/analysisRuns';
@@ -194,6 +202,10 @@ export interface VisionAnalysisHook {
   setPreviewOrder: (order: Order | null) => void;
   setError: (msg: string | null) => void;
   setSeedWarning: (msg: string | null) => void;
+  // Session Recovery
+  savedSession: SavedAuditSession<Order, AnalysisRunSummary> | null;
+  restoreSavedSession: () => void;
+  dismissSavedSession: () => void;
 }
 
 // ── Implementation ────────────────────────────────────────────────────────────
@@ -210,6 +222,29 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   const [copying, setCopying] = useState(false);
   const extractingRef = useRef(false);
   const [analysisSummary, setAnalysisSummary] = useState<AnalysisRunSummary | null>(null);
+  const [savedSession, setSavedSession] = useState<SavedAuditSession<Order, AnalysisRunSummary> | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const saved = await loadLatestAuditSession<Order, AnalysisRunSummary>();
+      if (saved) {
+        setSavedSession(saved);
+      }
+    })();
+  }, []);
+
+  const restoreSavedSession = useCallback(() => {
+    if (!savedSession) return;
+    setResults(savedSession.results);
+    setAnalysisSummary(savedSession.summary);
+    setSavedSession(null);
+  }, [savedSession]);
+
+  const dismissSavedSession = useCallback(() => {
+    setSavedSession(null);
+    void clearLatestAuditSession();
+  }, []);
+
   // Mapa pdfId -> drawingId para dibujos adjuntados desde la biblioteca Tool Crib.
   // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
   const [toolcribPdfToDrawing, setToolcribPdfToDrawing] = useState<Record<string, string>>({});
@@ -1243,12 +1278,23 @@ Reglas de extracción (ESTILO UT2033):
       }
       mergeMs = performance.now() - mergeStart;
       const totalAudited = bestMatchByOrder.size;
-      setAnalysisSummary({
+      const auditSummary = {
         totalLoaded: currentWorkshopPdfs.length,
         totalAnalyzed: blueprintTaskResults.length,
         totalAudited,
         totalNonMatching: Math.max(0, blueprintTaskResults.length - matchedBlueprintFileIds.size),
         totalOrders: ordersList.length,
+      };
+      setAnalysisSummary(auditSummary);
+
+      setResults((currentResults) => {
+        if (currentResults) {
+          void saveLatestAuditSession({
+            results: currentResults,
+            summary: auditSummary,
+          });
+        }
+        return currentResults;
       });
       const latestMetrics: AnalysisMetrics = {
         totalMs: performance.now() - runStart,
@@ -1256,14 +1302,6 @@ Reglas de extracción (ESTILO UT2033):
         aiOrderMs: orderFetchMs,
         aiBlueprintMs,
         mergeMs,
-      };
-
-      const auditSummary = {
-        totalLoaded: currentWorkshopPdfs.length,
-        totalAnalyzed: blueprintTaskResults.length,
-        totalAudited,
-        totalNonMatching: Math.max(0, blueprintTaskResults.length - matchedBlueprintFileIds.size),
-        totalOrders: ordersList.length,
       };
       void (async () => {
         try {
@@ -1502,5 +1540,7 @@ Reglas de extracción (ESTILO UT2033):
     // Setters
     setResultsFilter, setFilterUrgentOnly, setFilterMissingOnly,
     setDraggingZone, setEditMode, setPreviewOrder, setError, setSeedWarning,
+    // Session Recovery
+    savedSession, restoreSavedSession, dismissSavedSession,
   };
 }

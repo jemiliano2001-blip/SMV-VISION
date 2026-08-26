@@ -141,3 +141,52 @@ export async function writeCachedValue<TValue>(
     log.warn('[cache] write failed, continuing without cache entry', { key, error });
   }
 }
+
+export interface SavedAuditSession<TOrder = unknown, TSummary = unknown> {
+  results: TOrder[];
+  summary: TSummary | null;
+  savedAt: number;
+}
+
+const LATEST_AUDIT_SESSION_KEY = `${CACHE_NAMESPACE}:latestAuditSession`;
+
+export async function saveLatestAuditSession<TOrder, TSummary>(session: {
+  results: TOrder[];
+  summary: TSummary | null;
+}): Promise<void> {
+  try {
+    const data: SavedAuditSession<TOrder, TSummary> = {
+      ...session,
+      savedAt: Date.now(),
+    };
+    await set(LATEST_AUDIT_SESSION_KEY, data, getCacheStore());
+  } catch (error) {
+    log.warn('[cache] saveLatestAuditSession failed', error);
+  }
+}
+
+export async function loadLatestAuditSession<TOrder, TSummary>(): Promise<SavedAuditSession<TOrder, TSummary> | null> {
+  try {
+    const data = await get<SavedAuditSession<TOrder, TSummary>>(LATEST_AUDIT_SESSION_KEY, getCacheStore());
+    if (!data || !Array.isArray(data.results) || data.results.length === 0) {
+      return null;
+    }
+    // Max age 24 hours
+    if (Date.now() - data.savedAt > 1000 * 60 * 60 * 24) {
+      await del(LATEST_AUDIT_SESSION_KEY, getCacheStore());
+      return null;
+    }
+    return data;
+  } catch (error) {
+    log.warn('[cache] loadLatestAuditSession failed', error);
+    return null;
+  }
+}
+
+export async function clearLatestAuditSession(): Promise<void> {
+  try {
+    await del(LATEST_AUDIT_SESSION_KEY, getCacheStore());
+  } catch (error) {
+    log.warn('[cache] clearLatestAuditSession failed', error);
+  }
+}

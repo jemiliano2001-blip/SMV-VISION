@@ -499,4 +499,17 @@ describe('selectCadDrawingForPrint', () => {
     const result = selectCadDrawingForPrint(orderSignals, [weak]);
     expect(result.score).toBeLessThan(MIN_BLUEPRINT_MATCH_SCORE);
   });
+
+  it('matches symmetrical parts with LH/RH suffix to base drawing', () => {
+    const cad = makeView({ drawingId: 'cad', partNumber: '90-1012-05' });
+    const orderSignalsLH = extractOrderSignals('PIVOT PIN LH', '90-1012-05-LH');
+    const resultLH = selectCadDrawingForPrint(orderSignalsLH, [cad]);
+    expect(resultLH.view?.drawingId).toBe('cad');
+    expect(resultLH.score).toBe(95);
+
+    const orderSignalsRH = extractOrderSignals('PIVOT PIN RH', '90-1012-05-RH');
+    const resultRH = selectCadDrawingForPrint(orderSignalsRH, [cad]);
+    expect(resultRH.view?.drawingId).toBe('cad');
+    expect(resultRH.score).toBe(95);
+  });
 });

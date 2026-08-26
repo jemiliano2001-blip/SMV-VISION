@@ -135,7 +135,10 @@ async function renderPdfPageToBlob(pdfDataUrl: string, scale: number, quality: n
     canvasContext: context as unknown as CanvasRenderingContext2D,
     viewport,
   }).promise;
-  return canvas.convertToBlob({ type: 'image/jpeg', quality });
+  const resultBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+  canvas.width = 0;
+  canvas.height = 0;
+  return resultBlob;
 }
 
 async function normalizeBlob(blob: Blob, maxDim: number, quality: number): Promise<Blob> {
@@ -159,7 +162,10 @@ async function normalizeBlob(blob: Blob, maxDim: number, quality: number): Promi
 
   context.drawImage(bitmap, 0, 0, width, height);
   bitmap.close();
-  return canvas.convertToBlob({ type: 'image/jpeg', quality });
+  const normalizedBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+  canvas.width = 0;
+  canvas.height = 0;
+  return normalizedBlob;
 }
 
 async function handleRasterizeNormalize(request: WorkerRequest): Promise<WorkerSuccessResponse | WorkerErrorResponse> {

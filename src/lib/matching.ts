@@ -67,6 +67,14 @@ function compactPartIdentifier(value: string): string {
     .replace(/REV\d*$/g, '');
 }
 
+function extractSymmetryBaseIdentifier(compact: string): string | null {
+  const base = compact.replace(/(?:LH|RH|IZQ|DER)$/g, '');
+  if (base.length >= 5 && /\d/.test(base) && base !== compact) {
+    return base;
+  }
+  return null;
+}
+
 export function extractPartIdentifiers(value: string): string[] {
   const normalized = normalizePieceLabel(value);
   if (!normalized) {
@@ -79,6 +87,8 @@ export function extractPartIdentifiers(value: string): string[] {
     const compact = compactPartIdentifier(match);
     if (compact.length >= 5 && /\d/.test(compact)) {
       ids.add(compact);
+      const symBase = extractSymmetryBaseIdentifier(compact);
+      if (symBase) ids.add(symBase);
     }
   });
 
@@ -87,6 +97,8 @@ export function extractPartIdentifiers(value: string): string[] {
     const compact = compactPartIdentifier(candidate);
     if (compact.length >= 5 && /\d/.test(compact)) {
       ids.add(compact);
+      const symBase = extractSymmetryBaseIdentifier(compact);
+      if (symBase) ids.add(symBase);
     }
   });
 

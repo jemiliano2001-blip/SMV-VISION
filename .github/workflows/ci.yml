@@ -8,7 +8,11 @@ on:
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-latest
+    # windows-latest: scripts/edrawings/* automates SolidWorks eDrawings via
+    # Windows COM (PowerShell) and its tests bake in Windows-style paths
+    # (backslashes, drive letters) — they fail on Linux runners where those
+    # strings resolve as opaque filenames instead of directory paths.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -28,5 +32,3 @@ jobs:
 
       - name: Build
         run: npm run build
-        env:
-          GEMINI_API_KEY: dummy-ci-key

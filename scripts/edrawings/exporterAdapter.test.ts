@@ -38,6 +38,12 @@ describe('native eDrawings Office Automator contract', () => {
     expect(supervisorSource).toContain('$viewer.Save($stagedJpgPath, $false, \'\')');
   });
 
+  it('solo fuerza vista isométrica en modo iso; en modo flat hace zoom-to-fit', () => {
+    expect(supervisorSource).toContain("[ValidateSet('iso', 'flat')][string]$Mode = 'iso'");
+    expect(supervisorSource).toContain("if ($Mode -eq 'iso') {");
+    expect(supervisorSource).toContain('$viewer.ZoomToFit()');
+  });
+
   it('conserva la promoción atómica y valida el STL opcional', () => {
     expect(supervisorSource).toContain('Remove-Item -LiteralPath $outputPath -Force');
     expect(supervisorSource).toContain('function Promote-Artifact');
@@ -79,6 +85,22 @@ describe('Tool Crib batch integration contract', () => {
     expect(importerSource).toContain(
       'options.exporterPath ? exportedStlPath : item.companions.stl?.absolutePath ?? null',
     );
+  });
+
+  it('prioriza el PDF companion real sobre exportar el .slddrw, y exporta en modo flat cuando no hay PDF', () => {
+    expect(importerSource).toContain("if (item.companions.pdf) {");
+    expect(importerSource).toContain("return { kind: 'existing-companion-pdf', pdfPath: item.companions.pdf.absolutePath };");
+    expect(importerSource).toContain("viewMode: 'flat'");
+  });
+
+  it('aísla el JPEG del CAD en su propia subcarpeta para no pisar el de la ISO (mismo stem .sldprt/.slddrw)', () => {
+    expect(importerSource).toContain("join(workRoot, item.basePartNumber, 'cad')");
+  });
+
+  it('descubre piezas con .slddrw pero sin modelo 3D, sin duplicar las que ya tiene el flujo de modelo', () => {
+    expect(importerSource).toContain('async function discoverCadOnlySources(');
+    expect(importerSource).toContain('if (alreadyCoveredBaseNumbers.has(parsed.basePartNumber)) continue;');
+    expect(importerSource).toContain('const coveredBaseNumbers = new Set(selection.selected.map((candidate) => candidate.basePartNumber));');
   });
 });
 
@@ -155,6 +177,42 @@ describe('buildExporterCommand', () => {
     });
 
     expect(command.args).toContain('.jpg,.stl');
+  });
+
+  it('por defecto pide vista isométrica (-Mode iso)', () => {
+    const command = buildExporterCommand({
+      exporter: 'edrawings',
+      nativeScriptPath: 'native.ps1',
+      inputFile: 'part.sldprt',
+      outDir: 'out',
+    });
+
+    expect(command.args).toContain('-Mode');
+    expect(command.args[command.args.indexOf('-Mode') + 1]).toBe('iso');
+  });
+
+  it('pasa -Mode flat para planos acotados (.slddrw)', () => {
+    const command = buildExporterCommand({
+      exporter: 'edrawings',
+      nativeScriptPath: 'native.ps1',
+      inputFile: 'part.slddrw',
+      outDir: 'out',
+      viewMode: 'flat',
+    });
+
+    expect(command.args[command.args.indexOf('-Mode') + 1]).toBe('flat');
+  });
+
+  it('no reinterpreta -Mode para un ejecutable externo', () => {
+    const command = buildExporterCommand({
+      exporter: String.raw`C:\Program Files\Vendor Tool\export.exe`,
+      nativeScriptPath: 'ignored.ps1',
+      inputFile: 'part.sldprt',
+      outDir: 'out',
+      viewMode: 'flat',
+    });
+
+    expect(command.args).not.toContain('-Mode');
   });
 });
 

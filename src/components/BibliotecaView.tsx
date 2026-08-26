@@ -43,7 +43,7 @@ export function BibliotecaView({
         )}
       </header>
 
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 flex flex-col">
         <ToolcribLibraryPanel
           variant="page"
           excludeIsoForPrint

@@ -14,6 +14,11 @@ import { basename, extname, join, resolve as resolvePath } from 'node:path';
 
 export type ExporterMode = 'edrawings' | 'auto';
 export type ExportFormat = '.jpg' | '.stl';
+/**
+ * iso: fuerza vista isométrica — modelos 3D (.sldprt/.easm/.eprt).
+ * flat: conserva la vista del documento (zoom-to-fit) — planos acotados (.slddrw).
+ */
+export type ExporterViewMode = 'iso' | 'flat';
 
 export interface ExportAttempt {
   ok: boolean;
@@ -265,6 +270,7 @@ export function buildExporterCommand(params: {
   outDir: string;
   timeoutSeconds?: number;
   formats?: readonly ExportFormat[];
+  viewMode?: ExporterViewMode;
 }): ExportCommand {
   const timeoutSeconds = params.timeoutSeconds ?? 180;
   const formats = normalizeFormats(params.formats);
@@ -291,6 +297,8 @@ export function buildExporterCommand(params: {
         formats.join(','),
         '-TimeoutSeconds',
         String(timeoutSeconds),
+        '-Mode',
+        params.viewMode ?? 'iso',
       ],
       timeoutMilliseconds: parentTimeoutMilliseconds,
       windowsHide: false,
@@ -339,6 +347,7 @@ export function runCadExporter(
     outDir: string;
     timeoutSeconds?: number;
     formats?: readonly ExportFormat[];
+    viewMode?: ExporterViewMode;
   },
   dependencies: ExporterAdapterDependencies = defaultDependencies,
 ): ExportAttempt {

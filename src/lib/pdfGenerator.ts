@@ -21,6 +21,7 @@ import {
   cleanPieceName,
 } from './reportFormat';
 import { formatAgeDays, getOrderAgeDays } from './age';
+import { formatCajetinLine } from './reportViewMeta';
 
 function jsPdfImageFormat(dataUrl: string): 'JPEG' | 'PNG' {
   return dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
@@ -124,6 +125,10 @@ export function generateSingleOrderPdf(order: Order): void {
   const ageDays = getOrderAgeDays(order.fecha.split('\n')[0]);
   if (ageDays !== null) {
     fields.push(['ANTIGÜEDAD', formatAgeDays(ageDays)]);
+  }
+  const cajetin = formatCajetinLine(order);
+  if (cajetin) {
+    fields.push(['CAJETÍN', cajetin]);
   }
 
   let detailY = y + 8;
@@ -237,8 +242,12 @@ export function generateReportPdf(orders: Order[], options?: ReportPdfOptions): 
 
   // Nombre mostrado: sin prefijo "(WESCON)" y con el número de parte si no
   // está ya en la descripción (desambigua piezas con nombre genérico).
-  const displayName = (order: Order): string =>
-    withPartNumber(cleanPieceName(order.pieza), order.numero_parte);
+  // Cajetín (material/dureza/…) va en una segunda línea cuando Vision lo extrajo.
+  const displayName = (order: Order): string => {
+    const base = withPartNumber(cleanPieceName(order.pieza), order.numero_parte);
+    const cajetin = formatCajetinLine(order);
+    return cajetin ? `${base}\n${cajetin}` : base;
+  };
 
   const buildRows = (orders: Order[]): RowInput[] => orders.map((order) => [
     '',

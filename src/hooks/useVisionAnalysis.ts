@@ -55,6 +55,8 @@ import {
 } from '../lib/orderDrawingBridge';
 import { downloadOrdersCsv } from '../lib/excelExport';
 import { applyOrderCropAtIndex } from '../lib/orderCrop';
+import { listPartAliases } from '../lib/firebase/aliases';
+import { normalizeAliasKey } from '../lib/aliasKey';
 
 // ── Prompt versions — bump to invalidate IndexedDB cache for all users ────────
 const ORDER_PROMPT_VERSION = 'orders-v7-po-multi-hoja';
@@ -125,6 +127,8 @@ export interface VisionAnalysisHook {
   isExtracting: boolean;
   extractingStep: string;
   error: string | null;
+  /** Avisos de seed bridge (no bloquean el dashboard si ya hay results). */
+  seedWarning: string | null;
   results: Order[] | null;
   analysisSummary: AnalysisRunSummary | null;
   copying: boolean;
@@ -145,9 +149,10 @@ export interface VisionAnalysisHook {
   ingestWorkshopFiles: (files: FileList | File[]) => Promise<void>;
   handleAttachToolcribDrawing: (attachment: ToolcribAttachment) => void;
   /** Adjunta planos de vínculos del bridge e indexa semillas para la auditoría. */
-  seedFromBridgeLinks: (links: readonly OrderDrawingLink[]) => Promise<void>;
+  seedFromBridgeLinks: (links: readonly OrderDrawingLink[]) => Promise<{ errors: string[] }>;
   seededBridgeLinks: readonly OrderDrawingLink[];
   removeSeededBridgeLink: (key: string) => void;
+  clearSeedWarning: () => void;
   removeFile: (type: 'workshop', fileId?: string) => void;
   buildDropHandlers: (
     zone: 'workshop',
@@ -188,6 +193,7 @@ export interface VisionAnalysisHook {
   setEditMode: (v: boolean) => void;
   setPreviewOrder: (order: Order | null) => void;
   setError: (msg: string | null) => void;
+  setSeedWarning: (msg: string | null) => void;
 }
 
 // ── Implementation ────────────────────────────────────────────────────────────
@@ -200,7 +206,9 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   const [orderLoadingState, setOrderLoadingState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [results, setResults] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [seedWarning, setSeedWarning] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const extractingRef = useRef(false);
   const [analysisSummary, setAnalysisSummary] = useState<AnalysisRunSummary | null>(null);
   // Mapa pdfId -> drawingId para dibujos adjuntados desde la biblioteca Tool Crib.
   // Permite deduplicar adjuntos y limpiar el set al remover un PDF.
@@ -383,7 +391,9 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     setSeededBridgeLinks((prev) => prev.filter((l) => l.key !== key));
   }, []);
 
-  const seedFromBridgeLinks = useCallback(async (links: readonly OrderDrawingLink[]) => {
+  const clearSeedWarning = useCallback(() => setSeedWarning(null), []);
+
+  const seedFromBridgeLinks = useCallback(async (links: readonly OrderDrawingLink[]): Promise<{ errors: string[] }> => {
     const alreadyAttached = new Set(Object.values(toolcribPdfToDrawing));
     const errors: string[] = [];
 
@@ -424,11 +434,17 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     });
 
     if (errors.length > 0) {
-      setError(errors.join(' · '));
+      // No tumbar el dashboard con error crítico si ya hay resultados.
+      setSeedWarning(errors.join(' · '));
+      if (!results) {
+        setError(errors.join(' · '));
+      }
     } else {
-      setError(null);
+      setSeedWarning(null);
     }
-  }, [toolcribPdfToDrawing]);
+
+    return { errors };
+  }, [toolcribPdfToDrawing, results]);
 
   const copyResults = async () => {
     if (!results) return;
@@ -540,14 +556,18 @@ No inventes información.` },
   };
 
   const extractInfo = async (): Promise<void> => {
+    if (extractingRef.current) return;
+
     const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? '').trim();
     if (!geminiApiKey) {
       setError('Falta configurar VITE_GEMINI_API_KEY (local) o GEMINI_API_KEY (AI Studio).');
       return;
     }
 
+    extractingRef.current = true;
     setIsExtracting(true);
     setError(null);
+    setSeedWarning(null);
     setResults(null);
     hotStampRefImageRef.current = null;
     // Reinicia el modo edición/exclusiones: una corrida nueva parte de cero.
@@ -628,9 +648,16 @@ No inventes información.` },
       // Odoo es la fuente de verdad, no necesitamos consolidar líneas de manera artificial.
       const ordersList = rawOrders;
 
-      // Captura el dibujo de catálogo emparejado por orden, para la capa de control.
-      // Declarado aquí (no dentro de `if (libResult.ok)`) para seguir en alcance en el upsert.
-      const matchByOrder = new Map<ExtractedOrder, { drawingId: string; partId: string; score: number }>();
+      // Captura el dibujo de catálogo emparejado por orden (incl. provenance).
+      type CatalogMatch = {
+        drawingId: string;
+        partId: string;
+        score: number;
+        revision: string;
+        stlUrl: string | null;
+        matchSource: NonNullable<Order['matchSource']>;
+      };
+      const matchByOrder = new Map<ExtractedOrder, CatalogMatch>();
 
       // Auto-Matching: attach blueprints from library that match the extracted orders
       setExtractingStep('Buscando planos en biblioteca...');
@@ -639,6 +666,9 @@ No inventes información.` },
         const library = libResult.value;
         log.debug('[smv-vision][library] entradas cargadas:', library.map((v) => `${v.partNumber} pdfUrl=${v.pdfUrl ? '✓' : '✗null'}`));
         const autoAttachedIds = new Set(Object.values(toolcribPdfToDrawing));
+
+        const aliasResult = await listPartAliases();
+        const aliases = aliasResult.ok ? aliasResult.value : [];
 
         // Pre-compute signals once per library entry and per manual PDF (#3, #5)
         const librarySignals = new Map(
@@ -653,6 +683,23 @@ No inventes información.` },
         const toFetchMap = new Map<string, { bestView: ToolcribActiveDrawingView; pdfId: string }>();
         // Drawings found in library but missing a fetchable URL (network-only)
         const noUrlMatches: Array<{ pieza: string; partNumber: string; drawingId: string }> = [];
+
+        const queueFetch = (view: ToolcribActiveDrawingView) => {
+          if (!view.pdfUrl) {
+            noUrlMatches.push({
+              pieza: view.description || view.partNumber,
+              partNumber: view.partNumber,
+              drawingId: view.drawingId,
+            });
+            return;
+          }
+          if (!autoAttachedIds.has(view.drawingId) && !toFetchMap.has(view.drawingId)) {
+            toFetchMap.set(view.drawingId, {
+              bestView: view,
+              pdfId: `toolcrib-${view.drawingId}-${crypto.randomUUID()}`,
+            });
+          }
+        };
 
         for (const order of ordersList) {
           const orderSignals = extractOrderSignals(order.pieza, order.numero_parte);
@@ -679,18 +726,43 @@ No inventes información.` },
               drawingId: seededView.drawingId,
               partId: seededView.partId,
               score: seeded?.matchScore ?? 100,
+              revision: seededView.revision,
+              stlUrl: seededView.stlUrl,
+              matchSource: seeded?.status === 'manual' ? 'alias' : 'seed',
             });
-            if (
-              seededView.pdfUrl &&
-              !autoAttachedIds.has(seededView.drawingId) &&
-              !toFetchMap.has(seededView.drawingId)
-            ) {
-              toFetchMap.set(seededView.drawingId, {
-                bestView: seededView,
-                pdfId: `toolcrib-${seededView.drawingId}-${crypto.randomUUID()}`,
-              });
-            }
+            queueFetch(seededView);
             continue;
+          }
+
+          // Alias aprendidos (misma regla exacta que orderDrawingBridge).
+          if (aliases.length > 0) {
+            const aliasCandidates = new Set(
+              [order.numero_parte, order.pieza]
+                .map(normalizeAliasKey)
+                .filter((value) => value.length > 0),
+            );
+            const matchedAlias = aliases.find((a) =>
+              aliasCandidates.has(normalizeAliasKey(a.pattern)),
+            );
+            if (matchedAlias) {
+              const aliasView = library.find(
+                (v) =>
+                  (matchedAlias.drawingId && v.drawingId === matchedAlias.drawingId) ||
+                  v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase(),
+              );
+              if (aliasView) {
+                matchByOrder.set(order, {
+                  drawingId: aliasView.drawingId,
+                  partId: aliasView.partId,
+                  score: 100,
+                  revision: aliasView.revision,
+                  stlUrl: aliasView.stlUrl,
+                  matchSource: 'alias',
+                });
+                queueFetch(aliasView);
+                continue;
+              }
+            }
           }
 
           // ISO-first: si algún ISO supera el umbral, gana sobre cualquier plano CAD.
@@ -705,25 +777,21 @@ No inventes información.` },
 
           if (bestView && bestScore >= MIN_BLUEPRINT_MATCH_SCORE) {
             if (!bestView.pdfUrl) {
-              // Drawing is in catalog but has no fetchable URL — log and track
               console.warn(
                 '[smv-vision][match] coincidencia encontrada sin pdfUrl (plano en red, no en Storage):',
                 order.pieza, '→', bestView.partNumber, `(drawingId: ${bestView.drawingId})`,
               );
               noUrlMatches.push({ pieza: order.pieza, partNumber: bestView.partNumber, drawingId: bestView.drawingId });
-            } else if (!autoAttachedIds.has(bestView.drawingId) && !toFetchMap.has(bestView.drawingId)) {
-              toFetchMap.set(bestView.drawingId, {
-                bestView,
-                pdfId: `toolcrib-${bestView.drawingId}-${crypto.randomUUID()}`,
-              });
+            } else {
+              queueFetch(bestView);
             }
-          }
-
-          if (bestView && bestScore >= MIN_BLUEPRINT_MATCH_SCORE) {
             matchByOrder.set(order, {
               drawingId: bestView.drawingId,
               partId: bestView.partId,
               score: bestScore,
+              revision: bestView.revision,
+              stlUrl: bestView.stlUrl,
+              matchSource: 'fuzzy',
             });
           }
         }
@@ -805,15 +873,29 @@ No inventes información.` },
 
       if (currentWorkshopPdfs.length === 0) {
         setError('No se encontraron planos para las piezas detectadas. Sube planos manualmente o verifica la biblioteca.');
+        extractingRef.current = false;
         setIsExtracting(false);
         return;
       }
 
       // 2. Render initial results immediately (progressive render) — orders only,
       // blueprints will fill in their isometric views as they finish analyzing.
+      const catalogFields = (order: ExtractedOrder): Partial<Order> => {
+        const m = matchByOrder.get(order);
+        if (!m) return {};
+        return {
+          matchedDrawingId: m.drawingId,
+          matchedPartId: m.partId,
+          matchedDrawingRevision: m.revision,
+          matchedStlUrl: m.stlUrl,
+          matchSource: m.matchSource,
+          matchScore: m.score,
+        };
+      };
       const initialResults: Order[] = ordersList.map((order) => ({
         ...order,
         haSidoAuditada: false,
+        ...catalogFields(order),
       }));
       setResults(initialResults);
 
@@ -907,6 +989,7 @@ No inventes información.` },
               dureza: match.spec?.dureza || undefined,
               tratamiento: match.spec?.tratamiento || undefined,
               acabado: match.spec?.acabado || undefined,
+              ...catalogFields(order),
             },
           });
         }
@@ -1248,6 +1331,7 @@ Reglas de extracción (ESTILO UT2033):
       })();
     } finally {
       flushWorkshopStatePatches();
+      extractingRef.current = false;
       setIsExtracting(false);
     }
   };
@@ -1395,7 +1479,7 @@ Reglas de extracción (ESTILO UT2033):
     orderLoadingState, workshopLoadingStates,
     toolcribPdfToDrawing, attachedToolcribDrawingIds,
     // Analysis state
-    isExtracting, extractingStep, error, results,
+    isExtracting, extractingStep, error, seedWarning, results,
     analysisSummary, copying,
     // Edit mode
     editMode, originalResults, excludedOrders, auditedCount,
@@ -1409,6 +1493,7 @@ Reglas de extracción (ESTILO UT2033):
     seedFromBridgeLinks,
     seededBridgeLinks,
     removeSeededBridgeLink,
+    clearSeedWarning,
     generateAiIsometricForOrder,
     aiIsoGeneratingKey,
     isAiIsoGenerating: (order: Order) => aiIsoGeneratingKey === orderAiKey(order),
@@ -1419,6 +1504,6 @@ Reglas de extracción (ESTILO UT2033):
     handleRestoreOrder, handleRestoreAll, handleUpdateOrderCrop,
     // Setters
     setResultsFilter, setFilterUrgentOnly, setFilterMissingOnly,
-    setDraggingZone, setEditMode, setPreviewOrder, setError,
+    setDraggingZone, setEditMode, setPreviewOrder, setError, setSeedWarning,
   };
 }

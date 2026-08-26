@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from "motion/react";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import {
@@ -22,12 +22,12 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
-  Sparkles,
-  Crop,
-  ShoppingCart,
+  AlertTriangle,
 } from 'lucide-react';
 import { Order, type OrderDrawingLink } from './types';
-import { canGenerateAiIsometric } from './lib/generateIsometricImage';
+import { describeIsometricView, purchaseRowKey } from './lib/reportViewMeta';
+import { checkRevisionDiscrepancy } from './lib/matching';
+import { makeOrderDrawingLinkKey, getReportDrawingSnapshot } from './lib/orderDrawingBridge';
 import { ToolcribLibraryPanel } from './components/ToolcribLibraryPanel';
 import { OdooOrdersPanel } from './components/OdooOrdersPanel';
 import { AppShell, type AppView } from './components/shell/AppShell';
@@ -37,6 +37,9 @@ import { ComprasPanel } from './components/ComprasPanel';
 import { EntregasSinOCPanel } from './components/EntregasSinOCPanel';
 import { CropAdjustModal } from './components/CropAdjustModal';
 import { QuickPurchaseModal } from './components/QuickPurchaseModal';
+import { ReportRowActions } from './components/ReportRowActions';
+import { ToolcribHistoryModal } from './components/ToolcribHistoryModal';
+import { StlViewerModal } from './components/StlViewerModal';
 import { formatAgeDays, getOrderAgeDays } from './lib/age';
 import { useVisionAnalysis } from './hooks/useVisionAnalysis';
 import { useToolcribCatalog } from './hooks/useToolcribCatalog';
@@ -98,8 +101,13 @@ export default function App() {
     numeroParte?: string;
     cantidad?: number | string;
     material?: string | null;
+    rowKey?: string;
   } | null>(null);
   const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
+  const [purchasedKeys, setPurchasedKeys] = useState<Set<string>>(() => new Set());
+  const [historyDrawing, setHistoryDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const [stlDrawing, setStlDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const biblioReturnViewRef = useRef<'odoo' | 'reporte'>('odoo');
 
   const vision = useVisionAnalysis();
   const catalog = useToolcribCatalog();
@@ -111,15 +119,43 @@ export default function App() {
   }, []);
 
   const handleSendToReport = useCallback(async (link: OrderDrawingLink) => {
-    await vision.seedFromBridgeLinks([link]);
+    const { errors } = await vision.seedFromBridgeLinks([link]);
     setActiveView('reporte');
+    // Auto-auditoría: el operador ya eligió "Reporte" en Órdenes.
+    if (errors.length === 0 || getReportDrawingSnapshot(link)) {
+      void vision.extractInfo();
+    }
   }, [vision]);
 
   const handleOpenBiblioteca = useCallback((query: string, linkKey: string) => {
+    biblioReturnViewRef.current = 'odoo';
     bridge.setPendingKey(linkKey);
     setBiblioSearchPrefill(query);
     setActiveView('biblioteca');
   }, [bridge]);
+
+  const handleVincularFromReport = useCallback((order: Order) => {
+    const so = order.orden.split('\n')[0] || 'report';
+    const key = makeOrderDrawingLinkKey(`report:${so}`, 0);
+    // Asegura un link de sesión para que upsertManual / alias funcionen.
+    bridge.resolveAndStore(
+      {
+        orderId: `report:${so}`,
+        lineIndex: 0,
+        soNumber: so,
+        poNumber: order.poNumber ?? '',
+        pieza: order.pieza,
+        numeroParte: order.numero_parte ?? '',
+        qtyPending: Number.parseFloat(order.cantidad.split('\n')[0]) || 0,
+      },
+      catalog.views,
+      catalog.signalsByDrawingId,
+    );
+    biblioReturnViewRef.current = 'reporte';
+    bridge.setPendingKey(key);
+    setBiblioSearchPrefill(order.numero_parte || order.pieza);
+    setActiveView('biblioteca');
+  }, [bridge, catalog.views, catalog.signalsByDrawingId]);
 
   const handleUseDrawingForPending = useCallback((view: ToolcribActiveDrawingView) => {
     const key = bridge.pendingKey;
@@ -127,10 +163,38 @@ export default function App() {
     const updated = bridge.upsertManual(key, view);
     bridge.setPendingKey(null);
     setBiblioSearchPrefill('');
+    const returnTo = biblioReturnViewRef.current;
+    biblioReturnViewRef.current = 'odoo';
+    if (updated && returnTo === 'reporte') {
+      void vision.seedFromBridgeLinks([updated]).then(() => {
+        setActiveView('reporte');
+        void vision.extractInfo();
+      });
+      return;
+    }
     if (updated) {
       setActiveView('odoo');
     }
-  }, [bridge]);
+  }, [bridge, vision]);
+
+  const resolveDrawingView = useCallback((order: Order): ToolcribActiveDrawingView | null => {
+    if (!order.matchedDrawingId) return null;
+    const fromCatalog = catalog.views.find((v) => v.drawingId === order.matchedDrawingId);
+    if (fromCatalog) return fromCatalog;
+    return {
+      drawingId: order.matchedDrawingId,
+      partId: order.matchedPartId ?? '',
+      partNumber: order.numero_parte || order.sourcePdfName || order.pieza,
+      revision: order.matchedDrawingRevision ?? '',
+      pdfUrl: null,
+      stlUrl: order.matchedStlUrl ?? null,
+      sourcePath: order.sourcePdfPath ?? order.sourcePdfName ?? '',
+      customer: 'SUPRAJIT',
+      description: order.pieza,
+      sourceType: 'storage',
+      effectiveFromUTC: null,
+    };
+  }, [catalog.views]);
 
   const pendingBibliotecaLink = bridge.pendingKey
     ? bridge.links[bridge.pendingKey] ?? null
@@ -166,14 +230,45 @@ export default function App() {
 
                 {/* 01 Pedidos */}
                 <div className="space-y-3">
-                  <StepLabel n="01" label="Órdenes Odoo" done={true} />
+                  <StepLabel
+                    n="01"
+                    label="Órdenes Odoo"
+                    done={vision.seededBridgeLinks.length > 0 || Boolean(vision.results)}
+                  />
                   <div className="min-h-[150px] border-2 border-line bg-surface-2 flex flex-col items-center justify-center p-6 relative">
                     <div className="text-center space-y-2">
                       <Database className="mx-auto w-10 h-10 text-accent" />
                       <p className="font-display font-black uppercase text-xs tracking-tight text-ink">Conexión a Odoo Activa</p>
-                      <p className="text-[9px] text-ink-dim font-mono uppercase">Las órdenes pendientes se obtendrán automáticamente al ejecutar la auditoría.</p>
+                      {vision.seededBridgeLinks.length > 0 ? (
+                        <p className="text-[9px] text-accent font-mono uppercase font-black">
+                          {vision.seededBridgeLinks.length} línea{vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes
+                          {vision.seededBridgeLinks.some((l) => {
+                            const snap = getReportDrawingSnapshot(l);
+                            return snap && (
+                              snap.partNumber.toLowerCase().includes('.iso') ||
+                              snap.sourcePath.toLowerCase().includes('.iso')
+                            );
+                          })
+                            ? ' · cara ISO eDrawings lista'
+                            : ''}
+                        </p>
+                      ) : (
+                        <p className="text-[9px] text-ink-dim font-mono uppercase">Las órdenes pendientes se obtendrán automáticamente al ejecutar la auditoría.</p>
+                      )}
                     </div>
                   </div>
+                  {vision.seedWarning && (
+                    <div className="border-2 border-warn bg-warn/10 p-3 flex items-start gap-2">
+                      <AlertTriangle size={14} className="text-warn shrink-0 mt-0.5" />
+                      <div className="grow min-w-0">
+                        <p className="font-mono text-[9px] uppercase tracking-widest text-warn font-black mb-1">Aviso al adjuntar</p>
+                        <p className="font-mono text-[10px] text-ink break-words">{vision.seedWarning}</p>
+                      </div>
+                      <button type="button" onClick={vision.clearSeedWarning} className="text-ink-dim hover:text-ink" title="Cerrar">
+                        <X size={12} />
+                      </button>
+                    </div>
+                  )}
                   {vision.seededBridgeLinks.length > 0 && (
                     <div className="border-2 border-accent/40 bg-accent/5 p-3 space-y-2">
                       <p className="font-mono text-[9px] uppercase tracking-widest text-accent font-black">
@@ -260,6 +355,8 @@ export default function App() {
                 >
                   {vision.isExtracting ? (
                     <><Loader2 className="w-5 h-5 animate-spin" /> Analizando…</>
+                  ) : vision.seededBridgeLinks.length > 0 ? (
+                    `Auditar ${vision.seededBridgeLinks.length} enviada${vision.seededBridgeLinks.length === 1 ? '' : 's'}`
                   ) : (
                     'Ejecutar Auditoría'
                   )}
@@ -301,13 +398,14 @@ export default function App() {
                       <button
                         onClick={vision.downloadCsv}
                         className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors"
-                        title="Descargar resultados como CSV (Excel)"
+                        title="Descargar dataset completo como CSV (ignora filtros de vista)"
                       >
                         CSV
                       </button>
                       <button
                         onClick={vision.downloadPdf}
                         className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5"
+                        title="Exportar PDF del dataset completo (ignora filtros de vista)"
                       >
                         Exportar Reporte (PDF)
                       </button>
@@ -327,20 +425,33 @@ export default function App() {
                         <Maximize2 className="text-line w-28 h-28" />
                         <FileText className="absolute inset-0 m-auto text-ink-dim w-10 h-10" />
                       </div>
-                      <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">Esperando Instrucciones</h3>
-                      <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px]">Presiona "Ejecutar Auditoría" — las órdenes se leen de Odoo automáticamente</p>
-                      <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl w-full">
-                        {[
-                          ['01', 'Las órdenes pendientes se leen de Odoo automáticamente.'],
-                          ['02', 'Usa el Auto-Matching o la Biblioteca para buscar planos.'],
-                          ['03', 'Presiona "Ejecutar" para que Vision AI audite las piezas.'],
-                        ].map(([n, text]) => (
-                          <div key={n} className="p-4 border-2 border-line bg-surface text-left">
-                            <p className="font-display font-black text-[11px] uppercase mb-1 text-accent">Paso {n}</p>
-                            <p className="text-[9px] font-mono text-ink-dim leading-tight">{text}</p>
+                      {vision.seededBridgeLinks.length > 0 ? (
+                        <>
+                          <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">
+                            {vision.seededBridgeLinks.length} lista{vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes
+                          </h3>
+                          <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px] max-w-lg">
+                            Planos adjuntos — pulsa &quot;Auditar {vision.seededBridgeLinks.length} enviada{vision.seededBridgeLinks.length === 1 ? '' : 's'}&quot; o espera si la auditoría ya arrancó sola.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">Esperando Instrucciones</h3>
+                          <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px]">Presiona &quot;Ejecutar Auditoría&quot; — las órdenes se leen de Odoo automáticamente</p>
+                          <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl w-full">
+                            {[
+                              ['01', 'Las órdenes pendientes se leen de Odoo automáticamente.'],
+                              ['02', 'Usa el Auto-Matching o la Biblioteca para buscar planos.'],
+                              ['03', 'Presiona "Ejecutar" para que Vision AI audite las piezas.'],
+                            ].map(([n, text]) => (
+                              <div key={n} className="p-4 border-2 border-line bg-surface text-left">
+                                <p className="font-display font-black text-[11px] uppercase mb-1 text-accent">Paso {n}</p>
+                                <p className="text-[9px] font-mono text-ink-dim leading-tight">{text}</p>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        </>
+                      )}
                     </motion.div>
                   )}
 
@@ -425,6 +536,7 @@ export default function App() {
                         </label>
                         <span className="text-[10px] font-mono text-ink-dim ml-auto">
                           {vision.filteredResults?.length ?? 0} / {vision.results.length}
+                          <span className="text-ink-dim/70"> · Vista · PDF/CSV exportan todo</span>
                         </span>
                       </div>
 
@@ -481,7 +593,18 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {(vision.filteredResults ?? vision.results).map((order, idx) => (
+                            {(vision.filteredResults ?? vision.results).map((order, idx) => {
+                              const rowKey = purchaseRowKey(order);
+                              const isPurchased = purchasedKeys.has(rowKey);
+                              const viewKind = describeIsometricView(order);
+                              const revCheck = order.matchedDrawingRevision
+                                ? checkRevisionDiscrepancy(
+                                    `${order.pieza} ${order.numero_parte ?? ''}`,
+                                    order.matchedDrawingRevision,
+                                  )
+                                : null;
+
+                              return (
                               <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
                                 <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
                                   <div className="grow">
@@ -497,6 +620,22 @@ export default function App() {
                                           {order.matchScore}% • REVISAR
                                         </span>
                                       )}
+                                      {viewKind === 'ISO eDrawings' && (
+                                        <span
+                                          className="bg-black text-white px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
+                                          title="Cara isométrica desde plano ISO (eDrawings / Tool Crib)"
+                                        >
+                                          ISO
+                                        </span>
+                                      )}
+                                      {viewKind === 'Recorte CAD' && (
+                                        <span
+                                          className="bg-zinc-200 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
+                                          title="Recorte del plano CAD 2D"
+                                        >
+                                          CAD
+                                        </span>
+                                      )}
                                       {order.isometricSource === 'ai-generated' && (
                                         <span
                                           className="bg-white text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
@@ -505,32 +644,57 @@ export default function App() {
                                           IA · NO ACOTAR
                                         </span>
                                       )}
+                                      {order.matchSource === 'alias' && (
+                                        <span
+                                          className="bg-emerald-100 text-emerald-900 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-emerald-700"
+                                          title="Plano resuelto por alias aprendido"
+                                        >
+                                          Alias
+                                        </span>
+                                      )}
+                                      {isPurchased && (
+                                        <span
+                                          className="bg-accent/15 text-accent px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-accent"
+                                          title="Requisición creada en esta sesión"
+                                        >
+                                          En Compras
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-[10px] text-gray-500 font-mono italic">
                                       {order.sourcePdfName || "Sin plano asociado"}
                                     </p>
+                                    {revCheck?.hasMismatch && (
+                                      <div
+                                        className="mt-1.5 inline-flex items-center gap-1.5 bg-amber-50 border border-amber-500 text-amber-900 font-mono text-[9px] font-bold px-2 py-0.5"
+                                        title={`Odoo pide Rev "${revCheck.orderRev}" pero el plano es Rev "${revCheck.drawingRev}".`}
+                                      >
+                                        <AlertTriangle size={11} className="shrink-0" />
+                                        <span>Rev {revCheck.orderRev} (plano {revCheck.drawingRev})</span>
+                                      </div>
+                                    )}
 
                                     {/* Metadatos técnicos extraídos del cajetín */}
                                     {(order.material || order.dureza || order.tratamiento || order.acabado) && (
                                       <div className="flex items-center gap-1.5 mt-2 flex-wrap font-mono text-[9px]">
                                         {order.material && (
                                           <span className="bg-zinc-100 text-zinc-800 border border-zinc-300 px-1.5 py-0.5 font-bold" title="Material especificado">
-                                            🔩 {order.material}
+                                            {order.material}
                                           </span>
                                         )}
                                         {order.dureza && (
                                           <span className="bg-amber-50 text-amber-900 border border-amber-300 px-1.5 py-0.5 font-bold" title="Dureza especificada">
-                                            ⚡ {order.dureza}
+                                            {order.dureza}
                                           </span>
                                         )}
                                         {order.tratamiento && (
                                           <span className="bg-orange-50 text-orange-900 border border-orange-300 px-1.5 py-0.5 font-bold" title="Tratamiento térmico">
-                                            🔥 {order.tratamiento}
+                                            {order.tratamiento}
                                           </span>
                                         )}
                                         {order.acabado && (
                                           <span className="bg-blue-50 text-blue-900 border border-blue-300 px-1.5 py-0.5 font-bold" title="Acabado superficial">
-                                            ✨ {order.acabado}
+                                            {order.acabado}
                                           </span>
                                         )}
                                       </div>
@@ -553,65 +717,38 @@ export default function App() {
                                       />
                                     </button>
                                   )}
-                                    <div className="flex items-center gap-1">
-                                      {order.sourceImageDataUrl && (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const resultIndex = vision.results?.indexOf(order) ?? -1;
-                                            if (resultIndex >= 0) {
-                                              setCropAdjustTarget({ order, resultIndex });
-                                            }
-                                          }}
-                                          title="Ajustar manualmente el encuadre / recorte del plano"
-                                          className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors"
-                                        >
-                                          <Crop size={11} />
-                                          Encuadre
-                                        </button>
-                                      )}
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setQuickPurchaseData({
-                                            soNumber: order.orden.split('\n')[0],
-                                            poNumber: order.poNumber,
-                                            pieza: order.pieza,
-                                            numeroParte: order.numero_parte,
-                                            cantidad: order.cantidad.split('\n')[0],
-                                            material: order.material,
-                                          });
-                                        }}
-                                        title="Requisitar material en Compras"
-                                        className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:border-accent hover:text-accent transition-colors"
-                                      >
-                                        <ShoppingCart size={11} />
-                                        Comprar
-                                      </button>
-                                      {canGenerateAiIsometric(order) && (
-                                        <button
-                                          type="button"
-                                          onClick={() => void vision.generateAiIsometricForOrder(order)}
-                                          disabled={
-                                            vision.isExtracting ||
-                                            vision.aiIsoGeneratingKey !== null
-                                          }
-                                          title={
-                                            order.isometricSource === 'ai-generated'
-                                              ? 'Regenerar vista 3D con IA desde el plano 2D'
-                                              : 'Generar vista 3D con IA desde el plano 2D (no usar para acotar)'
-                                          }
-                                          className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-accent hover:text-bg disabled:opacity-50"
-                                        >
-                                          {vision.isAiIsoGenerating(order) ? (
-                                            <Loader2 size={11} className="animate-spin" />
-                                          ) : (
-                                            <Sparkles size={11} />
-                                          )}
-                                          {order.isometricSource === 'ai-generated' ? 'Regen 3D' : '3D IA'}
-                                        </button>
-                                      )}
-                                    </div>
+                                    <ReportRowActions
+                                      order={order}
+                                      isExtracting={vision.isExtracting}
+                                      isAiGenerating={vision.isAiIsoGenerating(order)}
+                                      onEncuadre={() => {
+                                        const resultIndex = vision.results?.indexOf(order) ?? -1;
+                                        if (resultIndex >= 0) {
+                                          setCropAdjustTarget({ order, resultIndex });
+                                        }
+                                      }}
+                                      onComprar={() => {
+                                        setQuickPurchaseData({
+                                          soNumber: order.orden.split('\n')[0],
+                                          poNumber: order.poNumber,
+                                          pieza: order.pieza,
+                                          numeroParte: order.numero_parte,
+                                          cantidad: order.cantidad.split('\n')[0],
+                                          material: order.material,
+                                          rowKey,
+                                        });
+                                      }}
+                                      onAiIso={() => void vision.generateAiIsometricForOrder(order)}
+                                      onStl={() => {
+                                        const view = resolveDrawingView(order);
+                                        if (view?.stlUrl) setStlDrawing(view);
+                                      }}
+                                      onHistorial={() => {
+                                        const view = resolveDrawingView(order);
+                                        if (view) setHistoryDrawing(view);
+                                      }}
+                                      onVincular={() => handleVincularFromReport(order)}
+                                    />
                                   </div>
                                 </td>
 
@@ -671,7 +808,8 @@ export default function App() {
                                   )}
                                 </td>
                               </tr>
-                            ))}
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -865,9 +1003,25 @@ export default function App() {
         defaultData={quickPurchaseData}
         onClose={() => setQuickPurchaseData(null)}
         onSuccess={() => {
+          const key = quickPurchaseData?.rowKey;
+          if (key) {
+            setPurchasedKeys((prev) => new Set(prev).add(key));
+          }
           setPurchaseToast('✓ Requisición guardada con éxito en Compras.');
           setTimeout(() => setPurchaseToast(null), 4000);
         }}
+      />
+
+      <ToolcribHistoryModal
+        drawing={historyDrawing}
+        onClose={() => setHistoryDrawing(null)}
+      />
+
+      <StlViewerModal
+        open={stlDrawing !== null && Boolean(stlDrawing?.stlUrl)}
+        stlUrl={stlDrawing?.stlUrl ?? null}
+        title={stlDrawing ? `${stlDrawing.partNumber} · Rev ${stlDrawing.revision}` : ''}
+        onClose={() => setStlDrawing(null)}
       />
 
       {/* Toast de confirmación de compra */}
@@ -875,6 +1029,16 @@ export default function App() {
         <div className="fixed bottom-6 right-6 z-50 bg-[#0D2B4D] text-white border-2 border-accent shadow-hard px-4 py-2.5 font-mono text-xs flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <span className="text-accent font-bold">✓</span>
           <span>{purchaseToast}</span>
+          <button
+            type="button"
+            className="ml-2 underline text-accent hover:text-white"
+            onClick={() => {
+              setPurchaseToast(null);
+              setActiveView('compras');
+            }}
+          >
+            Ir a Compras
+          </button>
         </div>
       )}
     </>

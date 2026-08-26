@@ -179,6 +179,39 @@ export function buildIsoStlFileName(basePartNumber: string): string {
   return `${buildIsoPartNumber(basePartNumber)}.stl`;
 }
 
+/** Nombre de archivo del PDF acotado (CAD, sin sufijo `.ISO`). */
+export function buildCadPdfFileName(basePartNumber: string): string {
+  return `${basePartNumber.trim().toUpperCase().replace(/\.ISO$/i, '')}.pdf`;
+}
+
+export interface ParsedCadDrawingFileName {
+  /** Número de parte base (sin revisión embebida), mayúsculas. */
+  basePartNumber: string;
+  /** Revisión terminal `-REVx` o `_REVx`, si existía. */
+  embeddedRevision: string | null;
+}
+
+/**
+ * Parsea un basename de plano acotado SolidWorks (`.slddrw`).
+ * Es la fuente del PDF con cotas — distinta del modelo 3D (`.sldprt`/`.easm`)
+ * del que sale la isométrica.
+ */
+export function parseCadDrawingFileName(fileName: string): ParsedCadDrawingFileName | null {
+  const trimmed = fileName.trim();
+  const match = trimmed.match(/^(.+?)(?:[-_]REV([A-Z0-9]+))?\.slddrw$/i);
+  if (!match) {
+    return null;
+  }
+  const basePartNumber = match[1].trim().toUpperCase();
+  if (!basePartNumber) {
+    return null;
+  }
+  return {
+    basePartNumber,
+    embeddedRevision: match[2] ? match[2].toUpperCase() : null,
+  };
+}
+
 /**
  * Busca un companion raster junto al eDrawing (mismo stem).
  * Acepta `.jpg`, `.jpeg`, `.png`.

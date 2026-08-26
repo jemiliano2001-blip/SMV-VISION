@@ -14,7 +14,9 @@
     "toolcrib:bootstrap": "tsx scripts/toolcribBootstrap.ts",
     "toolcrib:dedupe": "tsx scripts/toolcribDedupeDrawings.ts",
     "toolcrib:dedupe:execute": "tsx scripts/toolcribDedupeDrawings.ts --execute",
-    "toolcrib:edrawings-iso": "tsx scripts/toolcribEdrawingsIso.ts"
+    "toolcrib:edrawings-iso": "tsx scripts/toolcribEdrawingsIso.ts",
+    "toolcrib:upload-stls": "tsx scripts/toolcribUploadStls.ts",
+    "toolcrib:audit": "tsx scripts/toolcribAudit.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

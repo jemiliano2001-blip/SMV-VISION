@@ -8,6 +8,7 @@
 
 import type { Order } from '../types';
 import { getOrderAgeDays } from './age';
+import { describeIsometricView } from './reportViewMeta';
 
 function escapeCsvCell(value: unknown): string {
   if (value === null || value === undefined) return '""';
@@ -59,7 +60,7 @@ export function generateOrdersCsv(orders: Order[]): string {
       escapeCsvCell(o.tratamiento || 'N/D'),
       escapeCsvCell(o.acabado || 'N/D'),
       escapeCsvCell(o.sourcePdfName || 'Sin plano'),
-      escapeCsvCell(o.isometricSource === 'ai-generated' ? 'IA Generado' : o.isometricView ? 'Recorte CAD/ISO' : 'Sin vista'),
+      escapeCsvCell(describeIsometricView(o)),
       escapeCsvCell(typeof o.matchScore === 'number' ? `${o.matchScore}%` : '—'),
     ].join(',');
   });

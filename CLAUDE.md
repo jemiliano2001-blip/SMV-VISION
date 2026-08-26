@@ -13,6 +13,9 @@ npm run test:watch   # Vitest in watch mode
 npm run toolcrib:bootstrap  # Populate Firestore catalog (see script docs below)
 npm run toolcrib:dedupe          # Detect duplicate drawings (dry-run)
 npm run toolcrib:dedupe:execute  # Remove duplicate drawings (writes to Firestore)
+npm run toolcrib:edrawings-iso   # ISO + CAD from CAD sources (eDrawings/SolidWorks) — see AGENTS.md
+npm run toolcrib:upload-stls     # Upload standalone exported STLs, match by identifier (not substring)
+npm run toolcrib:audit           # Read-only per-piece report: CAD/ISO/STL coverage in the catalog
 npm test -- matching             # Run a single test file by name pattern
 ```
 
@@ -186,7 +189,10 @@ Unit tests live in `src/lib/__tests__/`. Test coverage is light; core logic test
 ### Scripts
 
 `scripts/` contains catalog management scripts:
-- `scripts/toolcrib*.ts` — Tool Crib catalog management (upload PDFs, dedupe drawings, bootstrap).
+- `scripts/toolcrib*.ts` — Tool Crib catalog management (upload PDFs, dedupe drawings, bootstrap, upload STLs, audit).
+- `scripts/toolcribEdrawingsIso.ts` — CAD source (eDrawings/SolidWorks) → catalog. Produces both the ISO (isometric, from the 3D model) and the CAD (dimensioned plan, from a `.pdf` companion or a `.slddrw` export in flat mode) for each piece. See `AGENTS.md` → "Pipeline eDrawings" for the full contract.
+- `scripts/toolcrib/lib/` — plumbing shared across the toolcrib scripts above: `firestoreCatalog.ts` (docIds, Storage upload, part/drawing upsert-with-merge) and `stlMatch.ts` (STL↔drawing identifier matching, used by `toolcribUploadStls.ts`).
+- `scripts/edrawings/` — the native eDrawings exporter: `Export-EDrawings.ps1` (PowerShell, drives the `EDrawingOfficeAutomator.Document` COM automation with a real event bridge) and `exporterAdapter.ts` (Node adapter: command building, JPEG-reuse/resume, provenance sidecars).
 
 The `functions/` directory contains Cloud Functions V2. Source of truth is `functions/src/index.ts` (TypeScript, compiled to the gitignored `functions/lib/` via `npm --prefix functions run build`; `firebase deploy` runs it automatically via the `predeploy` hook in `firebase.json`). Exports: `triggerOdooSync` (callable, requires `request.auth`; powers the Refrescar button) and `syncSuprajitOrders` (schedule cada 30 min). Note: la función escribe `odooSaleOrders`, `workOrders` y `syncMeta/odoo`.
 

@@ -2,19 +2,21 @@
  * Inventario/exportador de fuentes CAD para las isometricas de Tool Crib.
  * El dry-run es offline: no carga ni inicializa Firebase Admin.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve as resolvePath } from 'node:path';
 import { argv } from 'node:process';
 
 import {
+  buildCadPdfFileName,
   buildIsoPartNumber,
   buildIsoPdfFileName,
   buildIsoStlFileName,
   EDRAWINGS_ISO_REVISION,
   isCadSourceCandidateFile,
   isExcludedCadSourceRelativePath,
+  parseCadDrawingFileName,
   parseCadSourceFileName,
   rankCadSourceCandidates,
   resolveCompanionImagePath,
@@ -29,10 +31,17 @@ import {
   runCadExporter,
   writeJpegProvenance,
 } from './edrawings/exporterAdapter';
+import {
+  buildDrawingDocId,
+  buildPartDocId,
+  uploadCatalogBytes,
+  upsertCatalogDrawing,
+  upsertCatalogPart,
+  type FirebaseCatalogContext,
+} from './toolcrib/lib/firestoreCatalog';
 
-const PARTS_COLLECTION = 'toolcribParts';
-const DRAWINGS_COLLECTION = 'toolcribDrawings';
 const CREATED_BY_UID = 'edrawings-iso-v1';
+const CREATED_BY_UID_CAD = 'edrawings-cad-v1';
 const MANIFEST_SCHEMA_VERSION = 1;
 
 interface CliOptions {
@@ -46,6 +55,8 @@ interface CliOptions {
   limit: number | null;
   includeUnpaired: boolean;
   includeStl: boolean;
+  /** Omite el plano acotado (CAD): solo procesa la isométrica. */
+  skipCad: boolean;
   dryRun: boolean;
 }
 
@@ -88,6 +99,10 @@ interface DiscoveredCadSource {
   processingStatus: ProcessingStatus;
   processingMessage: string | null;
   exportDiagnostics: string | null;
+  /** Estado del plano acotado (CAD) de esta pieza — independiente de la isométrica. */
+  cadProcessingStatus: ProcessingStatus;
+  cadProcessingMessage: string | null;
+  cadExportDiagnostics: string | null;
 }
 
 type NonselectionReason =
@@ -120,6 +135,14 @@ interface ManifestSummary {
   uploaded: number;
   skipped: number;
   failed: number;
+  /** Contadores del plano acotado (CAD) — independientes de la isométrica. */
+  cadInventoryOnly: number;
+  cadDryRunReady: number;
+  cadUploaded: number;
+  cadSkipped: number;
+  cadFailed: number;
+  /** Piezas con `.slddrw` pero sin modelo 3D — CAD posible, ISO no. */
+  cadOnlySourcesFound: number;
 }
 
 interface ImportManifest {
@@ -134,12 +157,14 @@ interface ImportManifest {
     dryRun: boolean | null;
     includeUnpaired: boolean | null;
     includeStl: boolean | null;
+    skipCad: boolean | null;
     limit: number | null;
   };
   summary: ManifestSummary;
   excludedSourceCounts: ExcludedSourceCounts;
   selectedCandidates: DiscoveredCadSource[];
   nonselectedUsableCandidates: NonselectedCandidate[];
+  cadOnlySources: CadOnlySource[];
   fatalErrorCategory: PublicErrorCategory | null;
   fatalError: string | null;
 }
@@ -172,11 +197,7 @@ interface DiscoveryResult {
   excludedSourceCounts: ExcludedSourceCounts;
 }
 
-interface FirebaseContext {
-  db: import('firebase-admin/firestore').Firestore;
-  getStorage: typeof import('firebase-admin/storage').getStorage;
-  FieldValue: typeof import('firebase-admin/firestore').FieldValue;
-}
+type FirebaseContext = FirebaseCatalogContext;
 
 function parsePositiveInteger(raw: string, name: string): number {
   if (!/^\d+$/.test(raw)) {
@@ -218,6 +239,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
   let limit: number | null = null;
   let includeUnpaired = false;
   let includeStl = false;
+  let skipCad = false;
   let dryRun = false;
 
   for (const arg of args) {
@@ -231,6 +253,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
     else if (arg.startsWith('--limit=')) limit = parsePositiveInteger(arg.slice('--limit='.length), '--limit');
     else if (arg === '--includeUnpaired') includeUnpaired = true;
     else if (arg === '--includeStl') includeStl = true;
+    else if (arg === '--skipCad') skipCad = true;
     else if (arg === '--dryRun' || arg === '--dry-run') dryRun = true;
   }
   if (!scanPath) {
@@ -247,6 +270,7 @@ function parseCliOptions(args: readonly string[]): CliOptions {
     manifestPath: manifestPath ? resolvePath(manifestPath) : null,
     limit,
     includeUnpaired,
+    skipCad,
     includeStl,
     dryRun,
   };
@@ -361,12 +385,91 @@ async function discoverCadSources(options: CliOptions): Promise<DiscoveryResult>
         processingStatus: 'pending',
         processingMessage: null,
         exportDiagnostics: null,
+        cadProcessingStatus: 'pending',
+        cadProcessingMessage: null,
+        cadExportDiagnostics: null,
       });
     }
   }
 
   await walk(options.scanPath);
   return { discoveredSourceFiles, usableCandidates, excludedSourceCounts };
+}
+
+/**
+ * Pieza que tiene plano acotado (`.slddrw`, opcionalmente con `.pdf`
+ * companion) pero NINGÚN modelo 3D (`.sldprt`/`.easm`/`.eprt`) en el scan —
+ * invisible para `discoverCadSources` porque esa función solo camina a
+ * partir de archivos de modelo. Sin modelo no hay ISO posible para esta
+ * pieza, pero sí puede tener CAD.
+ */
+interface CadOnlySource {
+  relativePath: string;
+  basePartNumber: string;
+  embeddedRevision: string | null;
+  companions: { pdf: CompanionPath | null; slddrw: CompanionPath | null };
+  cadProcessingStatus: ProcessingStatus;
+  cadProcessingMessage: string | null;
+  cadExportDiagnostics: string | null;
+}
+
+/**
+ * Nota sobre `--limit`: a diferencia de `selectCandidates` (que acota los
+ * candidatos ISO por modelo 3D), esta función no respeta `--limit` — el CAD
+ * huérfano es una corrida aparte y barata (no compite por el cupo del
+ * batch de isométricas).
+ */
+async function discoverCadOnlySources(
+  options: CliOptions,
+  alreadyCoveredBaseNumbers: ReadonlySet<string>,
+): Promise<CadOnlySource[]> {
+  const bySlddrwBase = new Map<string, { relativePath: string; absolutePath: string; embeddedRevision: string | null }>();
+
+  async function walk(current: string): Promise<void> {
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of [...entries].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))) {
+      const absolutePath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const parsed = parseCadDrawingFileName(entry.name);
+      if (!parsed) continue;
+      const relativePath = normalizeRelativePath(relative(options.scanPath, absolutePath));
+      if (isExcludedCadSourceRelativePath(relativePath)) continue;
+      if (alreadyCoveredBaseNumbers.has(parsed.basePartNumber)) continue;
+      if (bySlddrwBase.has(parsed.basePartNumber)) continue; // primer .slddrw encontrado gana
+      bySlddrwBase.set(parsed.basePartNumber, {
+        relativePath,
+        absolutePath: resolvePath(absolutePath),
+        embeddedRevision: parsed.embeddedRevision,
+      });
+    }
+  }
+  await walk(options.scanPath);
+
+  const results: CadOnlySource[] = [];
+  for (const [basePartNumber, slddrw] of bySlddrwBase) {
+    const dir = dirname(slddrw.absolutePath);
+    const directoryNames = (await readdir(dir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name);
+    const pdfPath = findSameStemCompanion(slddrw.absolutePath, directoryNames, ['.pdf']);
+    results.push({
+      relativePath: slddrw.relativePath,
+      basePartNumber,
+      embeddedRevision: slddrw.embeddedRevision,
+      companions: {
+        pdf: pdfPath ? toManifestPath(options.scanPath, pdfPath) : null,
+        slddrw: toManifestPath(options.scanPath, slddrw.absolutePath),
+      },
+      cadProcessingStatus: 'pending',
+      cadProcessingMessage: null,
+      cadExportDiagnostics: null,
+    });
+  }
+  return results;
 }
 
 function selectCandidates(
@@ -436,6 +539,12 @@ function emptySummary(): ManifestSummary {
     uploaded: 0,
     skipped: 0,
     failed: 0,
+    cadInventoryOnly: 0,
+    cadDryRunReady: 0,
+    cadUploaded: 0,
+    cadSkipped: 0,
+    cadFailed: 0,
+    cadOnlySourcesFound: 0,
   };
 }
 
@@ -452,6 +561,7 @@ function createManifest(options: CliOptions): ImportManifest {
       dryRun: options.dryRun,
       includeUnpaired: options.includeUnpaired,
       includeStl: options.includeStl,
+      skipCad: options.skipCad,
       limit: options.limit,
     },
     summary: emptySummary(),
@@ -464,6 +574,7 @@ function createManifest(options: CliOptions): ImportManifest {
     },
     selectedCandidates: [],
     nonselectedUsableCandidates: [],
+    cadOnlySources: [],
     fatalErrorCategory: null,
     fatalError: null,
   };
@@ -482,6 +593,7 @@ function createStartupManifest(args: readonly string[]): ImportManifest {
       dryRun: args.includes('--dryRun') || args.includes('--dry-run'),
       includeUnpaired: args.includes('--includeUnpaired'),
       includeStl: args.includes('--includeStl'),
+      skipCad: args.includes('--skipCad'),
       limit: null,
     },
     summary: emptySummary(),
@@ -494,6 +606,7 @@ function createStartupManifest(args: readonly string[]): ImportManifest {
     },
     selectedCandidates: [],
     nonselectedUsableCandidates: [],
+    cadOnlySources: [],
     fatalErrorCategory: null,
     fatalError: null,
   };
@@ -505,12 +618,32 @@ function refreshProcessingSummary(manifest: ImportManifest): void {
   manifest.summary.uploaded = 0;
   manifest.summary.skipped = 0;
   manifest.summary.failed = 0;
+  manifest.summary.cadInventoryOnly = 0;
+  manifest.summary.cadDryRunReady = 0;
+  manifest.summary.cadUploaded = 0;
+  manifest.summary.cadSkipped = 0;
+  manifest.summary.cadFailed = 0;
   for (const candidate of manifest.selectedCandidates) {
     if (candidate.processingStatus === 'inventory-only') manifest.summary.inventoryOnly += 1;
     else if (candidate.processingStatus === 'dry-run-ready') manifest.summary.dryRunReady += 1;
     else if (candidate.processingStatus === 'uploaded') manifest.summary.uploaded += 1;
     else if (candidate.processingStatus === 'skipped') manifest.summary.skipped += 1;
     else if (candidate.processingStatus === 'failed') manifest.summary.failed += 1;
+
+    if (candidate.cadProcessingStatus === 'inventory-only') manifest.summary.cadInventoryOnly += 1;
+    else if (candidate.cadProcessingStatus === 'dry-run-ready') manifest.summary.cadDryRunReady += 1;
+    else if (candidate.cadProcessingStatus === 'uploaded') manifest.summary.cadUploaded += 1;
+    else if (candidate.cadProcessingStatus === 'skipped') manifest.summary.cadSkipped += 1;
+    else if (candidate.cadProcessingStatus === 'failed') manifest.summary.cadFailed += 1;
+  }
+
+  manifest.summary.cadOnlySourcesFound = manifest.cadOnlySources.length;
+  for (const item of manifest.cadOnlySources) {
+    if (item.cadProcessingStatus === 'inventory-only') manifest.summary.cadInventoryOnly += 1;
+    else if (item.cadProcessingStatus === 'dry-run-ready') manifest.summary.cadDryRunReady += 1;
+    else if (item.cadProcessingStatus === 'uploaded') manifest.summary.cadUploaded += 1;
+    else if (item.cadProcessingStatus === 'skipped') manifest.summary.cadSkipped += 1;
+    else if (item.cadProcessingStatus === 'failed') manifest.summary.cadFailed += 1;
   }
 }
 
@@ -568,26 +701,6 @@ async function initializeFirebase(options: CliOptions): Promise<FirebaseContext>
       'No se pudo inicializar Firebase para el modo productivo.',
     );
   }
-}
-
-function buildPartDocId(customer: string, partNumber: string): string {
-  const digest = createHash('sha1')
-    .update(`${customer.toUpperCase()}::${partNumber.toUpperCase()}`)
-    .digest('hex')
-    .slice(0, 16);
-  return `part_${digest}`;
-}
-
-function buildDrawingDocId(partId: string, revision: string): string {
-  const digest = createHash('sha1')
-    .update(`${partId}::${revision.toUpperCase()}`)
-    .digest('hex')
-    .slice(0, 20);
-  return `drw_${digest}`;
-}
-
-function buildFirebaseStorageUrl(bucket: string, path: string, token: string): string {
-  return `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodeURIComponent(path)}?alt=media&token=${token}`;
 }
 
 function tryExportWithExporter(
@@ -648,21 +761,6 @@ function resolveImageForItem(
     : null;
 }
 
-async function uploadBytes(
-  firebase: FirebaseContext,
-  storagePath: string,
-  bytes: Buffer | Uint8Array,
-  contentType: string,
-): Promise<string> {
-  const bucket = firebase.getStorage().bucket();
-  const token = randomUUID();
-  await bucket.file(storagePath).save(Buffer.from(bytes), {
-    contentType,
-    metadata: { metadata: { firebaseStorageDownloadTokens: token } },
-  });
-  return buildFirebaseStorageUrl(bucket.name, storagePath, token);
-}
-
 async function upsertIsoDrawing(params: {
   firebase: FirebaseContext;
   customer: string;
@@ -676,33 +774,23 @@ async function upsertIsoDrawing(params: {
   const pdfBytes = await readFile(pdfLocalPath);
   const checksum = createHash('sha256').update(pdfBytes).digest('hex');
   const pdfStoragePath = `tool-crib/${customer}/${buildIsoPdfFileName(item.basePartNumber)}`;
-  const pdfUrl = await uploadBytes(firebase, pdfStoragePath, pdfBytes, 'application/pdf');
+  const pdfUrl = await uploadCatalogBytes(firebase, pdfStoragePath, pdfBytes, 'application/pdf');
   let stlUrl: string | null | undefined;
   if (stlLocalPath === null) stlUrl = null;
   if (stlLocalPath) {
     const stlBytes = await readFile(stlLocalPath);
     const path = `tool-crib/${customer}/${buildIsoStlFileName(item.basePartNumber)}`;
-    stlUrl = await uploadBytes(firebase, path, stlBytes, 'model/stl');
+    stlUrl = await uploadCatalogBytes(firebase, path, stlBytes, 'model/stl');
   }
 
-  const partRef = firebase.db.collection(PARTS_COLLECTION).doc(partId);
-  const partExisting = await partRef.get();
-  const partPayload = {
+  await upsertCatalogPart(firebase, partId, {
     partNumber: item.isoPartNumber,
     customer,
     description: `ISO export CAD (${item.basePartNumber})`,
     status: 'active' as const,
     updatedAtUTC: firebase.FieldValue.serverTimestamp(),
-  };
-  await partRef.set(
-    partExisting.exists
-      ? partPayload
-      : { ...partPayload, createdAtUTC: firebase.FieldValue.serverTimestamp() },
-    { merge: partExisting.exists },
-  );
+  });
 
-  const drawingRef = firebase.db.collection(DRAWINGS_COLLECTION).doc(drawingId);
-  const drawingExisting = await drawingRef.get();
   const drawingPayload: Record<string, unknown> = {
     partId,
     revision: EDRAWINGS_ISO_REVISION,
@@ -714,27 +802,166 @@ async function upsertIsoDrawing(params: {
     effectiveFromUTC: null,
   };
   if (stlUrl !== undefined) drawingPayload.stlUrl = stlUrl;
-  await drawingRef.set(
-    drawingExisting.exists
-      ? drawingPayload
-      : {
-          ...drawingPayload,
-          createdAtUTC: firebase.FieldValue.serverTimestamp(),
-          createdByUid: CREATED_BY_UID,
-        },
-    { merge: drawingExisting.exists },
-  );
+  await upsertCatalogDrawing(firebase, drawingId, partId, drawingPayload, CREATED_BY_UID);
+}
 
-  const activeDrawings = await firebase.db
-    .collection(DRAWINGS_COLLECTION)
-    .where('partId', '==', partId)
-    .where('isActive', '==', true)
-    .get();
-  const batch = firebase.db.batch();
-  activeDrawings.forEach((docSnap) => {
-    if (docSnap.id !== drawingId) batch.set(docSnap.ref, { isActive: false }, { merge: true });
+type CadPdfResolution =
+  | { kind: 'existing-companion-pdf'; pdfPath: string }
+  | { kind: 'exported-from-slddrw'; jpegPath: string };
+
+/**
+ * Forma mínima que necesita el flujo CAD — satisfecha estructuralmente por
+ * `DiscoveredCadSource` (pieza con modelo 3D) y por `CadOnlySource` (pieza
+ * sin modelo, solo plano acotado). El CAD no depende de si hay ISO o no.
+ */
+interface CadSourceLike {
+  basePartNumber: string;
+  embeddedRevision: string | null;
+  companions: { pdf: CompanionPath | null; slddrw: CompanionPath | null };
+  cadExportDiagnostics: string | null;
+}
+
+/**
+ * Resuelve la fuente del plano acotado (CAD) de una pieza: un PDF companion
+ * real (ya dimensionado, junto al modelo 3D) si existe, o el `.slddrw`
+ * companion exportado en modo `flat` (sin isométrica forzada). A diferencia
+ * de la isométrica, el CAD no tiene fallback IA — sin uno de estos dos,
+ * la pieza queda sin plano acotado en el catálogo.
+ */
+function resolveCadSourceForItem(
+  item: CadSourceLike,
+  exporterPath: string | null,
+  workRoot: string,
+): CadPdfResolution | null {
+  if (item.companions.pdf) {
+    return { kind: 'existing-companion-pdf', pdfPath: item.companions.pdf.absolutePath };
+  }
+  if (!item.companions.slddrw) {
+    return null;
+  }
+
+  // Subcarpeta propia: el .slddrw casi siempre comparte stem con el modelo 3D
+  // (p.ej. "273-17-04167.SLDPRT" + "273-17-04167.SLDDRW"), y el exportador
+  // nombra su salida por ese stem — sin este aislamiento, el JPEG/sidecar del
+  // CAD y el de la ISO se pisarían entre sí en el mismo directorio.
+  const outDir = join(workRoot, item.basePartNumber, 'cad');
+  const sourceStem = basename(item.companions.slddrw.absolutePath, extname(item.companions.slddrw.absolutePath));
+  const reusableJpegPath = join(outDir, `${sourceStem}.jpg`);
+  if (canReuseExistingJpeg({ sourcePath: item.companions.slddrw.absolutePath, jpegPath: reusableJpegPath, includeStl: false })) {
+    item.cadExportDiagnostics = 'resume=reused-existing-cad-jpg';
+    console.info(`[resume] ${item.basePartNumber} (CAD) <- ${reusableJpegPath}`);
+    return { kind: 'exported-from-slddrw', jpegPath: reusableJpegPath };
+  }
+  if (!exporterPath) return null;
+
+  mkdirSync(outDir, { recursive: true });
+  const ps1 = resolvePath(join('scripts', 'edrawings', 'Export-EDrawings.ps1'));
+  const attempt = runCadExporter({
+    exporter: exporterPath,
+    nativeScriptPath: ps1,
+    inputFile: item.companions.slddrw.absolutePath,
+    outDir,
+    formats: ['.jpg'],
+    viewMode: 'flat',
   });
-  await batch.commit();
+  item.cadExportDiagnostics = attempt.diagnostics;
+  if (!attempt.ok || !attempt.jpgPath) {
+    console.warn(`[exporter-cad] ${item.companions.slddrw.relativePath}: ${attempt.diagnostics}`);
+    return null;
+  }
+  try {
+    writeJpegProvenance(item.companions.slddrw.absolutePath, attempt.jpgPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    item.cadExportDiagnostics = `${attempt.diagnostics} | provenance_warning=${message}`;
+    console.warn(`[provenance-cad] ${item.companions.slddrw.relativePath}: ${message}`);
+  }
+  return { kind: 'exported-from-slddrw', jpegPath: attempt.jpgPath };
+}
+
+async function upsertCadDrawing(params: {
+  firebase: FirebaseContext;
+  customer: string;
+  item: CadSourceLike;
+  pdfLocalPath: string;
+}): Promise<void> {
+  const { firebase, customer, item, pdfLocalPath } = params;
+  const partId = buildPartDocId(customer, item.basePartNumber);
+  const revision = item.embeddedRevision ?? 'CAD';
+  const drawingId = buildDrawingDocId(partId, revision);
+  const pdfBytes = await readFile(pdfLocalPath);
+  const checksum = createHash('sha256').update(pdfBytes).digest('hex');
+  const pdfStoragePath = `tool-crib/${customer}/${buildCadPdfFileName(item.basePartNumber)}`;
+  const pdfUrl = await uploadCatalogBytes(firebase, pdfStoragePath, pdfBytes, 'application/pdf');
+
+  await upsertCatalogPart(firebase, partId, {
+    partNumber: item.basePartNumber,
+    customer,
+    description: `CAD (${item.basePartNumber})`,
+    status: 'active' as const,
+    updatedAtUTC: firebase.FieldValue.serverTimestamp(),
+  });
+
+  await upsertCatalogDrawing(firebase, drawingId, partId, {
+    partId,
+    revision,
+    isActive: true,
+    sourceType: 'storage',
+    sourcePath: pdfLocalPath,
+    pdfUrl,
+    checksumSha256: checksum,
+    effectiveFromUTC: null,
+  }, CREATED_BY_UID_CAD);
+}
+
+/** CAD para piezas sin modelo 3D — mismo resolve/upsert que el flujo normal, sin rama ISO. */
+async function processCadOnlySources(
+  options: CliOptions,
+  items: CadOnlySource[],
+  workRoot: string,
+  firebase: FirebaseContext | null,
+): Promise<void> {
+  for (const item of items) {
+    try {
+      const cadResolution = resolveCadSourceForItem(item, options.exporterPath, workRoot);
+      if (!cadResolution) {
+        item.cadProcessingStatus = options.dryRun ? 'inventory-only' : 'skipped';
+        item.cadProcessingMessage = options.exporterPath
+          ? 'El exportador no produjo un raster utilizable para el plano acotado.'
+          : 'Hay .slddrw pero no companion .pdf ni exportador; CAD conservado como inventario.';
+        console.info(`[${item.cadProcessingStatus}-cad-only] ${item.basePartNumber} <- ${item.relativePath}`);
+        continue;
+      }
+
+      const cadOutDir = join(workRoot, item.basePartNumber);
+      mkdirSync(cadOutDir, { recursive: true });
+      const cadPdfLocalPath = join(cadOutDir, buildCadPdfFileName(item.basePartNumber));
+      if (cadResolution.kind === 'existing-companion-pdf') {
+        await copyFile(cadResolution.pdfPath, cadPdfLocalPath);
+      } else {
+        await writeFile(cadPdfLocalPath, await wrapImageFileAsPdfBytes(cadResolution.jpegPath));
+      }
+
+      if (options.dryRun) {
+        item.cadProcessingStatus = 'dry-run-ready';
+        item.cadProcessingMessage = cadResolution.kind === 'existing-companion-pdf'
+          ? 'PDF local copiado desde companion existente; Firebase no fue cargado.'
+          : 'PDF local generado desde plano acotado (.slddrw); Firebase no fue cargado.';
+      } else {
+        if (!firebase) throw new Error('Firebase no fue inicializado para modo produccion.');
+        await upsertCadDrawing({ firebase, customer: options.customer, item, pdfLocalPath: cadPdfLocalPath });
+        item.cadProcessingStatus = 'uploaded';
+        item.cadProcessingMessage = cadResolution.kind === 'existing-companion-pdf'
+          ? 'CAD (PDF companion existente) procesado.'
+          : 'CAD (plano acotado exportado desde .slddrw) procesado.';
+      }
+      console.info(`[${item.cadProcessingStatus}-cad-only] ${item.basePartNumber} <- ${item.relativePath}`);
+    } catch (error) {
+      item.cadProcessingStatus = 'failed';
+      item.cadProcessingMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[fail-cad-only] ${item.basePartNumber}: ${item.cadProcessingMessage}`);
+    }
+  }
 }
 
 async function processSelectedCandidates(options: CliOptions, selected: DiscoveredCadSource[]): Promise<void> {
@@ -755,8 +982,7 @@ async function processSelectedCandidates(options: CliOptions, selected: Discover
           ? 'El exportador no produjo un raster utilizable.'
           : 'Sin raster companion ni exportador; candidato conservado como inventario.';
         console.info(`[${item.processingStatus}] ${item.isoPartNumber} <- ${item.relativePath}`);
-        continue;
-      }
+      } else {
       const { imagePath, exportedStlPath } = resolvedImage;
 
       const pdfOutDir = join(workRoot, item.basePartNumber);
@@ -780,10 +1006,56 @@ async function processSelectedCandidates(options: CliOptions, selected: Discover
             : 'PDF procesado; sin STL.';
       }
       console.info(`[${item.processingStatus}] ${item.isoPartNumber} <- ${item.relativePath}`);
+      }
     } catch (error) {
       item.processingStatus = 'failed';
       item.processingMessage = error instanceof Error ? error.message : String(error);
       console.error(`[fail] ${item.basePartNumber}: ${item.processingMessage}`);
+    }
+
+    // Plano acotado (CAD) — independiente de la isométrica: una pieza puede
+    // tener ISO sin CAD (sin .slddrw ni PDF companion en el scan) o viceversa.
+    if (options.skipCad) continue;
+    try {
+      const cadResolution = resolveCadSourceForItem(item, options.exporterPath, workRoot);
+      if (!cadResolution) {
+        item.cadProcessingStatus = options.dryRun ? 'inventory-only' : 'skipped';
+        item.cadProcessingMessage = item.companions.slddrw
+          ? (options.exporterPath
+              ? 'El exportador no produjo un raster utilizable para el plano acotado.'
+              : 'Hay .slddrw pero no companion .pdf ni exportador; CAD conservado como inventario.')
+          : 'Sin companion .pdf ni .slddrw; esta pieza no tiene plano acotado en el scan.';
+        console.info(`[${item.cadProcessingStatus}-cad] ${item.basePartNumber} <- ${item.relativePath}`);
+        continue;
+      }
+
+      const cadOutDir = join(workRoot, item.basePartNumber);
+      mkdirSync(cadOutDir, { recursive: true });
+      const cadPdfLocalPath = join(cadOutDir, buildCadPdfFileName(item.basePartNumber));
+      if (cadResolution.kind === 'existing-companion-pdf') {
+        await copyFile(cadResolution.pdfPath, cadPdfLocalPath);
+      } else {
+        await writeFile(cadPdfLocalPath, await wrapImageFileAsPdfBytes(cadResolution.jpegPath));
+      }
+
+      if (options.dryRun) {
+        item.cadProcessingStatus = 'dry-run-ready';
+        item.cadProcessingMessage = cadResolution.kind === 'existing-companion-pdf'
+          ? 'PDF local copiado desde companion existente; Firebase no fue cargado.'
+          : 'PDF local generado desde plano acotado (.slddrw); Firebase no fue cargado.';
+      } else {
+        if (!firebase) throw new Error('Firebase no fue inicializado para modo produccion.');
+        await upsertCadDrawing({ firebase, customer: options.customer, item, pdfLocalPath: cadPdfLocalPath });
+        item.cadProcessingStatus = 'uploaded';
+        item.cadProcessingMessage = cadResolution.kind === 'existing-companion-pdf'
+          ? 'CAD (PDF companion existente) procesado.'
+          : 'CAD (plano acotado exportado desde .slddrw) procesado.';
+      }
+      console.info(`[${item.cadProcessingStatus}-cad] ${item.basePartNumber} <- ${item.relativePath}`);
+    } catch (error) {
+      item.cadProcessingStatus = 'failed';
+      item.cadProcessingMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[fail-cad] ${item.basePartNumber}: ${item.cadProcessingMessage}`);
     }
   }
 }
@@ -822,6 +1094,18 @@ async function run(): Promise<void> {
         `excluded=${discovery.excludedSourceCounts.total}`,
     );
     await processSelectedCandidates(options, selection.selected);
+
+    if (!options.skipCad) {
+      const coveredBaseNumbers = new Set(selection.selected.map((candidate) => candidate.basePartNumber));
+      const cadOnlySources = await discoverCadOnlySources(options, coveredBaseNumbers);
+      manifest.cadOnlySources = cadOnlySources;
+      if (cadOnlySources.length > 0) {
+        console.info(`[toolcribEdrawingsIso] CAD-only (sin modelo 3D): ${cadOnlySources.length} encontradas`);
+        const workRoot = options.workDir ?? join(options.scanPath, '_iso_export');
+        const firebaseForCadOnly = !options.dryRun ? await initializeFirebase(options) : null;
+        await processCadOnlySources(options, cadOnlySources, workRoot, firebaseForCadOnly);
+      }
+    }
   } catch (error) {
     const failure = toPublicFailure(error);
     manifest.fatalErrorCategory = failure.category;
@@ -838,6 +1122,13 @@ async function run(): Promise<void> {
       `ready=${manifest.summary.dryRunReady} uploaded=${manifest.summary.uploaded} ` +
       `skipped=${manifest.summary.skipped} failed=${manifest.summary.failed}`,
   );
+  if (!options.skipCad) {
+    console.info(
+      `[toolcribEdrawingsIso] CAD (incl. ${manifest.summary.cadOnlySourcesFound} sin modelo 3D): ` +
+        `inventoryOnly=${manifest.summary.cadInventoryOnly} ready=${manifest.summary.cadDryRunReady} ` +
+        `uploaded=${manifest.summary.cadUploaded} skipped=${manifest.summary.cadSkipped} failed=${manifest.summary.cadFailed}`,
+    );
+  }
 }
 
 run().catch((error: unknown) => {

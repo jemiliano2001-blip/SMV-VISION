@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCadPdfFileName,
   buildIsoPartNumber,
   buildIsoPdfFileName,
   compareCadSourceCandidates,
   isCadSourceCandidateFile,
   isCadSourceExtension,
   isExcludedCadSourceRelativePath,
+  parseCadDrawingFileName,
   parseEDrawingFileName,
   parseCadSourceFileName,
   rankCadSourceCandidates,
@@ -131,5 +133,40 @@ describe('buildIsoPartNumber', () => {
 
   it('names pdf with .ISO in the stem', () => {
     expect(buildIsoPdfFileName('ABC-123').toLowerCase()).toContain('.iso.pdf');
+  });
+});
+
+describe('buildCadPdfFileName', () => {
+  it('names the CAD pdf without an .ISO suffix', () => {
+    expect(buildCadPdfFileName('ABC-123')).toBe('ABC-123.pdf');
+  });
+
+  it('strips a stray .ISO suffix so CAD and ISO share the same base part number', () => {
+    expect(buildCadPdfFileName('abc-123.iso')).toBe('ABC-123.pdf');
+  });
+});
+
+describe('parseCadDrawingFileName', () => {
+  it('parses a bare .slddrw', () => {
+    expect(parseCadDrawingFileName('90-1012-05.slddrw')).toEqual({
+      basePartNumber: '90-1012-05',
+      embeddedRevision: null,
+    });
+  });
+
+  it('extracts a terminal -REVx / _REVx suffix', () => {
+    expect(parseCadDrawingFileName('PART-REVA.SLDDRW')).toEqual({
+      basePartNumber: 'PART',
+      embeddedRevision: 'A',
+    });
+    expect(parseCadDrawingFileName('PART_REV2.slddrw')).toEqual({
+      basePartNumber: 'PART',
+      embeddedRevision: '2',
+    });
+  });
+
+  it('rejects non-slddrw extensions', () => {
+    expect(parseCadDrawingFileName('PART.sldprt')).toBeNull();
+    expect(parseCadDrawingFileName('PART.pdf')).toBeNull();
   });
 });

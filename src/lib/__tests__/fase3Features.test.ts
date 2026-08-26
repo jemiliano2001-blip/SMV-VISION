@@ -72,6 +72,7 @@ describe('generateOrdersCsv', () => {
     expect(csv).toContain('"PUNZON ""SPECIAL"", CORTE"');
     expect(csv).toContain('"D2"');
     expect(csv).toContain('"60 HRC"');
+    expect(csv).toContain('Recorte CAD');
   });
 
   it('neutralizes spreadsheet formulas from Odoo fields', () => {

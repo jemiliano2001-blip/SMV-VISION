@@ -3,7 +3,11 @@ param(
   [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$InputFile,
   [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$OutDir,
   [string[]]$Formats = @('.jpg', '.stl'),
-  [ValidateRange(1, 3600)][int]$TimeoutSeconds = 180
+  [ValidateRange(1, 3600)][int]$TimeoutSeconds = 180,
+  # iso: fuerza vista isométrica (modelos 3D: .sldprt/.easm/.eprt).
+  # flat: conserva la vista del documento tal cual (planos acotados .slddrw) y
+  # solo hace zoom-to-fit — forzar isométrica en un dibujo 2D lo deja ilegible.
+  [ValidateSet('iso', 'flat')][string]$Mode = 'iso'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -227,6 +231,7 @@ try {
 
   Write-Output '[edrawings-native] automation=EDrawingOfficeAutomator.Document'
   Write-Output "[edrawings-native] source=$resolvedInput"
+  Write-Output "[edrawings-native] mode=$Mode"
   Write-ExporterStage 'office-automator:start'
   $officeDocument = New-Object -ComObject 'EDrawingOfficeAutomator.Document'
   $viewer = $officeDocument.GetViewerControl()
@@ -238,8 +243,12 @@ try {
   $viewer.OpenDoc($resolvedInput, $false, $false, $true, '')
   Wait-EDrawingsEvent -Operation load -TimeoutMilliseconds ($TimeoutSeconds * 1000)
 
-  $viewer.ViewOrientation = 6
-  $viewer.ViewOrientation = 7
+  if ($Mode -eq 'iso') {
+    $viewer.ViewOrientation = 6
+    $viewer.ViewOrientation = 7
+  } else {
+    try { $viewer.ZoomToFit() } catch { }
+  }
   $viewer.ShowShadedEdges = $true
   $viewer.UpdateScene()
   Write-ExporterStage 'jpg-save:start'

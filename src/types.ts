@@ -35,6 +35,17 @@ export interface Order {
   /** Dibujo del catálogo Tool Crib emparejado con esta orden (si hubo match). */
   matchedDrawingId?: string;
   matchedPartId?: string;
+  /** Revisión del plano matched (para discrepancia vs texto de la orden). */
+  matchedDrawingRevision?: string;
+  /** STL del plano matched, si el catálogo lo expone (visor 3D). */
+  matchedStlUrl?: string | null;
+  /**
+   * Cómo se resolvió el plano:
+   * - seed: enviado desde Órdenes (bridge)
+   * - alias: memoria partAliases / vínculo manual aprendido
+   * - fuzzy: matcher ISO-first del catálogo
+   */
+  matchSource?: 'seed' | 'alias' | 'fuzzy';
   /** Metadatos técnicos extraídos del cajetín del plano por IA */
   material?: string | null;
   dureza?: string | null;

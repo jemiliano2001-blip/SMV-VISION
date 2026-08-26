@@ -13,6 +13,7 @@ export interface OdooSyncPartner {
 
 export interface OdooSyncMeta {
   lastSyncAt: Date;
+  lastSuccessfulSyncAt?: Date;
   ordersProcessed: number;
   status: 'ok' | 'error';
   errorMessage?: string;
@@ -68,11 +69,16 @@ export function subscribeToOdooSyncMeta(
       const data = snap.data();
       // serverTimestamp() resolves to null locally before the write completes
       const ts = data.lastSyncAt as Timestamp | null;
-      if (!ts) { cb(null); return; }
+      if (!ts) {
+        cb(null);
+        return;
+      }
+      const successTs = data.lastSuccessfulSyncAt as Timestamp | null | undefined;
       cb({
         lastSyncAt: ts.toDate(),
-        ordersProcessed: data.ordersProcessed as number,
-        status: data.status as 'ok' | 'error',
+        lastSuccessfulSyncAt: successTs?.toDate?.() ?? (data.status === 'ok' ? ts.toDate() : undefined),
+        ordersProcessed: typeof data.ordersProcessed === 'number' ? data.ordersProcessed : 0,
+        status: data.status === 'error' ? 'error' : 'ok',
         errorMessage: data.errorMessage as string | undefined,
         partners: normalizePartners(data.partners),
       });

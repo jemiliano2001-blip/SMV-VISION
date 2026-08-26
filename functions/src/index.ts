@@ -350,34 +350,38 @@ async function fetchOrderLines(
   const map = new Map<number, OrderLine[]>();
   if (orderIds.length === 0) return map;
 
-  const domain = [["order_id", "in", orderIds]];
-  const fields = [
-    "order_id",
-    "product_id",
-    "name",
-    "product_uom_qty",
-    "qty_delivered",
-  ];
-  const rows = await executeKw<OdooRow[]>(
-    odoo,
-    "sale.order.line",
-    "search_read",
-    [[domain], { fields, limit: 0, order: "order_id asc, id asc" }],
-  );
-  for (const row of rows) {
-    const orderId = many2oneId(row["order_id"]);
-    if (orderId === null) continue;
-    const line: OrderLine = {
-      id: numOf(row["id"]),
-      product: many2oneName(row["product_id"]) || "Sin producto",
-      description: strOf(row["name"]),
-      qty: numOf(row["product_uom_qty"]),
-      qty_delivered: numOf(row["qty_delivered"]),
-      qty_pending_from_pickings: 0,
-    };
-    const arr = map.get(orderId);
-    if (arr) arr.push(line);
-    else map.set(orderId, [line]);
+  const CHUNK = 100;
+  for (let i = 0; i < orderIds.length; i += CHUNK) {
+    const chunk = orderIds.slice(i, i + CHUNK);
+    const domain = [["order_id", "in", chunk]];
+    const fields = [
+      "order_id",
+      "product_id",
+      "name",
+      "product_uom_qty",
+      "qty_delivered",
+    ];
+    const rows = await executeKw<OdooRow[]>(
+      odoo,
+      "sale.order.line",
+      "search_read",
+      [[domain], { fields, limit: 0, order: "order_id asc, id asc" }],
+    );
+    for (const row of rows) {
+      const orderId = many2oneId(row["order_id"]);
+      if (orderId === null) continue;
+      const line: OrderLine = {
+        id: numOf(row["id"]),
+        product: many2oneName(row["product_id"]) || "Sin producto",
+        description: strOf(row["name"]),
+        qty: numOf(row["product_uom_qty"]),
+        qty_delivered: numOf(row["qty_delivered"]),
+        qty_pending_from_pickings: 0,
+      };
+      const arr = map.get(orderId);
+      if (arr) arr.push(line);
+      else map.set(orderId, [line]);
+    }
   }
   return map;
 }
@@ -389,30 +393,34 @@ async function fetchPickings(
   const map = new Map<string, Picking[]>();
   if (orderNames.length === 0) return map;
 
-  const domain = [["origin", "in", orderNames]];
-  const fields = ["id", "name", "origin", "state", "date_done"];
-  const rows = await executeKw<OdooRow[]>(
-    odoo,
-    "stock.picking",
-    "search_read",
-    [[domain], { fields, limit: 0, order: "id asc" }],
-  );
-  for (const row of rows) {
-    const origin = strOf(row["origin"]);
-    if (!origin) continue;
-    const picking: Picking = {
-      id: numOf(row["id"]),
-      origin,
-      name: strOf(row["name"]),
-      state: strOf(row["state"]) || "unknown",
-      date_done: typeof row["date_done"] === "string" ?
-        row["date_done"] :
-        false,
-      lines: [],
-    };
-    const arr = map.get(origin);
-    if (arr) arr.push(picking);
-    else map.set(origin, [picking]);
+  const CHUNK = 100;
+  for (let i = 0; i < orderNames.length; i += CHUNK) {
+    const chunk = orderNames.slice(i, i + CHUNK);
+    const domain = [["origin", "in", chunk]];
+    const fields = ["id", "name", "origin", "state", "date_done"];
+    const rows = await executeKw<OdooRow[]>(
+      odoo,
+      "stock.picking",
+      "search_read",
+      [[domain], { fields, limit: 0, order: "id asc" }],
+    );
+    for (const row of rows) {
+      const origin = strOf(row["origin"]);
+      if (!origin) continue;
+      const picking: Picking = {
+        id: numOf(row["id"]),
+        origin,
+        name: strOf(row["name"]),
+        state: strOf(row["state"]) || "unknown",
+        date_done: typeof row["date_done"] === "string" ?
+          row["date_done"] :
+          false,
+        lines: [],
+      };
+      const arr = map.get(origin);
+      if (arr) arr.push(picking);
+      else map.set(origin, [picking]);
+    }
   }
   return map;
 }
@@ -424,35 +432,39 @@ async function fetchStockMoves(
   const map = new Map<number, StockMoveLine[]>();
   if (pickingIds.length === 0) return map;
 
-  const domain = [["picking_id", "in", pickingIds]];
-  const fields = [
-    "id",
-    "picking_id",
-    "product_id",
-    "product_uom_qty",
-    "quantity_done",
-    "state",
-    "sale_line_id",
-  ];
-  const rows = await executeKw<OdooRow[]>(
-    odoo,
-    "stock.move",
-    "search_read",
-    [[domain], { fields, limit: 0, order: "picking_id asc, id asc" }],
-  );
-  for (const row of rows) {
-    const pickingId = many2oneId(row["picking_id"]);
-    if (pickingId === null) continue;
-    const move: StockMoveLine = {
-      product: many2oneName(row["product_id"]) || "Sin producto",
-      qty_demand: numOf(row["product_uom_qty"]),
-      qty_done: numOf(row["quantity_done"]),
-      state: strOf(row["state"]) || "unknown",
-      sale_line_id: many2oneId(row["sale_line_id"]),
-    };
-    const arr = map.get(pickingId);
-    if (arr) arr.push(move);
-    else map.set(pickingId, [move]);
+  const CHUNK = 100;
+  for (let i = 0; i < pickingIds.length; i += CHUNK) {
+    const chunk = pickingIds.slice(i, i + CHUNK);
+    const domain = [["picking_id", "in", chunk]];
+    const fields = [
+      "id",
+      "picking_id",
+      "product_id",
+      "product_uom_qty",
+      "quantity_done",
+      "state",
+      "sale_line_id",
+    ];
+    const rows = await executeKw<OdooRow[]>(
+      odoo,
+      "stock.move",
+      "search_read",
+      [[domain], { fields, limit: 0, order: "picking_id asc, id asc" }],
+    );
+    for (const row of rows) {
+      const pickingId = many2oneId(row["picking_id"]);
+      if (pickingId === null) continue;
+      const move: StockMoveLine = {
+        product: many2oneName(row["product_id"]) || "Sin producto",
+        qty_demand: numOf(row["product_uom_qty"]),
+        qty_done: numOf(row["quantity_done"]),
+        state: strOf(row["state"]) || "unknown",
+        sale_line_id: many2oneId(row["sale_line_id"]),
+      };
+      const arr = map.get(pickingId);
+      if (arr) arr.push(move);
+      else map.set(pickingId, [move]);
+    }
   }
   return map;
 }
@@ -751,13 +763,38 @@ async function writeSyncMeta(
   db: Firestore,
   data: Record<string, unknown>,
 ): Promise<void> {
-  await db
-    .collection(SYNC_META_COLLECTION)
-    .doc(SYNC_META_DOC)
-    .set({ lastSyncAt: FieldValue.serverTimestamp(), ...data })
-    .catch(() => {
-      /* nunca tronar dentro del manejador de estado */
-    });
+  const docRef = db.collection(SYNC_META_COLLECTION).doc(SYNC_META_DOC);
+  const now = FieldValue.serverTimestamp();
+
+  if (data.status === "ok") {
+    await docRef
+      .set(
+        {
+          lastSyncAt: now,
+          lastSuccessfulSyncAt: now,
+          ...data,
+        },
+        { merge: true },
+      )
+      .catch(() => {
+        /* nunca tronar dentro del manejador de estado */
+      });
+  } else {
+    // Protección contra pérdida de datos: ante fallas de conexión o errores transitorios,
+    // NO vaciamos partners ni ordersProcessed previamente sincronizados.
+    const { partners: _p, ordersProcessed: _o, ...safeData } = data;
+    await docRef
+      .set(
+        {
+          lastSyncAt: now,
+          ...safeData,
+        },
+        { merge: true },
+      )
+      .catch(() => {
+        /* nunca tronar dentro del manejador de estado */
+      });
+  }
 }
 
 /**
@@ -790,7 +827,7 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
     };
   }
 
-  // 2. Líneas, remisiones y movimientos en llamadas masivas.
+  // 2. Líneas, remisiones y movimientos en llamadas masivas fragmentadas.
   const linesMap = await fetchOrderLines(odoo, orders.map((o) => o.id));
   const pickingsMap = await fetchPickings(odoo, orders.map((o) => o.name));
   const allPickingIds: number[] = [];
@@ -859,10 +896,8 @@ export const syncSuprajitOrders = onSchedule(
     } catch (error) {
       logger.error("❌ Error crítico sincronizando con Odoo:", error);
       await writeSyncMeta(db, {
-        ordersProcessed: 0,
         status: "error",
         errorMessage: String(error),
-        partners: [],
       });
     }
   },
@@ -911,10 +946,8 @@ export const triggerOdooSync = onCall(
     } catch (error) {
       logger.error("❌ Error en triggerOdooSync:", error);
       await writeSyncMeta(db, {
-        ordersProcessed: 0,
         status: "error",
         errorMessage: String(error),
-        partners: [],
       });
       return { ok: false, error: String(error) };
     }

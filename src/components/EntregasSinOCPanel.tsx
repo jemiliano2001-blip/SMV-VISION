@@ -13,12 +13,16 @@ import {
   listEntregasSinOC,
   type OdooOrderView,
 } from '../lib/firebase/odooOrders';
-import { formatAgeDays, getOrderAgeDays } from '../lib/age';
+import { triggerOdooSync } from '../lib/firebase/syncOdoo';
+import { useSyncMeta } from '../hooks/useSyncMeta';
+import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
 
 export function EntregasSinOCPanel() {
   const [orders, setOrders] = useState<OdooOrderView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { isError, effectiveLastSyncDate } = useSyncMeta();
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -39,6 +43,16 @@ export function EntregasSinOCPanel() {
     setLoading(false);
   }, []);
 
+  const handleRefreshSync = async () => {
+    setSyncing(true);
+    try {
+      await triggerOdooSync();
+      await fetchOrders();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   useEffect(() => {
     void fetchOrders();
   }, [fetchOrders]);
@@ -46,9 +60,9 @@ export function EntregasSinOCPanel() {
   return (
     <div className="h-full flex flex-col bg-bg">
       {/* ── Header ── */}
-      <header className="shrink-0 border-b-2 border-line bg-surface px-6 py-4 flex items-center justify-between">
+      <header className="shrink-0 border-b-2 border-line bg-surface px-6 py-4 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-warn text-bg flex items-center justify-center corner-ticks shadow-hard">
+          <div className="size-10 bg-warn text-bg flex items-center justify-center corner-ticks shadow-hard">
             <FileWarning size={22} strokeWidth={2.5} />
           </div>
           <div>
@@ -60,15 +74,28 @@ export function EntregasSinOCPanel() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {effectiveLastSyncDate && (
+            <div
+              className={`font-mono text-[10px] uppercase tracking-widest px-3 py-2 border-2 ${
+                isError
+                  ? 'border-danger/50 bg-danger/10 text-danger'
+                  : 'border-line text-ink-dim'
+              }`}
+            >
+              {isError
+                ? `SYNC AVISO · ${formatRelativeTime(effectiveLastSyncDate)}`
+                : `SYNC · ${formatRelativeTime(effectiveLastSyncDate)}`}
+            </div>
+          )}
           <Button
             variant="ghost"
-            onClick={() => void fetchOrders()}
-            disabled={loading}
+            onClick={() => void handleRefreshSync()}
+            disabled={loading || syncing}
             className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
           >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            {loading ? 'Cargando…' : 'Refrescar'}
+            <RefreshCw size={14} className={(loading || syncing) ? 'animate-spin' : ''} />
+            {syncing ? 'Sincronizando…' : loading ? 'Cargando…' : 'Refrescar Odoo'}
           </Button>
         </div>
       </header>

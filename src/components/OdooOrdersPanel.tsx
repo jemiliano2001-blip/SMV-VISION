@@ -843,13 +843,13 @@ export function OdooOrdersPanel({
             <div
               className={`font-mono text-[10px] uppercase tracking-widest px-3 py-2 border-2 ${
                 meta.status === 'error'
-                  ? 'border-danger/50 text-danger'
+                  ? 'border-danger/50 bg-danger/10 text-danger'
                   : 'border-line text-ink-dim'
               }`}
               title={meta.status === 'error' ? meta.errorMessage : undefined}
             >
               {meta.status === 'error'
-                ? `ERROR SYNC · ${formatRelativeTime(meta.lastSyncAt)}`
+                ? `FALLO SYNC · ${meta.lastSuccessfulSyncAt ? `ÚLTIMO OK ${formatRelativeTime(meta.lastSuccessfulSyncAt)}` : formatRelativeTime(meta.lastSyncAt)}`
                 : `SYNC · ${formatRelativeTime(meta.lastSyncAt)} · ${meta.ordersProcessed} ÓRDENES`}
             </div>
           )}
@@ -898,6 +898,32 @@ export function OdooOrdersPanel({
           </Button>
         </div>
       </header>
+
+      {/* ── Banner de Error en Sincronización (No Destructivo) ── */}
+      {meta?.status === 'error' && (
+        <div className="bg-danger/10 border-b-2 border-danger px-6 py-3 flex items-center justify-between text-danger font-mono text-xs flex-wrap gap-2 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} className="shrink-0 text-danger" />
+            <span>
+              <strong>Aviso de Sincronización:</strong> {meta.errorMessage || 'Error de conexión con Odoo.'}
+              {meta.lastSuccessfulSyncAt && (
+                <span className="opacity-80 ml-1">
+                  (Mostrando catálogo del último sync exitoso {formatRelativeTime(meta.lastSuccessfulSyncAt)})
+                </span>
+              )}
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleRefresh()}
+            disabled={syncingOdoo}
+            className="border-danger text-danger hover:bg-danger hover:text-bg h-7 text-[10px] font-mono font-bold uppercase tracking-wider"
+          >
+            Reintentar Sync
+          </Button>
+        </div>
+      )}
 
       {/* ── Banner de Progreso Batch Print ── */}
       {batchPrintStatus && (

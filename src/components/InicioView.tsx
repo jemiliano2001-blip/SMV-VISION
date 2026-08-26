@@ -5,7 +5,7 @@
  * por requisitor, semáforo de antigüedad de órdenes y accesos rápidos.
  */
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { motion } from 'motion/react';
 import {
   ScanLine,
@@ -19,13 +19,16 @@ import {
   Users,
   Boxes,
   Activity,
+  Building2,
   type LucideIcon,
 } from 'lucide-react';
 
 import { listEntregasSinOC, listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
+import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { formatRelativeTime, getOrderAgeDays } from '../lib/age';
 import { useSyncMeta } from '../hooks/useSyncMeta';
 import { BarChart, type BarChartEntry } from './charts/BarChart';
+import { Button } from './ui/button';
 import type { AnalysisRunSummary } from '../types';
 import type { AppView } from './shell/AppShell';
 
@@ -57,35 +60,44 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     month: 'long',
     year: 'numeric',
   });
-  const { meta } = useSyncMeta();
+  const { meta, isError, isStale, totalToInvoiceOrders, effectiveLastSyncDate } = useSyncMeta();
   const [sinOc, setSinOc] = useState<number | null | undefined>(undefined);
   const [orders, setOrders] = useState<OdooOrderView[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
-
-  // Pendientes: suma de syncMeta.partners (sin cargar todas las órdenes).
-  const pendientes: number | null | undefined = meta
-    ? meta.partners.reduce((sum, p) => sum + p.toInvoiceCount, 0)
-    : undefined;
+  const [selectedPartnerKey, setSelectedPartnerKey] = useState<string>('ALL');
+  const [syncing, setSyncing] = useState(false);
+  const [syncElapsed, setSyncElapsed] = useState(0);
+  const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Cargar órdenes activas para métricas de carga y semáforo de antigüedad
-  useEffect(() => {
-    let alive = true;
+  const loadOrders = useCallback(async (partnerKeyFilter: string) => {
     setLoadingOrders(true);
-    listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX })
-      .then((res) => {
-        if (!alive) return;
+    try {
+      if (partnerKeyFilter === 'ALL') {
+        const res = await listOrdersToInvoice({ partnerKeyPrefix: '' });
+        if (res.ok) {
+          setOrders(res.value);
+        } else {
+          // Fallback a Suprajit si no trae prefijo vacío
+          const fallback = await listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX });
+          if (fallback.ok) setOrders(fallback.value);
+        }
+      } else {
+        const res = await listOrdersToInvoice({ partnerKey: partnerKeyFilter });
         if (res.ok) {
           setOrders(res.value);
         }
-      })
-      .finally(() => {
-        if (alive) setLoadingOrders(false);
-      });
-
-    return () => {
-      alive = false;
-    };
+      }
+    } catch {
+      setOrders([]);
+    } finally {
+      setLoadingOrders(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadOrders(selectedPartnerKey);
+  }, [loadOrders, selectedPartnerKey]);
 
   // Entregas sin OC: sigue leyendo Firestore (filtro SUPRAJIT en cliente).
   useEffect(() => {
@@ -96,6 +108,42 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     });
     return () => {
       alive = false;
+    };
+  }, []);
+
+  // Manejador de sincronización directa desde Inicio
+  const handleTriggerSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncElapsed(0);
+
+    if (syncTimerRef.current) clearInterval(syncTimerRef.current);
+    syncTimerRef.current = setInterval(() => {
+      setSyncElapsed((prev) => {
+        if (prev >= 120) {
+          clearInterval(syncTimerRef.current!);
+          setSyncing(false);
+          return 0;
+        }
+        return prev + 1;
+      });
+    }, 1000);
+
+    try {
+      await triggerOdooSync();
+      await loadOrders(selectedPartnerKey);
+      const sin = await listEntregasSinOC();
+      if (sin.ok) setSinOc(sin.value.length);
+    } finally {
+      if (syncTimerRef.current) clearInterval(syncTimerRef.current);
+      setSyncing(false);
+      setSyncElapsed(0);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current) clearInterval(syncTimerRef.current);
     };
   }, []);
 
@@ -151,6 +199,8 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     };
   }, [orders]);
 
+  const partnersList = meta?.partners ?? [];
+
   return (
     <motion.div
       variants={container}
@@ -166,14 +216,16 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
             Inicio
           </h1>
         </div>
-        <p className="font-mono text-[11px] text-ink-dim capitalize">{now}</p>
+        <div className="flex items-center gap-3">
+          <p className="font-mono text-[11px] text-ink-dim capitalize">{now}</p>
+        </div>
       </motion.header>
 
       {/* ── Métricas Principales (KPI Cards) ── */}
       <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard
           icon={CloudDownload}
-          value={show(pendientes)}
+          value={show(totalToInvoiceOrders || (orders.length > 0 ? orders.length : undefined))}
           label="Órdenes pendientes"
           onClick={() => onNavigate('odoo')}
         />
@@ -191,14 +243,75 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
           tone={sinOc ? 'text-warn' : undefined}
           onClick={() => onNavigate('entregas-sin-oc')}
         />
-        <StatCard
-          icon={RefreshCw}
-          value={meta ? formatRelativeTime(meta.lastSyncAt) : '—'}
-          label={meta?.status === 'error' ? 'Último sync · ERROR' : 'Último sync Odoo'}
-          tone={meta?.status === 'error' ? 'text-danger' : undefined}
-          small
-        />
+        <div className="corner-ticks bg-surface border-2 border-line p-4 flex flex-col justify-between">
+          <div className="flex items-start justify-between mb-2">
+            <RefreshCw size={16} className={`text-ink-dim ${syncing ? 'animate-spin text-accent' : ''}`} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleTriggerSync()}
+              disabled={syncing}
+              className="h-6 px-2 text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-bg transition-colors"
+              title="Disparar sincronización con Odoo ahora"
+            >
+              {syncing ? `${syncElapsed}s` : 'Sincronizar'}
+            </Button>
+          </div>
+          <div>
+            <p className={`font-display font-black italic leading-none text-2xl ${isError ? 'text-danger' : isStale ? 'text-warn' : 'text-ink'}`}>
+              {effectiveLastSyncDate ? formatRelativeTime(effectiveLastSyncDate) : '—'}
+            </p>
+            <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mt-2">
+              {isError ? 'Sync Odoo · Fallo' : isStale ? 'Sync Odoo · Desactualizado' : 'Último sync Odoo'}
+            </p>
+          </div>
+        </div>
       </motion.section>
+
+      {/* ── Selector de Compañía para Widgets Analíticos ── */}
+      {partnersList.length > 0 && (
+        <motion.section variants={item} className="mb-4 flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim flex items-center gap-1.5 mr-2">
+            <Building2 size={13} className="text-accent" />
+            Filtrar análisis por:
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelectedPartnerKey('ALL')}
+            className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors ${
+              selectedPartnerKey === 'ALL'
+                ? 'border-accent bg-accent text-bg'
+                : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
+            }`}
+          >
+            Todas ({totalToInvoiceOrders})
+          </button>
+          {partnersList.map((p) => {
+            const isSelected = selectedPartnerKey === p.key;
+            return (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => setSelectedPartnerKey(p.key)}
+                className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors flex items-center gap-1.5 ${
+                  isSelected
+                    ? 'border-accent bg-accent text-bg'
+                    : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
+                }`}
+              >
+                <span className="max-w-[150px] truncate">{p.name}</span>
+                <span
+                  className={`font-mono text-[9px] px-1 py-0.2 ${
+                    isSelected ? 'bg-bg text-accent font-bold' : 'bg-surface-2 text-ink-dim'
+                  }`}
+                >
+                  {p.toInvoiceCount}
+                </span>
+              </button>
+            );
+          })}
+        </motion.section>
+      )}
 
       {/* ── Widgets Operativos: Carga por Requisitor & Semáforo de Antigüedad ── */}
       <motion.section variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">

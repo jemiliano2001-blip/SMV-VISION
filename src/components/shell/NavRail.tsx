@@ -16,6 +16,8 @@ import {
 import { useTheme } from 'next-themes';
 import { isFirebaseConfigured } from '../../lib/firebase/env';
 import { signOutUser, useFirebaseUser } from '../../lib/firebase/auth';
+import { useSyncMeta } from '../../hooks/useSyncMeta';
+import { Badge } from '../ui/badge';
 
 export type AppView = 'inicio' | 'reporte' | 'biblioteca' | 'odoo' | 'compras' | 'entregas-sin-oc';
 
@@ -44,6 +46,7 @@ export function NavRail({ activeView, onNavigate, version }: NavRailProps): Reac
   const auth = useFirebaseUser();
   const configured = isFirebaseConfigured();
   const { theme, setTheme } = useTheme();
+  const { totalToInvoiceOrders, isError, isStale } = useSyncMeta();
 
   const handleSignOut = useCallback(() => {
     void signOutUser();
@@ -56,11 +59,11 @@ export function NavRail({ activeView, onNavigate, version }: NavRailProps): Reac
   return (
     <nav
       aria-label="Navegación principal"
-      className="w-full h-full bg-surface flex flex-col"
+      className="w-full h-full bg-surface flex flex-col justify-between"
     >
       {/* ── Marca ── */}
-      <div className="h-16 flex items-center gap-3 px-4 border-b-2 border-line">
-        <span className="grid place-items-center w-9 h-9 bg-accent text-bg shrink-0 corner-ticks">
+      <div className="h-16 flex items-center gap-3 px-4 border-b-2 border-line shrink-0">
+        <span className="grid place-items-center size-9 bg-accent text-bg shrink-0 corner-ticks">
           <Boxes size={20} strokeWidth={2.4} />
         </span>
         <div className="leading-none min-w-0">
@@ -74,9 +77,11 @@ export function NavRail({ activeView, onNavigate, version }: NavRailProps): Reac
       </div>
 
       {/* ── Destinos ── */}
-      <ul className="flex-1 py-3 px-2 space-y-1 overflow-y-auto">
+      <ul className="flex-1 py-3 px-2 flex flex-col gap-1 overflow-y-auto">
         {NAV_ITEMS.map(({ view, label, icon: Icon }) => {
           const active = activeView === view;
+          const isOdoo = view === 'odoo';
+
           return (
             <li key={view}>
               <button
@@ -95,10 +100,40 @@ export function NavRail({ activeView, onNavigate, version }: NavRailProps): Reac
                   className={`absolute left-0 top-0 bottom-0 w-[3px] ${active ? 'bg-accent' : 'bg-transparent'}`}
                   aria-hidden
                 />
-                <Icon size={19} strokeWidth={active ? 2.4 : 2} className={active ? 'text-accent' : ''} />
+                <div className="relative">
+                  <Icon size={19} strokeWidth={active ? 2.4 : 2} className={active ? 'text-accent' : ''} />
+                  {isOdoo && (
+                    <span
+                      className={`absolute -top-1 -right-1 size-2 rounded-full border border-surface ${
+                        isError
+                          ? 'bg-danger'
+                          : isStale
+                            ? 'bg-warn'
+                            : 'bg-ok'
+                      }`}
+                      title={
+                        isError
+                          ? 'Atención: Hubo un fallo en la última sincronización'
+                          : isStale
+                            ? 'Sincronización pendiente / más de 35 min'
+                            : 'Sincronizado con Odoo'
+                      }
+                    />
+                  )}
+                </div>
                 <span className="font-display font-bold text-[13px] uppercase tracking-wide truncate flex-1">
                   {label}
                 </span>
+                {isOdoo && totalToInvoiceOrders > 0 && (
+                  <Badge
+                    variant="default"
+                    className={`font-mono text-[9px] font-bold px-1.5 py-0 h-4 border-none ${
+                      active ? 'bg-accent text-bg' : 'bg-surface-2 text-ink-dim group-hover:text-ink'
+                    }`}
+                  >
+                    {totalToInvoiceOrders}
+                  </Badge>
+                )}
               </button>
             </li>
           );

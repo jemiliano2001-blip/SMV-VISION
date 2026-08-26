@@ -33,6 +33,7 @@ import type { ToolcribActiveDrawingView } from '../../types';
 import { getCurrentUserUid } from './auth';
 import { getFirestoreClient, getStorageClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
+import { log } from '../log';
 import {
   normalizeToolcribDrawing,
   normalizeToolcribPart,
@@ -93,11 +94,20 @@ export async function listActiveToolcribParts(options?: {
   if (options?.customer && options.customer.trim().length > 0) {
     constraints.push(where('customer', '==', options.customer.trim()));
   }
-  constraints.push(limit(Math.min(options?.max ?? DEFAULT_PARTS_LIMIT, DEFAULT_PARTS_LIMIT)));
+  const effectiveLimit = Math.min(options?.max ?? DEFAULT_PARTS_LIMIT, DEFAULT_PARTS_LIMIT);
+  constraints.push(limit(effectiveLimit));
 
   try {
     const q = query(collection(db, TOOLCRIB_PARTS_COLLECTION), ...constraints);
     const snapshot = await getDocs(q);
+    // Si el snapshot llena el límite exacto, es probable que el catálogo
+    // tenga más partes activas de las que se están devolviendo — el matcher
+    // parecería "no encontrar" planos que en realidad ya no llegan aquí.
+    if (snapshot.size >= effectiveLimit) {
+      log.warn(
+        `[smv-vision][toolcrib] listActiveToolcribParts alcanzó el límite (${effectiveLimit}) — el catálogo puede estar truncado. Sube DEFAULT_PARTS_LIMIT en toolcrib.ts.`,
+      );
+    }
     const parts: ToolcribPart[] = [];
     snapshot.forEach((docSnap) => {
       const normalized = normalizeToolcribPart(docSnap.id, docSnap.data());
@@ -107,7 +117,7 @@ export async function listActiveToolcribParts(options?: {
     });
     return { ok: true, value: parts };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] listActiveToolcribParts falló', error);
+    log.warn('[smv-vision][toolcrib] listActiveToolcribParts falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -152,14 +162,14 @@ export async function getActiveDrawingForPart(
       return { ok: false, reason: 'not-found' };
     }
     if (drawings.length > 1) {
-      console.warn(
+      log.warn(
         '[smv-vision][toolcrib] múltiples revisiones activas detectadas para partId',
         partId,
       );
     }
     return { ok: true, value: drawings[0] };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] getActiveDrawingForPart falló', error);
+    log.warn('[smv-vision][toolcrib] getActiveDrawingForPart falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -200,7 +210,7 @@ export async function listDrawingsForPart(
     });
     return { ok: true, value: drawings };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] listDrawingsForPart falló', error);
+    log.warn('[smv-vision][toolcrib] listDrawingsForPart falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -235,7 +245,7 @@ export async function getDrawingById(
     }
     return { ok: true, value: normalized };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] getDrawingById falló', error);
+    log.warn('[smv-vision][toolcrib] getDrawingById falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -271,6 +281,11 @@ export async function listActiveDrawingViews(options?: {
       limit(DEFAULT_DRAWINGS_LIMIT),
     );
     const snapshot = await getDocs(q);
+    if (snapshot.size >= DEFAULT_DRAWINGS_LIMIT) {
+      log.warn(
+        `[smv-vision][toolcrib] listActiveDrawingViews alcanzó el límite (${DEFAULT_DRAWINGS_LIMIT}) — el catálogo puede estar truncado. Sube DEFAULT_DRAWINGS_LIMIT en toolcrib.ts.`,
+      );
+    }
 
     // Build partId → most-recent active drawing map (in-memory de-dup)
     const drawingByPartId = new Map<string, ToolcribDrawing>();
@@ -281,7 +296,7 @@ export async function listActiveDrawingViews(options?: {
       // Estado inconsistente: más de una revisión activa para la misma parte.
       // Avisamos en cuanto detectamos la segunda y nos quedamos con la más reciente.
       if (existing) {
-        console.warn(
+        log.warn(
           '[smv-vision][toolcrib] múltiples revisiones activas detectadas para partId',
           normalized.partId,
         );
@@ -312,7 +327,7 @@ export async function listActiveDrawingViews(options?: {
     }
     return { ok: true, value: views };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] listActiveDrawingViews falló', error);
+    log.warn('[smv-vision][toolcrib] listActiveDrawingViews falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -336,7 +351,7 @@ export async function recordToolcribPrintLog(
 
   const validation = validateToolcribPrintLogInput(input);
   if (validation.ok === false) {
-    console.warn(
+    log.warn(
       '[smv-vision][toolcrib] printLog rechazado por validación de frontera',
       validation.issues,
     );
@@ -361,7 +376,7 @@ export async function recordToolcribPrintLog(
     );
     return { ok: true, value: { id: ref.id } };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] recordToolcribPrintLog falló', error);
+    log.warn('[smv-vision][toolcrib] recordToolcribPrintLog falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }
@@ -374,7 +389,7 @@ export function recordToolcribPrintLogFireAndForget(
   input: ToolcribPrintLogInput,
 ): void {
   recordToolcribPrintLog(input).catch((error) => {
-    console.warn('[smv-vision][toolcrib] fire-and-forget atrapó error inesperado', error);
+    log.warn('[smv-vision][toolcrib] fire-and-forget atrapó error inesperado', error);
   });
 }
 
@@ -408,7 +423,7 @@ export async function listRecentPrintLogs(options?: {
     });
     return { ok: true, value: logs };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] listRecentPrintLogs falló', error);
+    log.warn('[smv-vision][toolcrib] listRecentPrintLogs falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -447,7 +462,7 @@ export async function listPrintLogsForDrawing(
     logs.sort((a, b) => (b.printedAtUTC ?? '').localeCompare(a.printedAtUTC ?? ''));
     return { ok: true, value: logs };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] listPrintLogsForDrawing falló', error);
+    log.warn('[smv-vision][toolcrib] listPrintLogsForDrawing falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -471,7 +486,7 @@ export async function uploadDrawingPdf(
     const url = await getDownloadURL(storageRef);
     return { ok: true, value: url };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] uploadDrawingPdf falló', error);
+    log.warn('[smv-vision][toolcrib] uploadDrawingPdf falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }
@@ -551,7 +566,7 @@ export async function createPartAndDrawing(
     await batch.commit();
     return { ok: true, value: undefined };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] createPartAndDrawing falló', error);
+    log.warn('[smv-vision][toolcrib] createPartAndDrawing falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }
@@ -582,7 +597,7 @@ export async function inactivatePart(partId: string): Promise<ToolcribResult<voi
     await batch.commit();
     return { ok: true, value: undefined };
   } catch (error) {
-    console.warn('[smv-vision][toolcrib] inactivatePart falló', error);
+    log.warn('[smv-vision][toolcrib] inactivatePart falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

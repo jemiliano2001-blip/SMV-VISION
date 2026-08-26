@@ -11,11 +11,13 @@
  */
 
 import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 import { getFunctions, type Functions } from 'firebase/functions';
 import { getStorage, type FirebaseStorage } from 'firebase/storage';
 
-import { getFirebaseConfig } from './env';
+import { getAppCheckConfig, getFirebaseConfig } from './env';
+import { log } from '../log';
 
 const FIREBASE_APP_NAME = 'smv-vision';
 
@@ -23,6 +25,39 @@ let cachedApp: FirebaseApp | null | undefined;
 let cachedFirestore: Firestore | null | undefined;
 let cachedFunctions: Functions | null | undefined;
 let cachedStorage: FirebaseStorage | null | undefined;
+let appCheckInitialized = false;
+
+/**
+ * Inicializa App Check una sola vez, antes de que cualquier SDK (Firestore,
+ * Storage, Functions) haga su primera llamada de red. Si no hay site key de
+ * reCAPTCHA configurada (`VITE_RECAPTCHA_SITE_KEY`), no hace nada — la app
+ * sigue funcionando sin App Check, igual que sin Firebase configurado.
+ */
+function ensureAppCheckInitialized(app: FirebaseApp): void {
+  if (appCheckInitialized) {
+    return;
+  }
+  appCheckInitialized = true;
+
+  const config = getAppCheckConfig();
+  if (!config) {
+    return;
+  }
+
+  try {
+    if (config.debugEnabled || config.debugToken) {
+      // Debe fijarse ANTES de initializeAppCheck (lee la global al construirse).
+      (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
+        config.debugToken ?? true;
+    }
+    initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(config.recaptchaSiteKey),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } catch (error) {
+    log.warn('[smv-vision][firebase] initializeAppCheck falló', error);
+  }
+}
 
 function resolveApp(): FirebaseApp | null {
   if (cachedApp !== undefined) {
@@ -42,8 +77,9 @@ function resolveApp(): FirebaseApp | null {
     } else {
       cachedApp = initializeApp(config, FIREBASE_APP_NAME);
     }
+    ensureAppCheckInitialized(cachedApp);
   } catch (error) {
-    console.warn('[smv-vision][firebase] initializeApp falló, audit trail deshabilitado', error);
+    log.warn('[smv-vision][firebase] initializeApp falló, audit trail deshabilitado', error);
     cachedApp = null;
   }
 
@@ -64,7 +100,7 @@ export function getFirestoreClient(): Firestore | null {
   try {
     cachedFirestore = getFirestore(app);
   } catch (error) {
-    console.warn('[smv-vision][firebase] getFirestore falló, audit trail deshabilitado', error);
+    log.warn('[smv-vision][firebase] getFirestore falló, audit trail deshabilitado', error);
     cachedFirestore = null;
   }
 
@@ -85,7 +121,7 @@ export function getFunctionsClient(): Functions | null {
   try {
     cachedFunctions = getFunctions(app);
   } catch (error) {
-    console.warn('[smv-vision][firebase] getFunctions falló', error);
+    log.warn('[smv-vision][firebase] getFunctions falló', error);
     cachedFunctions = null;
   }
 
@@ -106,7 +142,7 @@ export function getStorageClient(): FirebaseStorage | null {
   try {
     cachedStorage = getStorage(app);
   } catch (error) {
-    console.warn('[smv-vision][firebase] getStorage falló', error);
+    log.warn('[smv-vision][firebase] getStorage falló', error);
     cachedStorage = null;
   }
 
@@ -126,6 +162,7 @@ export function __resetFirebaseClientForTests(): void {
   cachedFirestore = undefined;
   cachedFunctions = undefined;
   cachedStorage = undefined;
+  appCheckInitialized = false;
   try {
     const existing = getApps().find((app) => app.name === FIREBASE_APP_NAME);
     if (existing) {

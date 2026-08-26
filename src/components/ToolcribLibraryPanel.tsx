@@ -6,7 +6,7 @@
  * (variant=embedded) sigue siendo el acordeón compacto del flujo de análisis.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense, lazy, type ReactElement } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -51,7 +51,11 @@ import {
 import { ToolcribUploadModal } from './ToolcribUploadModal';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
 import { ToolcribHistoryModal } from './ToolcribHistoryModal';
-import { StlViewerModal } from './StlViewerModal';
+// three.js (~600 KB) solo se necesita al abrir el visor 3D — carga bajo
+// demanda en lugar de en el bundle inicial (three-vendor chunk).
+const StlViewerModal = lazy(() =>
+  import('./StlViewerModal').then((m) => ({ default: m.StlViewerModal })),
+);
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Input } from './ui/input';
 import { Button, buttonVariants } from './ui/button';
@@ -63,6 +67,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
+import { log } from '../lib/log';
 
 export type { PartFamily, AssetFilter, ToolcribPartGroup };
 export { FAMILIES, ASSET_FILTERS, matchesFamily };
@@ -410,7 +415,7 @@ export function ToolcribLibraryPanel({
         }));
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Error desconocido';
-        console.warn('[smv-vision][toolcrib] handleAttach falló', error);
+        log.warn('[smv-vision][toolcrib] handleAttach falló', error);
         setRowState((prev) => ({
           ...prev,
           [view.drawingId]: {
@@ -445,7 +450,7 @@ export function ToolcribLibraryPanel({
         }
         void loadLibrary();
       } catch (error) {
-        console.warn('[smv-vision][toolcrib] handleInactivate falló', error);
+        log.warn('[smv-vision][toolcrib] handleInactivate falló', error);
         setRowState((prev) => ({
           ...prev,
           [view.drawingId]: {
@@ -757,12 +762,16 @@ export function ToolcribLibraryPanel({
         </div>
       )}
 
-      <StlViewerModal
-        open={stlDrawing !== null && Boolean(stlDrawing.stlUrl)}
-        stlUrl={stlDrawing?.stlUrl ?? null}
-        title={stlDrawing ? `${stlDrawing.partNumber} · Rev ${stlDrawing.revision}` : ''}
-        onClose={() => setStlDrawing(null)}
-      />
+      {stlDrawing !== null && (
+        <Suspense fallback={null}>
+          <StlViewerModal
+            open={Boolean(stlDrawing.stlUrl)}
+            stlUrl={stlDrawing.stlUrl ?? null}
+            title={`${stlDrawing.partNumber} · Rev ${stlDrawing.revision}`}
+            onClose={() => setStlDrawing(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

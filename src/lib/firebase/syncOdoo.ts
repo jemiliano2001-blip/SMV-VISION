@@ -1,5 +1,6 @@
 import { httpsCallable } from 'firebase/functions';
 import { getFunctionsClient } from './client';
+import { log } from '../log';
 
 export type SyncOdooResult = 
   | { ok: true; ordersProcessed: number; created: number; updated: number; archived: number; headersWritten: number }
@@ -32,7 +33,7 @@ export async function triggerOdooSync(): Promise<SyncOdooResult> {
       return { ok: false, reason: data?.error || 'Error desconocido de la Cloud Function.' };
     }
   } catch (error: any) {
-    console.error('[smv-vision][sync] triggerOdooSync falló:', error);
+    log.error('[smv-vision][sync] triggerOdooSync falló:', error);
     
     if (error.code === 'functions/unauthenticated') {
       return { ok: false, reason: 'not-authenticated' };

@@ -19,6 +19,7 @@ import {
 
 import { getCurrentUserUid } from './auth';
 import { getFirestoreClient } from './client';
+import { log } from '../log';
 import {
   validateAnalysisRunInput,
   type AnalysisRunRecordInput,
@@ -55,7 +56,7 @@ export async function recordAnalysisRun(
 
   const validation = validateAnalysisRunInput({ ...input, userUid: resolvedUserUid });
   if (validation.ok === false) {
-    console.warn(
+    log.warn(
       '[smv-vision][audit] analysisRun rechazado por validación de frontera',
       validation.issues,
     );
@@ -82,7 +83,7 @@ export async function recordAnalysisRun(
     );
     return { ok: true, id: ref.id };
   } catch (error) {
-    console.warn(
+    log.warn(
       '[smv-vision][audit] no se pudo escribir analysisRun (fire-and-forget)',
       error,
     );
@@ -100,6 +101,6 @@ export function recordAnalysisRunFireAndForget(
   input: AnalysisRunRecordInput,
 ): void {
   recordAnalysisRun(input).catch((error) => {
-    console.warn('[smv-vision][audit] fire-and-forget atrapó error inesperado', error);
+    log.warn('[smv-vision][audit] fire-and-forget atrapó error inesperado', error);
   });
 }

@@ -37,16 +37,16 @@ npx tsx scripts/toolcribBootstrap.ts --inventory=./inventory.json --credentials=
 
 ## Environment variables
 
-Copy `.env.example` to `.env.local`. Only `VITE_GEMINI_API_KEY` is required; all Firebase vars are optional (their absence disables audit trail and Tool Crib library without breaking the main flow).
+Copy `.env.example` to `.env.local`. `VITE_FIREBASE_*` is required for anything to work end-to-end — Gemini calls go through the authenticated `analyzeGemini` Cloud Function (see below), so without Firebase configured the app loads but "Analizar" fails with "Firebase no está configurado". Their absence otherwise only disables the audit trail and Tool Crib library.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `VITE_GEMINI_API_KEY` | Yes | Gemini API calls |
-| `VITE_FIREBASE_*` (6 vars) | No | Firestore audit trail + Tool Crib catalog |
+| `VITE_FIREBASE_*` (6 vars) | Yes (for Gemini analysis) | Auth + Firestore audit trail + Tool Crib catalog + the `analyzeGemini` callable |
 | `VITE_TOOLCRIB_DEBUG_ALLOW_UNAUTH` | No | Skip auth gate in DEV only |
 | `DISABLE_HMR` | No | Set to `true` to disable Vite HMR (used in AI Studio) |
 | `ODOO_URL` / `ODOO_DB` / `ODOO_USER` | Cloud Function only | Odoo 15 JSON-RPC sync. Read from `functions/.env` via `process.env` in `functions/src/index.ts` — never exposed to the browser |
 | `ODOO_API_KEY` | Cloud Function only | Odoo password. A Secret Manager secret (`defineSecret`), not an env var — read with `ODOO_API_KEY.value()` |
+| `GEMINI_API_KEY` | Cloud Function only | Gemini key. A Secret Manager secret (`defineSecret` in `functions/src/gemini.ts`), set via `firebase functions:secrets:set GEMINI_API_KEY` — never exposed to the browser |
 
 ## Architecture
 
@@ -72,11 +72,15 @@ The Reporte view stays mounted but hidden (`display: none`) so UI state and PDF 
 1. **Order extraction** — Las órdenes vienen de Firestore (`odooSaleOrders`) vía `listOrdersToInvoice()`. No hay PDF de órdenes ni llamada a Gemini en este paso. Cada línea de orden con `qty_pending_from_pickings > 0` se mapea a un `ExtractedOrder`. La constante `ORDER_PROMPT_VERSION` sobrevive **solo** como etiqueta en el log de auditoría `analysisRuns`.
 2. **Auto-matching** — `listActiveDrawingViews()` fetches the Tool Crib catalog from Firestore and scores each order against each library entry using `scorePieceMatch` / `extractLibrarySignals`. **ISO-first**: if any ISO drawing scores ≥ `MIN_BLUEPRINT_MATCH_SCORE`, it wins over any CAD drawing regardless of score. Matching blueprints are auto-fetched via `fetchPdfAsDataUrl` and added to the workspace without user interaction. Hot-stamp orders (`isHotStampPiece`) are matched by keyword search (the fuzzy matcher can't connect "HOT STAMP LETRA M" with "PUNZONES DE MARCA").
 3. **PDF rasterization** — Blueprint PDFs are sent to a dedicated Web Worker (`src/workers/pdfImageWorker.ts`) that renders page 1 with pdf.js (OffscreenCanvas, `disableWorker: true`) and normalizes the output to JPEG.
-4. **Blueprint analysis** — The JPEG is sent to `gemini-3.5-flash` Vision; it returns `BlueprintSpec[]` with piece label and an isometric bounding box (`[ymin, xmin, ymax, xmax]` on a 0–1000 grid). Results are cached in IndexedDB keyed by `BLUEPRINT_PROMPT_VERSION`. **Two-pass refinement**: if the initial bounding box area exceeds `REFINEMENT_SKIP_AREA_THRESHOLD = 400_000` (~632×632 px), a second Gemini call crops the region and re-asks for a tighter box, then maps coordinates back to the original 0–1000 space.
+4. **Blueprint analysis** — The JPEG is sent to `gemini-3.5-flash` Vision **via the `analyzeGemini` Cloud Function** (`src/lib/geminiProxy.ts` → `functions/src/gemini.ts`), not directly from the browser — the Gemini API key lives only in Secret Manager. It returns `BlueprintSpec[]` with piece label and an isometric bounding box (`[ymin, xmin, ymax, xmax]` on a 0–1000 grid). Results are cached in IndexedDB keyed by `BLUEPRINT_PROMPT_VERSION`. **Two-pass refinement**: if the initial bounding box area exceeds `REFINEMENT_SKIP_AREA_THRESHOLD = 400_000` (~632×632 px), a second Gemini call (same proxy) crops the region and re-asks for a tighter box, then maps coordinates back to the original 0–1000 space.
 5. **Progressive merge** — Blueprint results are applied to the order list as each blueprint completes (not at the end). `cropIsometricView()` crops the matched region from the rasterized JPEG. Falls back to `FALLBACK_CENTER_BOX = [30, 30, 720, 970]` if the box is invalid.
-6. **PDF export** — `jsPDF` + `jspdf-autotable` via `src/lib/pdfGenerator.ts` generates the final report with one row per order and the cropped isometric image embedded.
+6. **PDF export** — `jsPDF` + `jspdf-autotable` via `src/lib/pdfGenerator.ts` generates the final report with one row per order and the cropped isometric image embedded. Both `jsPDF`/`jspdf-autotable` and `pdf-lib` (`src/lib/planoOt.ts`) are dynamically `import()`ed at call time, not bundled into the initial page load.
 
-Up to 8 blueprints are analyzed concurrently (`MAX_BLUEPRINT_CONCURRENCY = 8`, via `runWithConcurrencyLimit` in `src/lib/documentAnalysis/concurrency.ts`). Results are cached in IndexedDB by document SHA-256 + prompt version (`src/lib/documentAnalysis/cache.ts`, TTL: 7 days). All Gemini API calls use `callWithRetry` (max 3 attempts, exponential backoff: 1s/2s).
+Up to 8 blueprints are analyzed concurrently (`MAX_BLUEPRINT_CONCURRENCY = 8`, via `runWithConcurrencyLimit` in `src/lib/documentAnalysis/concurrency.ts`). Results are cached in IndexedDB by document SHA-256 + prompt version (`src/lib/documentAnalysis/cache.ts`, TTL: 7 days). All Gemini calls go through `callGeminiProxy` (`src/lib/geminiProxy.ts`) wrapped in `callWithRetry` (max 3 attempts, exponential backoff: 1s/2s — retries only transient errors: 429/5xx or Functions codes like `unavailable`/`internal`, not `unauthenticated`/`invalid-argument`).
+
+### Gemini proxy (`src/lib/geminiProxy.ts` + `functions/src/gemini.ts`)
+
+The browser never holds a Gemini API key. `callGeminiProxy({ model, contents, config })` calls the authenticated callable `analyzeGemini` (requires `request.auth`, same pattern as `triggerOdooSync`), which holds the real key via Secret Manager and forwards the request to `ai.models.generateContent`. The function returns `{ candidates }`; the client derives `.text` itself (`extractResponseText`) by replicating the `@google/genai` SDK's own getter logic (concatenate `part.text` from the first candidate, skipping `thought` parts). `@google/genai` is not a client dependency at all anymore — schema `type` fields (`Type.OBJECT` etc.) are just plain strings (`'OBJECT'`) since the enum is a string enum. Deploy with `firebase deploy --only functions:analyzeGemini`; set the secret once with `firebase functions:secrets:set GEMINI_API_KEY`.
 
 **Prompt versioning**: When the Gemini prompts in `extractInfo()` change, bump `ORDER_PROMPT_VERSION` or `BLUEPRINT_PROMPT_VERSION` at the top of `src/hooks/useVisionAnalysis.ts` to invalidate stale IndexedDB cache entries for all users. App version is exposed as `__APP_VERSION__` (defined in `vite.config.ts` from `package.json`).
 
@@ -178,7 +182,8 @@ The Vite build splits vendor code into named chunks to avoid one giant bundle: `
 - `src/lib/pdfGenerator.ts` — `generateReportPdf` and `generateSingleOrderPdf`. Logic extracted from `App.tsx`; callers pass explicit options instead of closing over component state.
 - `src/lib/log.ts` — Dev-gated logger. `log.debug`/`log.info` only emit when `import.meta.env.DEV` is true; `log.warn`/`log.error` always emit. Use `log.*` instead of `console.*` for match/pipeline traces.
 - `src/lib/imageProcessing.ts` — `isValidBoundingBox`, `cropIsometricView`, `cropToBoxRaw`. Bounding-box validation is pure (testable in Node); the crop functions require a browser Canvas (not testable in Node without jsdom).
-- `src/lib/gemini.ts` — Low-level Gemini utilities: `callWithRetry` (exponential backoff), `preparePdfPart` / `prepareImagePart` (build `inlineData` objects for `@google/genai`). All Gemini calls go through these.
+- `src/lib/gemini.ts` — Low-level Gemini utilities: `callWithRetry` (exponential backoff, retries only transient errors), `preparePdfPart` / `prepareImagePart` (build `inlineData` part objects). All Gemini calls go through these.
+- `src/lib/geminiProxy.ts` — `callGeminiProxy()`, the client for the `analyzeGemini` Cloud Function. See "Gemini proxy" above.
 - `src/lib/blueprintParsers.ts` — `parseBoundingBox` and `parseBlueprintResponse` parse/validate raw Gemini Vision JSON into typed `BlueprintSpec[]`. Also exports `isRecord` / `asString` type-narrowing helpers.
 - `src/components/charts/BarChart.tsx` / `LineChart.tsx` — Pure SVG chart components (no external charting library). **Currently unused** — not imported by any view, including `InicioView`. Check before assuming they're wired to anything.
 

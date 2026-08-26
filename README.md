@@ -15,9 +15,32 @@ View your app in AI Studio: https://ai.studio/apps/5f47ea43-a1be-4acc-8542-a27d7
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Copy `.env.example` to `.env.local` and fill in the `VITE_FIREBASE_*` values
+   (Firebase project settings → Web App). The app needs Firebase configured
+   locally: Gemini calls go through the `analyzeGemini` Cloud Function, not
+   directly from the browser (see "Análisis vía Gemini" below), and the Cloud
+   Functions emulator needs `firebase emulators:start` running with
+   `GEMINI_API_KEY` set as a local secret override.
 3. Run the app:
    `npm run dev`
+
+## Análisis vía Gemini (Cloud Function)
+
+El navegador **nunca** tiene la API key de Gemini. Todas las llamadas (análisis de plano, refinamiento de bounding box, generación de vista 3D IA) pasan por la Cloud Function callable `analyzeGemini` (`functions/src/gemini.ts`), que exige `request.auth` y lee la key desde Secret Manager.
+
+Configurar el secreto (una sola vez por proyecto Firebase):
+
+```
+firebase functions:secrets:set GEMINI_API_KEY
+```
+
+Desplegar:
+
+```
+firebase deploy --only functions:analyzeGemini
+```
+
+Sin esto, el botón "Analizar" falla con "Firebase no está configurado — no es posible llamar a Gemini" (si falta `VITE_FIREBASE_*`) o con un error `unauthenticated`/`internal` de la función (si falta el secreto o no hay sesión iniciada).
 
 ## Audit trail en Firebase
 

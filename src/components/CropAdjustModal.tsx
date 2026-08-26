@@ -10,6 +10,7 @@ import { Button } from './ui/button';
 import { Crop, RotateCcw, Check } from 'lucide-react';
 import { cropIsometricView, isValidBoundingBox } from '../lib/imageProcessing';
 import type { BoundingBox, Order } from '../types';
+import { log } from '../lib/log';
 
 const DEFAULT_MANUAL_BOX: BoundingBox = [125, 125, 875, 875];
 
@@ -53,7 +54,7 @@ export function CropAdjustModal({
       .then((url) => {
         if (alive) setPreviewUrl(url);
       })
-      .catch((e) => console.warn('Error generando preview de crop:', e));
+      .catch((e) => log.warn('Error generando preview de crop:', e));
 
     return () => {
       alive = false;
@@ -122,7 +123,7 @@ export function CropAdjustModal({
       onSaveCrop(order, box, newCroppedUrl);
       onClose();
     } catch (err) {
-      console.error('Error guardando recorte:', err);
+      log.error('Error guardando recorte:', err);
     } finally {
       setSaving(false);
     }

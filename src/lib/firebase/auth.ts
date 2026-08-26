@@ -28,6 +28,7 @@ import {
 } from 'firebase/auth';
 
 import { getFirebaseAppOrNull } from './client';
+import { log } from '../log';
 
 export type AuthStatus = 'loading' | 'signed-in' | 'signed-out' | 'unavailable';
 
@@ -58,13 +59,13 @@ function resolveAuth(): Auth | null {
   try {
     cachedAuth = getAuth(app);
   } catch (error) {
-    console.warn('[smv-vision][auth] getAuth falló', error);
+    log.warn('[smv-vision][auth] getAuth falló', error);
     cachedAuth = null;
   }
 
   if (cachedAuth) {
     setPersistence(cachedAuth, browserLocalPersistence).catch((error: unknown) => {
-      console.warn('[smv-vision][auth] setPersistence falló', error);
+      log.warn('[smv-vision][auth] setPersistence falló', error);
     });
   }
 
@@ -101,7 +102,7 @@ export async function signInWithEmailPassword(
   } catch (error: unknown) {
     const code = extractErrorCode(error);
     const message = error instanceof Error ? error.message : 'Error desconocido';
-    console.error('[smv-vision][auth] signInWithEmailAndPassword falló', { code, message, error });
+    log.error('[smv-vision][auth] signInWithEmailAndPassword falló', { code, message, error });
 
     if (code === 'auth/invalid-email') {
       return {
@@ -169,7 +170,7 @@ export async function signInWithSsoToken(
     return { ok: true, user: credential.user };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error desconocido';
-    console.error('[smv-vision][auth] signInWithCustomToken falló', error);
+    log.error('[smv-vision][auth] signInWithCustomToken falló', error);
     return { ok: false, reason: 'error', message };
   }
 }
@@ -184,7 +185,7 @@ export async function signOutUser(): Promise<SignOutResult> {
     return { ok: true };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error desconocido';
-    console.warn('[smv-vision][auth] signOut falló', error);
+    log.warn('[smv-vision][auth] signOut falló', error);
     return { ok: false, reason: 'error', message };
   }
 }
@@ -234,7 +235,7 @@ function getAuthStore(): AuthStore {
       try {
         listener(state);
       } catch (error) {
-        console.warn('[smv-vision][auth] listener lanzó', error);
+        log.warn('[smv-vision][auth] listener lanzó', error);
       }
     }
   }
@@ -253,7 +254,7 @@ function getAuthStore(): AuthStore {
         notify();
       },
       (error) => {
-        console.warn('[smv-vision][auth] onAuthStateChanged error', error);
+        log.warn('[smv-vision][auth] onAuthStateChanged error', error);
         state = { status: 'signed-out', user: null };
         notify();
       },

@@ -19,6 +19,7 @@ import {
 } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { log } from '../lib/log';
 
 export interface StlViewerModalProps {
   open: boolean;
@@ -115,7 +116,7 @@ export function StlViewerModal({
       undefined,
       (err) => {
         if (disposed) return;
-        console.warn('[smv-vision][stl] load failed', err);
+        log.warn('[smv-vision][stl] load failed', err);
         setStatus('error');
         setErrorMessage('No se pudo cargar el STL. Revisa la URL o CORS del Storage.');
       },

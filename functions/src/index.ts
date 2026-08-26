@@ -12,6 +12,9 @@
  *  - `triggerOdooSync`: callable (onCall) que dispara el sync bajo demanda
  *    desde el botón REFRESCAR de OdooOrdersPanel. Requiere usuario
  *    autenticado (request.auth) aunque el invoker sea público.
+ *  - `analyzeGemini`: callable (onCall) que hace de proxy autenticado hacia
+ *    Gemini — ver functions/src/gemini.ts. La API key vive solo en Secret
+ *    Manager; el cliente ya no la trae en el bundle.
  *
  * Pipeline:
  *   1. search_read en sale.order (invoice_status in to invoice / upselling).
@@ -917,3 +920,6 @@ export const triggerOdooSync = onCall(
     }
   },
 );
+
+// Proxy autenticado hacia Gemini — ver functions/src/gemini.ts.
+export { analyzeGemini } from "./gemini";

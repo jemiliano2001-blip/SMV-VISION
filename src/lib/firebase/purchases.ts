@@ -17,6 +17,7 @@ import { getCurrentUserUid } from './auth';
 import { getFirestoreClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
 import { normalizePurchaseItem } from './purchaseValidators';
+import { log } from '../log';
 
 export const PURCHASES_COLLECTION = 'purchases';
 const DEFAULT_MAX = 500;
@@ -61,7 +62,7 @@ export async function listPurchases(options?: {
     });
     return { ok: true, value: out };
   } catch (error) {
-    console.warn('[smv-vision][purchases] listPurchases falló', error);
+    log.warn('[smv-vision][purchases] listPurchases falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -88,7 +89,7 @@ export async function createPurchase(item: Omit<PurchaseItem, 'id' | 'createdAtU
     });
     return { ok: true, value: { id: ref.id } };
   } catch (error) {
-    console.warn('[smv-vision][purchases] createPurchase falló', error);
+    log.warn('[smv-vision][purchases] createPurchase falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }
@@ -116,7 +117,7 @@ export async function updatePurchase(id: string, updates: Partial<Omit<PurchaseI
     await updateDoc(doc(database, PURCHASES_COLLECTION, id.trim()), cleanUpdates);
     return { ok: true, value: undefined };
   } catch (error) {
-    console.warn('[smv-vision][purchases] updatePurchase falló', error);
+    log.warn('[smv-vision][purchases] updatePurchase falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }
@@ -134,7 +135,7 @@ export async function deletePurchase(id: string): Promise<PurchaseResult<void>> 
     await deleteDoc(doc(database, PURCHASES_COLLECTION, id.trim()));
     return { ok: true, value: undefined };
   } catch (error) {
-    console.warn('[smv-vision][purchases] deletePurchase falló', error);
+    log.warn('[smv-vision][purchases] deletePurchase falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

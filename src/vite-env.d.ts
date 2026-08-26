@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_GEMINI_API_KEY?: string;
   readonly VITE_FIREBASE_API_KEY?: string;
   readonly VITE_FIREBASE_AUTH_DOMAIN?: string;
   readonly VITE_FIREBASE_PROJECT_ID?: string;
@@ -10,6 +9,9 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_APP_ID?: string;
   readonly VITE_FIREBASE_MEASUREMENT_ID?: string;
   readonly VITE_TOOLCRIB_DEBUG_ALLOW_UNAUTH?: string;
+  readonly VITE_RECAPTCHA_SITE_KEY?: string;
+  readonly VITE_APPCHECK_DEBUG?: string;
+  readonly VITE_APPCHECK_DEBUG_TOKEN?: string;
 }
 
 interface ImportMeta {

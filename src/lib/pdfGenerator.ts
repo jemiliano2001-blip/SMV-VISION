@@ -5,8 +5,9 @@
  * from the React component are made explicit via parameters.
  */
 
-import jsPDF from 'jspdf';
-import autoTable, { type CellHookData, type RowInput } from 'jspdf-autotable';
+// jsPDF + jspdf-autotable (~373 KB / 122 KB gzip) solo se cargan al generar un
+// PDF — bajo demanda dentro de cada función, en vez de en el bundle inicial.
+import type { CellHookData, RowInput } from 'jspdf-autotable';
 import type { Order, AnalysisRunSummary } from '../types';
 import { consolidateHotStamps } from './hotStamp';
 import {
@@ -22,6 +23,7 @@ import {
 } from './reportFormat';
 import { formatAgeDays, getOrderAgeDays } from './age';
 import { formatCajetinLine } from './reportViewMeta';
+import { log } from './log';
 
 function jsPdfImageFormat(dataUrl: string): 'JPEG' | 'PNG' {
   return dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
@@ -32,7 +34,8 @@ export interface ReportPdfOptions {
   analysisSummary?: AnalysisRunSummary | null;
 }
 
-export function generateSingleOrderPdf(order: Order): void {
+export async function generateSingleOrderPdf(order: Order): Promise<void> {
+  const { default: jsPDF } = await import('jspdf');
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const generatedAt = new Date();
   const pageW = doc.internal.pageSize.getWidth();
@@ -111,7 +114,7 @@ export function generateSingleOrderPdf(order: Order): void {
         doc.text('IA · NO ACOTAR', 40, y + imgSize + 12);
       }
     } catch (e) {
-      console.warn('No se pudo incrustar la imagen isométrica', e);
+      log.warn('No se pudo incrustar la imagen isométrica', e);
     }
   }
 
@@ -161,11 +164,15 @@ export function generateSingleOrderPdf(order: Order): void {
   try {
     window.open(doc.output('bloburl'), '_blank');
   } catch (e) {
-    console.warn('No fue posible abrir el preview del PDF', e);
+    log.warn('No fue posible abrir el preview del PDF', e);
   }
 }
 
-export function generateReportPdf(orders: Order[], options?: ReportPdfOptions): void {
+export async function generateReportPdf(orders: Order[], options?: ReportPdfOptions): Promise<void> {
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ]);
   // Cambiado a 'portrait' (vertical)
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const generatedAt = new Date();
@@ -365,7 +372,7 @@ export function generateReportPdf(orders: Order[], options?: ReportPdfOptions): 
             imageSize,
           );
         } catch (error) {
-          console.error('PDF image embedding error', error);
+          log.error('PDF image embedding error', error);
         }
       },
     });
@@ -441,6 +448,6 @@ export function generateReportPdf(orders: Order[], options?: ReportPdfOptions): 
     const blobUrl = doc.output('bloburl');
     window.open(blobUrl, '_blank');
   } catch (e) {
-    console.warn('No fue posible abrir el preview del PDF', e);
+    log.warn('No fue posible abrir el preview del PDF', e);
   }
 }

@@ -1,7 +1,6 @@
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
-import { GoogleGenAI, Type } from '@google/genai';
 import type {
   AnalysisMetrics,
   AnalysisRunSummary,
@@ -35,6 +34,7 @@ import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
 import { callWithRetry, prepareImagePart } from '../lib/gemini';
+import { callGeminiProxy } from '../lib/geminiProxy';
 import {
   parseBoundingBox,
   parseBlueprintResponse,
@@ -313,7 +313,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     setError(null);
   }, []);
 
-  const buildDropHandlers = (
+  const buildDropHandlers = useCallback((
     zone: 'workshop',
     onFiles: (files: FileList) => void | Promise<void>,
   ) => ({
@@ -333,9 +333,9 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
         void onFiles(files);
       }
     },
-  });
+  }), [draggingZone]);
 
-  const removeFile = (type: 'workshop', fileId?: string) => {
+  const removeFile = useCallback((type: 'workshop', fileId?: string) => {
     if (type === 'workshop') {
       setWorkshopPdfs((prev) => prev.filter((pdf) => pdf.id !== fileId));
       if (fileId) {
@@ -354,7 +354,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
         });
       }
     }
-  };
+  }, []);
 
   const attachedToolcribDrawingIds = useMemo(
     () => new Set(Object.values(toolcribPdfToDrawing)),
@@ -446,7 +446,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     return { errors };
   }, [toolcribPdfToDrawing, results]);
 
-  const copyResults = async () => {
+  const copyResults = useCallback(async () => {
     if (!results) return;
     try {
       await navigator.clipboard.writeText(JSON.stringify(results, null, 2));
@@ -459,17 +459,17 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
         copyingResetTimerRef.current = null;
       }, 2000);
     } catch (err) {
-      console.warn('[smv-vision] clipboard write rechazado', err);
+      log.warn('[smv-vision] clipboard write rechazado', err);
       setError('No fue posible copiar al portapapeles. Revisa los permisos del navegador.');
     }
-  };
+  }, [results]);
 
-  const downloadCsv = () => {
+  const downloadCsv = useCallback(() => {
     if (!results) return;
     downloadOrdersCsv(results);
-  };
+  }, [results]);
 
-  const downloadJson = () => {
+  const downloadJson = useCallback(() => {
     if (!results) return;
     const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -477,18 +477,25 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     a.href = url;
     a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
-  };
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, [results]);
 
   const downloadPdf = useCallback(() => {
     if (!results) return;
     generateReportPdf(results, {
       hotStampRefImage: hotStampRefImageRef.current,
       analysisSummary,
+    }).catch((e) => {
+      log.error('[smv-vision] generateReportPdf falló', e);
+      setError('No fue posible generar el PDF del reporte.');
     });
   }, [results, analysisSummary]);
 
   const downloadSingleOrderPdf = useCallback((order: Order) => {
-    generateSingleOrderPdf(order);
+    generateSingleOrderPdf(order).catch((e) => {
+      log.error('[smv-vision] generateSingleOrderPdf falló', e);
+      setError('No fue posible generar el PDF de la orden.');
+    });
   }, []);
 
   // Second-pass refinement: re-asks Gemini to tighten the bounding box on the
@@ -496,7 +503,6 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   // original image's 0–1000 coordinate space, or the original box if the second
   // pass fails or returns an unusable result.
   const refineSpecBox = async (
-    ai: GoogleGenAI,
     imageDataUrl: string,
     spec: BlueprintSpec,
   ): Promise<BlueprintSpec> => {
@@ -505,7 +511,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     if ((xmax - xmin) * (ymax - ymin) < REFINEMENT_SKIP_AREA_THRESHOLD) return spec;
     try {
       const croppedImageUrl = await cropToBoxRaw(imageDataUrl, spec.isometricBoundingBox);
-      const response = await callWithRetry(() => ai.models.generateContent({
+      const response = await callWithRetry(() => callGeminiProxy({
         model: GEMINI_BLUEPRINT_MODEL,
         contents: [{
           role: 'user',
@@ -521,11 +527,11 @@ No inventes información.` },
         config: {
           responseMimeType: "application/json",
           responseSchema: {
-            type: Type.OBJECT,
+            type: 'OBJECT',
             properties: {
               box: {
-                type: Type.ARRAY,
-                items: { type: Type.NUMBER },
+                type: 'ARRAY',
+                items: { type: 'NUMBER' },
               },
             },
             required: ["box"],
@@ -550,19 +556,13 @@ No inventes información.` },
       if (!isValidBoundingBox(mapped)) return spec;
       return { ...spec, isometricBoundingBox: mapped };
     } catch (e) {
-      console.warn('[smv-vision] box refinement failed, keeping initial box', e);
+      log.warn('[smv-vision] box refinement failed, keeping initial box', e);
       return spec;
     }
   };
 
   const extractInfo = async (): Promise<void> => {
     if (extractingRef.current) return;
-
-    const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? '').trim();
-    if (!geminiApiKey) {
-      setError('Falta configurar VITE_GEMINI_API_KEY (local) o GEMINI_API_KEY (AI Studio).');
-      return;
-    }
 
     extractingRef.current = true;
     setIsExtracting(true);
@@ -581,7 +581,6 @@ No inventes información.` },
     // Lista local para manejar PDFs adjuntados dinámicamente durante esta corrida
     let currentWorkshopPdfs = [...workshopPdfs];
 
-    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     const runStart = performance.now();
     let pdfRasterMs = 0;
     let orderFetchMs = 0;
@@ -777,7 +776,7 @@ No inventes información.` },
 
           if (bestView && bestScore >= MIN_BLUEPRINT_MATCH_SCORE) {
             if (!bestView.pdfUrl) {
-              console.warn(
+              log.warn(
                 '[smv-vision][match] coincidencia encontrada sin pdfUrl (plano en red, no en Storage):',
                 order.pieza, '→', bestView.partNumber, `(drawingId: ${bestView.drawingId})`,
               );
@@ -797,7 +796,7 @@ No inventes información.` },
         }
 
         if (noUrlMatches.length > 0) {
-          console.warn(
+          log.warn(
             '[smv-vision] Planos encontrados en catálogo pero sin URL de descarga (subir a Firebase Storage):',
             noUrlMatches.map((m) => `${m.pieza} → ${m.partNumber}`).join(', '),
           );
@@ -827,7 +826,7 @@ No inventes información.` },
               hotStampRefImageRef.current = hsRaster.imageDataUrl;
               log.debug('[smv-vision][hot-stamp] ISO de referencia rasterizado:', hotStampEntry.partNumber);
             } catch (e) {
-              console.warn('[smv-vision][hot-stamp] Error al rasterizar ISO de referencia:', e);
+              log.warn('[smv-vision][hot-stamp] Error al rasterizar ISO de referencia:', e);
             }
           }
         }
@@ -847,7 +846,7 @@ No inventes información.` },
 
           for (const result of fetchResults) {
             if (result.status === 'rejected') {
-              console.warn('[smv-vision] auto-attach fetch failed', result.reason);
+              log.warn('[smv-vision] auto-attach fetch failed', result.reason);
               continue;
             }
             const { bestView, pdfId, dataUrl } = result.value;
@@ -970,7 +969,7 @@ No inventes información.` },
                 cropCache.set(cropKey, isometricView);
               }
             } catch (e) {
-              console.error('Auto-crop error', e);
+              log.error('Auto-crop error', e);
             }
           }
 
@@ -1059,7 +1058,7 @@ No inventes información.` },
             });
 
             const blueprintAiStart = performance.now();
-            const response = await callWithRetry(() => ai.models.generateContent({
+            const response = await callWithRetry(() => callGeminiProxy({
               model: GEMINI_BLUEPRINT_MODEL,
               contents: [{
                 role: 'user',
@@ -1090,19 +1089,19 @@ Reglas de extracción (ESTILO UT2033):
               config: {
                 responseMimeType: "application/json",
                 responseSchema: {
-                  type: Type.ARRAY,
+                  type: 'ARRAY',
                   items: {
-                    type: Type.OBJECT,
+                    type: 'OBJECT',
                     properties: {
-                      pieza_detectada: { type: Type.STRING },
+                      pieza_detectada: { type: 'STRING' },
                       isometricBoundingBox: {
-                        type: Type.ARRAY,
-                        items: { type: Type.NUMBER },
+                        type: 'ARRAY',
+                        items: { type: 'NUMBER' },
                       },
-                      material: { type: Type.STRING },
-                      dureza: { type: Type.STRING },
-                      tratamiento: { type: Type.STRING },
-                      acabado: { type: Type.STRING },
+                      material: { type: 'STRING' },
+                      dureza: { type: 'STRING' },
+                      tratamiento: { type: 'STRING' },
+                      acabado: { type: 'STRING' },
                     },
                     required: ["pieza_detectada", "isometricBoundingBox"]
                   }
@@ -1114,7 +1113,7 @@ Reglas de extracción (ESTILO UT2033):
 
             // Two-pass box refinement in parallel across all specs (#2)
             const refinedSpecs = await Promise.all(
-              initialSpecs.map((spec) => refineSpecBox(ai, workerResult.imageDataUrl, spec))
+              initialSpecs.map((spec) => refineSpecBox(workerResult.imageDataUrl, spec))
             );
 
             const analysis: BlueprintAnalysis = {
@@ -1135,7 +1134,7 @@ Reglas de extracción (ESTILO UT2033):
             };
           } catch (e) {
             enqueueWorkshopStatusPatch({ fileId: pdf.id, status: 'error' });
-            console.error('[smv-vision] blueprint analysis failed for', pdf.name, e);
+            log.error('[smv-vision] blueprint analysis failed for', pdf.name, e);
             taskResult = {
               index,
               fileId: pdf.id,
@@ -1205,7 +1204,7 @@ Reglas de extracción (ESTILO UT2033):
               );
               let generated = cached;
               if (!generated) {
-                generated = await generateIsometricImageFromDrawing(ai, {
+                generated = await generateIsometricImageFromDrawing({
                   sourceImageDataUrl: source,
                 });
                 if (generated) {
@@ -1290,11 +1289,11 @@ Reglas de extracción (ESTILO UT2033):
             },
           });
         } catch (auditErr) {
-          console.warn('[smv-vision][audit] hash calc para success falló', auditErr);
+          log.warn('[smv-vision][audit] hash calc para success falló', auditErr);
         }
       })();
     } catch (err: unknown) {
-      console.error("PDF Analysis Error Object:", err);
+      log.error("PDF Analysis Error Object:", err);
       const errorMessage = err instanceof Error ? err.message : JSON.stringify(err);
       setError(`Error analizando PDFs: ${errorMessage}. Verifique su conexión y permisos de API.`);
 
@@ -1326,7 +1325,7 @@ Reglas de extracción (ESTILO UT2033):
             },
           });
         } catch (auditErr) {
-          console.warn('[smv-vision][audit] hash calc para error falló', auditErr);
+          log.warn('[smv-vision][audit] hash calc para error falló', auditErr);
         }
       })();
     } finally {
@@ -1359,17 +1358,10 @@ Reglas de extracción (ESTILO UT2033):
       const source = order.sourceImageDataUrl ?? order.isometricView;
       if (!source) return;
 
-      const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? '').trim();
-      if (!geminiApiKey) {
-        setError('Falta configurar VITE_GEMINI_API_KEY para generar vistas 3D con IA.');
-        return;
-      }
-
       const key = orderAiKey(order);
       setAiIsoGeneratingKey(key);
       setError(null);
       try {
-        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
         const hash = await createDocumentHash(source);
         const cached = await readCachedValue<string>(
           'iso-gen',
@@ -1378,7 +1370,7 @@ Reglas de extracción (ESTILO UT2033):
         );
         let generated = cached;
         if (!generated) {
-          generated = await generateIsometricImageFromDrawing(ai, {
+          generated = await generateIsometricImageFromDrawing({
             sourceImageDataUrl: source,
           });
           if (generated) {
@@ -1456,6 +1448,11 @@ Reglas de extracción (ESTILO UT2033):
     [snapshotOriginalOnce],
   );
 
+  const isAiIsoGenerating = useCallback(
+    (order: Order) => aiIsoGeneratingKey === orderAiKey(order),
+    [aiIsoGeneratingKey],
+  );
+
   const auditedCount = useMemo(
     () => (results ? results.filter((r) => r.haSidoAuditada).length : 0),
     [results],
@@ -1496,7 +1493,7 @@ Reglas de extracción (ESTILO UT2033):
     clearSeedWarning,
     generateAiIsometricForOrder,
     aiIsoGeneratingKey,
-    isAiIsoGenerating: (order: Order) => aiIsoGeneratingKey === orderAiKey(order),
+    isAiIsoGenerating,
     removeFile, buildDropHandlers,
     downloadPdf, downloadCsv, downloadJson,
     downloadSingleOrderPdf, copyResults,

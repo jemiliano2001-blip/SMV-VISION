@@ -18,6 +18,7 @@ import { AlertCircle, Loader2, LogIn, ShieldCheck, Mail, Lock, Ghost, ShieldAler
 import { isFirebaseConfigured } from '../lib/firebase/env';
 import { signInWithEmailPassword, signInWithSsoToken, useFirebaseUser } from '../lib/firebase/auth';
 import { validateSignInCredentials } from '../lib/firebase/authValidators';
+import { log } from '../lib/log';
 
 interface AuthGateProps {
   children: ReactNode;
@@ -44,15 +45,15 @@ export function AuthGate({ children }: AuthGateProps): ReactElement {
       setErrorMessage(null);
       signInWithSsoToken(ssoToken)
         .then((res) => {
-          if (res.ok) {
-            const urlLimpia = window.location.pathname + window.location.search;
-            window.history.replaceState(null, '', urlLimpia);
-          } else {
+          if (res.ok === false) {
             setErrorMessage(res.message || 'No fue posible autenticar con el token SSO.');
+            return;
           }
+          const urlLimpia = window.location.pathname + window.location.search;
+          window.history.replaceState(null, '', urlLimpia);
         })
         .catch((err) => {
-          console.error('[smv-vision][auth] error procesando SSO token:', err);
+          log.error('[smv-vision][auth] error procesando SSO token:', err);
           setErrorMessage('Error al procesar el token SSO.');
         })
         .finally(() => {

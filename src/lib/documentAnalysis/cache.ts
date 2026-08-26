@@ -1,4 +1,5 @@
 import { createStore, del, get, set } from 'idb-keyval';
+import { log } from '../log';
 
 const CACHE_NAMESPACE = 'smvVisionDocAnalysisV1';
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
@@ -49,7 +50,7 @@ function cleanupLegacyLocalStorage(): void {
       }
     });
   } catch (error) {
-    console.warn('[cache] legacy localStorage cleanup skipped', error);
+    log.warn('[cache] legacy localStorage cleanup skipped', error);
   }
 }
 
@@ -99,7 +100,7 @@ export async function readCachedValue<TValue>(
   try {
     envelope = await get<CacheEnvelope<TValue>>(key, store);
   } catch (error) {
-    console.warn('[cache] read failed, treating as miss', { key, error });
+    log.warn('[cache] read failed, treating as miss', { key, error });
     return null;
   }
 
@@ -111,7 +112,7 @@ export async function readCachedValue<TValue>(
     try {
       await del(key, store);
     } catch (error) {
-      console.warn('[cache] failed to evict expired entry', { key, error });
+      log.warn('[cache] failed to evict expired entry', { key, error });
     }
     return null;
   }
@@ -137,6 +138,6 @@ export async function writeCachedValue<TValue>(
   } catch (error) {
     // Cache is purely optimizational: quota exhaustion, private mode, or any
     // other IDB failure must NEVER abort the document analysis pipeline.
-    console.warn('[cache] write failed, continuing without cache entry', { key, error });
+    log.warn('[cache] write failed, continuing without cache entry', { key, error });
   }
 }

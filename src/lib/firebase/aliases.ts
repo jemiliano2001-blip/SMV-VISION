@@ -26,6 +26,7 @@ import { getFirestoreClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
 export { normalizeAliasKey } from '../aliasKey';
 import { normalizeAliasKey } from '../aliasKey';
+import { log } from '../log';
 
 export const PART_ALIASES_COLLECTION = 'partAliases';
 
@@ -98,7 +99,7 @@ export async function listPartAliases(): Promise<AliasResult<PartAliasDoc[]>> {
 
     return { ok: true, value: aliases };
   } catch (error) {
-    console.warn('[smv-vision][aliases] listPartAliases falló', error);
+    log.warn('[smv-vision][aliases] listPartAliases falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -145,7 +146,7 @@ export async function savePartAlias(payload: {
 
     return { ok: true, value: { id: docId } };
   } catch (error) {
-    console.warn('[smv-vision][aliases] savePartAlias falló', error);
+    log.warn('[smv-vision][aliases] savePartAlias falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }
@@ -162,7 +163,7 @@ export async function deletePartAlias(id: string): Promise<AliasResult<void>> {
     await deleteDoc(doc(db, PART_ALIASES_COLLECTION, id));
     return { ok: true, value: undefined };
   } catch (error) {
-    console.warn('[smv-vision][aliases] deletePartAlias falló', error);
+    log.warn('[smv-vision][aliases] deletePartAlias falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

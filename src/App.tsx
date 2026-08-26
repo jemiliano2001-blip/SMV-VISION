@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from "motion/react";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import {
@@ -39,7 +39,11 @@ import { CropAdjustModal } from './components/CropAdjustModal';
 import { QuickPurchaseModal } from './components/QuickPurchaseModal';
 import { ReportRowActions } from './components/ReportRowActions';
 import { ToolcribHistoryModal } from './components/ToolcribHistoryModal';
-import { StlViewerModal } from './components/StlViewerModal';
+// three.js (~600 KB) solo se necesita cuando el operador abre el visor 3D —
+// se carga bajo demanda en lugar de en el bundle inicial (three-vendor chunk).
+const StlViewerModal = lazy(() =>
+  import('./components/StlViewerModal').then((m) => ({ default: m.StlViewerModal })),
+);
 import { formatAgeDays, getOrderAgeDays } from './lib/age';
 import { useVisionAnalysis } from './hooks/useVisionAnalysis';
 import { useToolcribCatalog } from './hooks/useToolcribCatalog';
@@ -1017,12 +1021,16 @@ export default function App() {
         onClose={() => setHistoryDrawing(null)}
       />
 
-      <StlViewerModal
-        open={stlDrawing !== null && Boolean(stlDrawing?.stlUrl)}
-        stlUrl={stlDrawing?.stlUrl ?? null}
-        title={stlDrawing ? `${stlDrawing.partNumber} · Rev ${stlDrawing.revision}` : ''}
-        onClose={() => setStlDrawing(null)}
-      />
+      {stlDrawing !== null && (
+        <Suspense fallback={null}>
+          <StlViewerModal
+            open={Boolean(stlDrawing.stlUrl)}
+            stlUrl={stlDrawing.stlUrl ?? null}
+            title={`${stlDrawing.partNumber} · Rev ${stlDrawing.revision}`}
+            onClose={() => setStlDrawing(null)}
+          />
+        </Suspense>
+      )}
 
       {/* Toast de confirmación de compra */}
       {purchaseToast && (

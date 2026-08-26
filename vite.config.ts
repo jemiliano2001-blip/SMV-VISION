@@ -2,7 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs';
 import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
+import {defineConfig} from 'vite';
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')) as { version: string };
 
@@ -30,12 +30,10 @@ function syncPdfjsWasm(): void {
 
 syncPdfjsWasm();
 
-export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
+export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       __APP_VERSION__: JSON.stringify(pkg.version),
     },
     resolve: {
@@ -55,36 +53,50 @@ export default defineConfig(({mode}) => {
             if (!id.includes('node_modules')) {
               return undefined;
             }
+            // Normalize path separators (Windows uses \) and collect EVERY
+            // package name along the path — not just the last `node_modules/`
+            // segment — because nested deps (e.g. firebase's own
+            // node_modules/@firebase/firestore, motion's @motionone/*) live
+            // one level deeper and would otherwise fall through to the
+            // catch-all. Matching by exact package name (not substring) also
+            // avoids false positives like `id.includes('react')` catching
+            // `react-zoom-pan-pinch`.
+            const normalized = id.replace(/\\/g, '/');
+            const pkgNames = [...normalized.matchAll(/node_modules\/(@[^/]+\/[^/]+|[^/@][^/]*)/g)]
+              .map((m) => m[1]);
 
-            if (id.includes('pdfjs-dist')) {
+            const hasPkg = (...names: string[]) => names.some((n) => pkgNames.includes(n));
+            const hasScope = (scope: string) => pkgNames.some((n) => n.startsWith(`${scope}/`));
+
+            if (hasPkg('pdfjs-dist')) {
               return 'pdfjs-vendor';
             }
 
-            if (id.includes('@google/genai')) {
+            if (hasPkg('@google/genai')) {
               return 'genai-vendor';
             }
 
-            if (id.includes('motion') || id.includes('framer-motion')) {
+            if (hasPkg('three')) {
+              return 'three-vendor';
+            }
+
+            if (hasPkg('motion', 'framer-motion') || hasScope('@motionone')) {
               return 'motion-vendor';
             }
 
-            if (
-              id.includes('react') ||
-              id.includes('scheduler') ||
-              id.includes('lucide-react')
-            ) {
+            if (hasPkg('react', 'react-dom', 'scheduler', 'lucide-react')) {
               return 'react-vendor';
             }
 
-            if (id.includes('firebase')) {
+            if (hasPkg('firebase') || hasScope('@firebase')) {
               return 'firebase-vendor';
             }
 
-            if (id.includes('jspdf') || id.includes('jspdf-autotable')) {
+            if (hasPkg('jspdf', 'jspdf-autotable')) {
               return 'pdf-gen-vendor';
             }
 
-            if (id.includes('pdf-lib')) {
+            if (hasPkg('pdf-lib')) {
               return 'pdf-lib-vendor';
             }
 

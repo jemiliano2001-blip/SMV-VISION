@@ -5,7 +5,8 @@
  * zona segura.
  */
 
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+// pdf-lib (~523 KB / 208 KB gzip) solo se necesita al sellar/imprimir un plano
+// OT — se importa dinámicamente dentro de las funciones para no ir en el bundle inicial.
 
 export interface PlanoOtStamp {
   soNumber: string;
@@ -35,6 +36,7 @@ export async function stampPlanoOt(
   pdfDataUrl: string,
   stamp: PlanoOtStamp,
 ): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const pdfDoc = await PDFDocument.load(dataUrlToUint8Array(pdfDataUrl));
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const pages = pdfDoc.getPages();
@@ -154,6 +156,7 @@ export async function createStampedPlanoOtBatch(
     throw new Error('No hay planos seleccionados para imprimir.');
   }
 
+  const { PDFDocument } = await import('pdf-lib');
   const mergedDoc = await PDFDocument.create();
 
   for (const item of items) {

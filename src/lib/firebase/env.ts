@@ -8,6 +8,8 @@
  * - Nunca se imprime la apiKey en logs; sólo un flag booleano de estado.
  */
 
+import { log } from '../log';
+
 export interface FirebaseClientConfig {
   apiKey: string;
   authDomain: string;
@@ -65,7 +67,7 @@ export function getFirebaseConfig(): FirebaseClientConfig | null {
 
   if (missing.length > 0) {
     if (import.meta.env.DEV) {
-      console.info(
+      log.info(
         '[smv-vision][firebase] Audit trail desactivado (faltan variables de entorno):',
         missing.join(', '),
       );
@@ -113,4 +115,38 @@ export function isToolcribDebugUnauthAllowed(): boolean {
     return false;
   }
   return parseBooleanEnv(import.meta.env.VITE_TOOLCRIB_DEBUG_ALLOW_UNAUTH);
+}
+
+export interface AppCheckClientConfig {
+  recaptchaSiteKey: string;
+  /** UUID de debug registrado en Firebase Console → App Check (para DEV/localhost). */
+  debugToken: string | undefined;
+  /** Activa el debug provider aunque no haya token fijo (imprime uno nuevo en consola). */
+  debugEnabled: boolean;
+}
+
+/**
+ * App Check solo se activa si hay site key de reCAPTCHA v3 configurada.
+ * Sin ella, `null` — el resto del sistema sigue funcionando sin App Check
+ * (igual que Firebase/Gemini: ausencia de config nunca rompe el flujo).
+ */
+export function getAppCheckConfig(): AppCheckClientConfig | null {
+  const siteKey = readEnvOptional('VITE_RECAPTCHA_SITE_KEY');
+  if (!siteKey) {
+    return null;
+  }
+  return {
+    recaptchaSiteKey: siteKey,
+    debugToken: readEnvOptional('VITE_APPCHECK_DEBUG_TOKEN'),
+    debugEnabled: parseBooleanEnv(import.meta.env.VITE_APPCHECK_DEBUG),
+  };
+}
+
+function readEnvOptional(key: 'VITE_RECAPTCHA_SITE_KEY' | 'VITE_APPCHECK_DEBUG_TOKEN'): string | undefined {
+  const raw = import.meta.env[key];
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

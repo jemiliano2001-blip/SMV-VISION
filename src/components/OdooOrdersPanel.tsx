@@ -28,8 +28,6 @@ import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
 import { QuickPurchaseModal } from './QuickPurchaseModal';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { Button } from './ui/button';
 import {
   Table,
@@ -59,6 +57,7 @@ import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
 import { checkRevisionDiscrepancy } from '../lib/matching';
 import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { log } from '../lib/log';
 
 export interface OdooOrdersPanelProps {
   catalog: UseToolcribCatalogResult;
@@ -67,7 +66,11 @@ export interface OdooOrdersPanelProps {
   onOpenBiblioteca: (query: string, linkKey: string) => void;
 }
 
-function exportDeliverySlip(order: OdooOrderView): void {
+async function exportDeliverySlip(order: OdooOrderView): Promise<void> {
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ]);
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const pageW = doc.internal.pageSize.getWidth();
   const generatedAt = new Date();
@@ -153,7 +156,11 @@ function exportDeliverySlip(order: OdooOrderView): void {
   doc.save(`Remision_${order.name}_Preview.pdf`);
 }
 
-function exportPdf(orders: OdooOrderView[], productionMap: Map<string, ProductionStatus>): void {
+async function exportPdf(orders: OdooOrderView[], productionMap: Map<string, ProductionStatus>): Promise<void> {
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ]);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const generatedAt = new Date();
@@ -490,7 +497,7 @@ export function OdooOrdersPanel({
           const link = resolveLineLink(order, line, idx, library);
           const cadView = bridge.getCadViewForPrint(link);
           if (!cadView || !cadView.pdfUrl) {
-            console.warn(`[batch-print] Sin plano accesible para ${line.product}`);
+            log.warn(`[batch-print] Sin plano accesible para ${line.product}`);
             continue;
           }
 
@@ -516,7 +523,7 @@ export function OdooOrdersPanel({
               orderRef: order.name,
             });
           } catch (err) {
-            console.warn(`[batch-print] Error descargando ${cadView.partNumber}`, err);
+            log.warn(`[batch-print] Error descargando ${cadView.partNumber}`, err);
           }
         }
       }
@@ -752,7 +759,7 @@ export function OdooOrdersPanel({
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => exportDeliverySlip(order)}
+              onClick={() => { exportDeliverySlip(order).catch((e) => log.error('[smv-vision] exportDeliverySlip falló', e)); }}
               className="flex items-center gap-2 bg-surface text-ink hover:bg-line ml-2"
               title="Generar PDF de Remisión (Preview)"
             >
@@ -1062,7 +1069,7 @@ export function OdooOrdersPanel({
           </Button>
           <Button
             variant="ghost"
-            onClick={() => exportPdf(filteredOrders, productionMap)}
+            onClick={() => { exportPdf(filteredOrders, productionMap).catch((e) => log.error('[smv-vision] exportPdf falló', e)); }}
             disabled={loading || filteredOrders.length === 0}
             className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
           >

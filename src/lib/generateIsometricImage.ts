@@ -6,8 +6,8 @@
  * `isometricSource: 'ai-generated'` en la UI.
  */
 
-import { GoogleGenAI } from '@google/genai';
 import { callWithRetry, prepareImagePart } from './gemini';
+import { callGeminiProxy } from './geminiProxy';
 import { log } from './log';
 
 export const ISOMETRIC_GEN_PROMPT_VERSION = 'iso-gen-v2';
@@ -81,7 +81,6 @@ export function canGenerateAiIsometric(order: {
  * no devolvió inline image data (fail-soft).
  */
 export async function generateIsometricImageFromDrawing(
-  ai: GoogleGenAI,
   options: GenerateIsometricOptions,
 ): Promise<string | null> {
   const model = options.model ?? GEMINI_IMAGE_MODEL;
@@ -89,7 +88,7 @@ export async function generateIsometricImageFromDrawing(
   const imagePart = prepareImagePart(options.sourceImageDataUrl);
 
   const response = await callWithRetry(() =>
-    ai.models.generateContent({
+    callGeminiProxy({
       model,
       contents: [{ role: 'user', parts: [{ text: prompt }, imagePart] }],
       config: {
@@ -98,7 +97,7 @@ export async function generateIsometricImageFromDrawing(
     }),
   );
 
-  const parts = response.candidates?.[0]?.content?.parts as
+  const parts = response.candidates[0]?.content?.parts as
     | GeminiInlineImagePart[]
     | undefined;
   const dataUrl = extractGeneratedImageDataUrl(parts);

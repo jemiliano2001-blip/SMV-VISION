@@ -22,6 +22,7 @@ const WORK_ORDERS_COLLECTION = 'workOrders';
 import { getCurrentUserUid } from './auth';
 import { getFirestoreClient } from './client';
 import { isToolcribDebugUnauthAllowed } from './env';
+import { log } from '../log';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Constantes
@@ -211,7 +212,7 @@ export async function listOrdersToInvoice(options: {
       : null;
 
   if (!partnerKey && !partnerKeyPrefix) {
-    console.warn(
+    log.warn(
       '[smv-vision][odoo-orders] listOrdersToInvoice requiere partnerKey o partnerKeyPrefix',
     );
     return { ok: false, reason: 'read-failed' };
@@ -249,7 +250,7 @@ export async function listOrdersToInvoice(options: {
 
     return { ok: true, value: out };
   } catch (error) {
-    console.warn('[smv-vision][odoo-orders] listOrdersToInvoice falló', error);
+    log.warn('[smv-vision][odoo-orders] listOrdersToInvoice falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -308,7 +309,7 @@ export async function listEntregasSinOC(options?: {
 
     return { ok: true, value: out };
   } catch (error) {
-    console.warn('[smv-vision][odoo-orders] listEntregasSinOC falló', error);
+    log.warn('[smv-vision][odoo-orders] listEntregasSinOC falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -368,7 +369,7 @@ export async function listWorkOrderStatusBySoNumbers(
 
     return { ok: true, value: result };
   } catch (error) {
-    console.warn('[smv-vision][odoo-orders] listWorkOrderStatusBySoNumbers falló', error);
+    log.warn('[smv-vision][odoo-orders] listWorkOrderStatusBySoNumbers falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }
@@ -400,7 +401,7 @@ export async function listAllOdooOrders(options?: {
 
     return { ok: true, value: out };
   } catch (error) {
-    console.warn('[smv-vision][odoo-orders] listAllOdooOrders falló', error);
+    log.warn('[smv-vision][odoo-orders] listAllOdooOrders falló', error);
     return { ok: false, reason: 'read-failed' };
   }
 }

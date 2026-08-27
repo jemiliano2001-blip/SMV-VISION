@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Printer, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { Printer, Loader2, AlertCircle, Sparkles, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -149,60 +149,72 @@ export function ToolcribPrintModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Printer size={18} className="text-primary" />
-            Imprimir Plano
-          </DialogTitle>
-          <DialogDescription>
-            {drawing?.partNumber} - Rev {drawing?.revision}
-            <br />
-            Agrega información del reporte antes de imprimir para el taller.
-          </DialogDescription>
+      <DialogContent showCloseButton={false} className="max-w-lg bg-surface border-2 border-line p-0 overflow-hidden shadow-hard-accent text-ink rounded-none flex flex-col">
+        <DialogHeader className="flex flex-row items-center justify-between px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white shrink-0 space-y-0">
+          <div className="flex items-center gap-3">
+            <div className="size-8 bg-accent text-bg flex items-center justify-center font-bold">
+              <Printer size={16} />
+            </div>
+            <div>
+              <DialogTitle className="font-display text-lg font-black uppercase tracking-tight m-0 text-white">
+                Imprimir Plano (OT)
+              </DialogTitle>
+              <DialogDescription className="font-mono text-[10px] text-white/70 uppercase tracking-widest m-0">
+                {drawing?.partNumber} · Rev {drawing?.revision}
+              </DialogDescription>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={onClose}
+            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+            title="Cerrar (ESC)"
+          >
+            <X size={14} />
+          </Button>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 py-2">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {error && (
-            <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <div className="flex items-start gap-2 border-2 border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {matchingOrders.length > 0 && (
-            <div className="space-y-2 rounded-md bg-secondary/30 p-3 border border-secondary/50">
-              <p className="text-xs font-semibold text-secondary-foreground flex items-center gap-1.5">
-                <Sparkles size={12} className="text-primary" /> Sugerencias de Odoo
+            <div className="space-y-2 bg-surface-2 p-3 border-2 border-line">
+              <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-ink-dim flex items-center gap-1.5">
+                <Sparkles size={12} className="text-accent" /> Sugerencias de Órdenes Odoo
               </p>
-              <div className="flex flex-wrap gap-2 mt-2">
+              <div className="flex flex-wrap gap-1.5 mt-1">
                 {matchingOrders.map((match) => (
-                  <Button
+                  <button
                     key={match.order.id}
                     type="button"
-                    variant="secondary"
-                    size="xs"
                     onClick={() => {
                       setSoNumber(match.order.name);
                       setCantidad(match.qty.toString());
                     }}
                     disabled={isProcessing}
+                    className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider border-2 border-line bg-surface text-ink hover:border-accent hover:text-accent transition-colors"
                   >
                     {match.order.name} ({match.qty} pzs)
-                  </Button>
+                  </button>
                 ))}
               </div>
             </div>
           )}
 
           {isLoadingOrders && matchingOrders.length === 0 && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <Loader2 size={12} className="animate-spin" /> Buscando órdenes en Odoo...
+            <p className="font-mono text-[10px] uppercase tracking-wider text-ink-dim flex items-center gap-1.5">
+              <Loader2 size={12} className="animate-spin text-accent" /> Buscando órdenes en Odoo…
             </p>
           )}
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Número de Orden (SO)
             </label>
             <Input
@@ -210,11 +222,12 @@ export function ToolcribPrintModal({
               onChange={(e) => setSoNumber(e.target.value)}
               placeholder="Ej. 2026/S00781"
               disabled={isProcessing}
+              className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Cantidad de Piezas
             </label>
             <Input
@@ -224,11 +237,12 @@ export function ToolcribPrintModal({
               onChange={(e) => setCantidad(e.target.value)}
               placeholder="Ej. 50"
               disabled={isProcessing}
+              className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Notas Adicionales (Aparecerán en el PDF)
             </label>
             <Input
@@ -236,30 +250,33 @@ export function ToolcribPrintModal({
               onChange={(e) => setNotas(e.target.value)}
               placeholder='Ej. "Cuidado con el acabado aquí"'
               disabled={isProcessing}
+              className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
           </div>
 
-          <DialogFooter className="pt-4">
+          <DialogFooter className="pt-2 flex justify-end gap-2 border-t-2 border-line mt-4">
             <Button
               type="button"
               variant="outline"
               onClick={onClose}
               disabled={isProcessing}
+              className="border-2 border-line text-ink font-black uppercase text-[10px] tracking-widest hover:bg-surface-2 hover:text-ink transition-colors rounded-none h-9 px-4"
             >
               Cancelar
             </Button>
             <Button
               type="submit"
               disabled={isProcessing}
+              className="bg-accent text-bg px-6 h-9 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0 rounded-none flex items-center gap-2"
             >
               {isProcessing ? (
                 <>
-                  <Loader2 size={16} className="animate-spin mr-2" /> Preparando PDF...
+                  <Loader2 size={13} className="animate-spin" /> Preparando PDF…
                 </>
               ) : (
                 <>
-                  <Printer size={16} className="mr-2" />
-                  Imprimir
+                  <Printer size={13} />
+                  Imprimir OT
                 </>
               )}
             </Button>

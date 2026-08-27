@@ -54,7 +54,7 @@ export function ReportRowActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors"
+        className="inline-flex items-center gap-1 border-2 border-line bg-surface text-ink px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wider hover:bg-surface-2 hover:border-accent hover:text-accent transition-colors outline-none"
         title="Más acciones"
       >
         <MoreHorizontal size={12} />
@@ -62,58 +62,58 @@ export function ReportRowActions({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="min-w-[160px] rounded-none border-2 border-black bg-white p-1 shadow-[4px_4px_0_#000] text-black"
+        className="min-w-[160px] rounded-none border-2 border-line bg-surface p-1 shadow-hard-accent text-ink"
       >
         {showEncuadre && (
           <DropdownMenuItem
-            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer"
+            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
             onClick={onEncuadre}
           >
-            <Crop size={12} />
+            <Crop size={12} className="mr-1.5" />
             Encuadre
           </DropdownMenuItem>
         )}
         <DropdownMenuItem
-          className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer"
+          className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
           onClick={onComprar}
         >
-          <ShoppingCart size={12} />
+          <ShoppingCart size={12} className="mr-1.5" />
           Comprar
         </DropdownMenuItem>
         {showAi && (
           <DropdownMenuItem
-            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer"
+            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
             disabled={isExtracting || isAiGenerating}
             onClick={onAiIso}
           >
-            {isAiGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+            {isAiGenerating ? <Loader2 size={12} className="animate-spin mr-1.5 text-accent" /> : <Sparkles size={12} className="mr-1.5 text-accent" />}
             {order.isometricSource === 'ai-generated' ? 'Regen 3D' : '3D IA'}
           </DropdownMenuItem>
         )}
         {showStl && (
           <DropdownMenuItem
-            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer"
+            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
             onClick={onStl}
           >
-            <Box size={12} />
+            <Box size={12} className="mr-1.5" />
             Ver 3D
           </DropdownMenuItem>
         )}
         {showHistorial && (
           <DropdownMenuItem
-            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer"
+            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
             onClick={onHistorial}
           >
-            <History size={12} />
+            <History size={12} className="mr-1.5" />
             Historial
           </DropdownMenuItem>
         )}
         {showVincular && (
           <DropdownMenuItem
-            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer"
+            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
             onClick={onVincular}
           >
-            <Link2 size={12} />
+            <Link2 size={12} className="mr-1.5" />
             Vincular plano
           </DropdownMenuItem>
         )}

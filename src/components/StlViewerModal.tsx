@@ -153,34 +153,41 @@ export function StlViewerModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 sm:p-8"
       role="dialog"
       aria-modal="true"
       aria-label={`Vista 3D ${title}`}
+      onClick={onClose}
     >
-      <div className="flex h-[min(80vh,720px)] w-full max-w-3xl flex-col border-2 border-black bg-bg shadow-[8px_8px_0_#000]">
-        <header className="flex items-center justify-between border-b-2 border-black px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Box size={18} className="text-accent" />
+      <div
+        className="flex h-[min(85vh,740px)] w-full max-w-4xl flex-col border-2 border-line bg-surface shadow-hard-accent rounded-none overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b-2 border-line bg-[#0D2B4D] text-white px-5 py-3 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="size-8 bg-accent text-bg flex items-center justify-center font-bold">
+              <Box size={16} />
+            </div>
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim">Vista 3D · STL</p>
-              <h2 className="font-display text-lg font-black uppercase italic leading-tight">{title}</h2>
+              <p className="font-mono text-[10px] uppercase tracking-widest text-white/70">Vista 3D · STL</p>
+              <h2 className="font-display text-lg font-black uppercase tracking-tight text-white leading-tight">{title}</h2>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="border-2 border-black p-2 hover:bg-surface-2"
+            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors flex items-center justify-center"
+            title="Cerrar (ESC)"
             aria-label="Cerrar"
           >
-            <X size={18} />
+            <X size={14} />
           </button>
         </header>
 
-        <div className="relative min-h-0 flex-1 bg-[#f4f4f0]" ref={mountRef}>
+        <div className="relative min-h-0 flex-1 bg-[#151A21]" ref={mountRef}>
           {status === 'loading' && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 font-mono text-xs uppercase">
-              <Loader2 className="animate-spin" size={16} /> Cargando malla…
+            <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 font-mono text-xs uppercase text-ink-dim">
+              <Loader2 className="animate-spin text-accent" size={16} /> Cargando modelo 3D…
             </div>
           )}
           {status === 'error' && (
@@ -190,8 +197,9 @@ export function StlViewerModal({
           )}
         </div>
 
-        <footer className="border-t-2 border-black px-4 py-2 font-mono text-[10px] text-ink-dim">
-          Arrastra para rotar · rueda para zoom. Solo visualización — no sustituye el plano CAD.
+        <footer className="border-t-2 border-line px-5 py-2.5 bg-surface-2 font-mono text-[10px] text-ink-dim flex items-center justify-between">
+          <span>Arrastra para rotar · rueda para zoom. Solo visualización — no sustituye el plano CAD.</span>
+          <span className="text-accent font-bold uppercase">WebGL</span>
         </footer>
       </div>
     </div>

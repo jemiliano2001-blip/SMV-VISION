@@ -138,18 +138,13 @@ function normalizePartnerKey(partner: string): string {
   return partner.trim().toUpperCase();
 }
 
-/** Misma regla que `toInvoice` en el upsert de encabezados. */
+/** Toda orden pendiente de facturar en Odoo es activa para facturación (`toInvoice`). */
 function isActiveToInvoiceOrder(order: SaleOrder): boolean {
-  const isPendingInvoice =
-    order.invoice_status === "to invoice" ||
-    order.invoice_status === "upselling";
-  let hasPendingPhysicalWork = true;
-  if (order.deliveries.length > 0) {
-    hasPendingPhysicalWork = order.deliveries.some(
-      (d) => d.state !== "done" && d.state !== "cancel",
-    );
-  }
-  return isPendingInvoice && hasPendingPhysicalWork;
+  return (
+    (order.invoice_status === "to invoice" ||
+      order.invoice_status === "upselling") &&
+    order.state !== "cancel"
+  );
 }
 
 function buildPartnerSummaries(orders: SaleOrder[]): SyncPartnerSummary[] {
@@ -501,6 +496,27 @@ function computePendingQuantities(order: SaleOrder): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<number> {
+  const activeDocIds = new Set(orders.map((o) => o.name.replace(/\//g, "_")));
+
+  // 1. Desactivar en Firestore órdenes que ya fueron facturadas o canceladas en Odoo
+  const existingActiveDocs = await db
+    .collection(ODOO_COLLECTION)
+    .where("toInvoice", "==", true)
+    .get();
+
+  const toDeactivate = existingActiveDocs.docs.filter((d) => !activeDocIds.has(d.id));
+  for (let i = 0; i < toDeactivate.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    for (const doc of toDeactivate.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc.ref, {
+        toInvoice: false,
+        updatedAtUTC: FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+
+  // 2. Guardar o actualizar las órdenes activas
   let written = 0;
   for (let i = 0; i < orders.length; i += BATCH_SIZE) {
     const batch = db.batch();

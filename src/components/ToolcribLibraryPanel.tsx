@@ -58,7 +58,7 @@ const StlViewerModal = lazy(() =>
 );
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Input } from './ui/input';
-import { Button, buttonVariants } from './ui/button';
+import { Button } from './ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -187,18 +187,18 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border transition-all ${
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider border-2 transition-all ${
         selected
-          ? 'bg-primary text-primary-foreground border-primary font-bold shadow-sm'
-          : 'bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
+          ? 'bg-accent text-bg border-accent font-bold shadow-hard active:translate-x-0.5 active:translate-y-0.5'
+          : 'bg-surface hover:bg-surface-2 text-ink hover:text-accent border-line hover:border-accent'
       }`}
     >
       <span>{label}</span>
       <span
-        className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+        className={`text-[9px] font-mono px-1 py-0.2 ${
           selected
-            ? 'bg-primary-foreground/20 text-primary-foreground'
-            : 'bg-muted text-muted-foreground'
+            ? 'bg-black/25 text-bg font-bold'
+            : 'bg-surface-2 text-ink-dim'
         }`}
       >
         {count}
@@ -471,13 +471,13 @@ export function ToolcribLibraryPanel({
   const toolbar = (
     <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
       <div className="relative flex-1 w-full">
-        <Search size={16} className="absolute left-2.5 top-2.5 text-muted-foreground" />
+        <Search size={14} className="absolute left-3 top-2.5 text-ink-dim" />
         <Input
           type="text"
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
           placeholder="Buscar parte, descripción o revisión…"
-          className="pl-9 w-full"
+          className="pl-9 w-full border-2 border-line bg-surface-2 text-ink h-9 text-xs font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
         />
       </div>
       <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -486,18 +486,22 @@ export function ToolcribLibraryPanel({
           size="sm"
           onClick={() => void loadLibrary()}
           disabled={status === 'loading'}
-          className="w-full sm:w-auto"
+          className="border-2 border-line text-ink font-black uppercase text-[10px] tracking-widest hover:bg-surface-2 hover:text-ink transition-colors rounded-none h-9 px-3 w-full sm:w-auto"
           title="Refrescar biblioteca"
         >
           {status === 'loading' ? (
-            <Loader2 size={14} className="animate-spin mr-2" />
+            <Loader2 size={14} className="animate-spin mr-2 text-accent" />
           ) : (
             <RefreshCcw size={14} className="mr-2" />
           )}
           Actualizar
         </Button>
-        <Button size="sm" onClick={() => setIsUploadModalOpen(true)} className="w-full sm:w-auto">
-          <Plus size={14} className="mr-2" />
+        <Button
+          size="sm"
+          onClick={() => setIsUploadModalOpen(true)}
+          className="bg-accent text-bg px-4 h-9 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 rounded-none flex items-center gap-1.5 w-full sm:w-auto"
+        >
+          <Plus size={14} />
           Subir Plano
         </Button>
       </div>
@@ -543,29 +547,29 @@ export function ToolcribLibraryPanel({
 
   const tableBlock = status === 'ready' && totalCount > 0 && (
     <div className={cn('space-y-2', isPage && 'flex-1 min-h-0 flex flex-col')}>
-      <p className="text-xs text-muted-foreground shrink-0">
+      <p className="font-mono text-[11px] uppercase tracking-wider text-ink-dim shrink-0">
         Mostrando {visibleCount} de {totalCount} piezas
         {views.length !== totalCount ? ` · ${views.length} archivos` : ''}.
       </p>
       <div
         className={cn(
-          'rounded-md border overflow-auto',
+          'border-2 border-line overflow-auto rounded-none bg-surface',
           isPage ? 'flex-1 min-h-0' : 'max-h-[400px]',
         )}
       >
         <Table>
-          <TableHeader className="sticky top-0 bg-background/95 backdrop-blur z-10 shadow-sm">
-            <TableRow>
-              <TableHead>Número de Parte</TableHead>
-              <TableHead>Descripción</TableHead>
-              <TableHead className="w-28">Rev</TableHead>
-              <TableHead className="text-right">Acciones</TableHead>
+          <TableHeader className="sticky top-0 bg-surface-2 border-b-2 border-line z-10">
+            <TableRow className="border-b-2 border-line hover:bg-transparent">
+              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5">Número de Parte</TableHead>
+              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5">Descripción</TableHead>
+              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5 w-28">Rev</TableHead>
+              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5 text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredGroups.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={4} className="h-24 text-center font-mono text-xs text-ink-dim uppercase">
                   Ningún plano coincide con la búsqueda.
                 </TableCell>
               </TableRow>
@@ -597,22 +601,22 @@ export function ToolcribLibraryPanel({
   );
 
   const body = (
-    <div className={cn(isPage ? 'flex-1 min-h-0 flex flex-col gap-4 p-4' : 'space-y-4')}>
+    <div className={cn(isPage ? 'flex-1 min-h-0 flex flex-col gap-4 p-5' : 'space-y-4')}>
       {toolbar}
       {filters}
       {errorMessage && (
-        <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div className="flex items-start gap-2 border-2 border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span>{errorMessage}</span>
         </div>
       )}
       {status === 'loading' && (
-        <div className="text-sm text-muted-foreground flex items-center justify-center py-8">
-          <Loader2 size={16} className="animate-spin mr-2" /> Cargando catálogo…
+        <div className="font-mono text-xs text-ink-dim flex items-center justify-center py-8 uppercase tracking-widest">
+          <Loader2 size={16} className="animate-spin mr-2 text-accent" /> Cargando catálogo…
         </div>
       )}
       {isEmpty && (
-        <div className="text-sm text-muted-foreground text-center py-8 border rounded-lg border-dashed">
+        <div className="font-mono text-xs text-ink-dim text-center py-8 border-2 border-dashed border-line bg-surface-2 p-6 corner-ticks">
           Aún no hay planos registrados. Ejecuta el script de bootstrap o carga el primer plano manual.
         </div>
       )}
@@ -623,25 +627,25 @@ export function ToolcribLibraryPanel({
   return (
     <div
       className={cn(
-        'border border-border bg-card text-card-foreground rounded-lg shadow-sm',
+        'border-2 border-line bg-surface text-ink rounded-none shadow-hard',
         isPage && 'h-full min-h-0 flex flex-col overflow-hidden',
       )}
     >
       {isPage ? (
-        <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border">
-          <span className="flex items-center gap-2 font-medium">
-            <FolderOpen size={16} className="text-primary" />
+        <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white">
+          <span className="flex items-center gap-2.5 font-display font-black text-lg uppercase tracking-tight text-white">
+            <FolderOpen size={18} className="text-accent" />
             Biblioteca Tool Crib
           </span>
-          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="flex items-center gap-2 font-mono text-xs text-white/80">
             {status === 'loading' ? (
-              <Loader2 size={14} className="animate-spin" />
+              <Loader2 size={14} className="animate-spin text-accent" />
             ) : status === 'ready' ? (
-              <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-full text-xs font-semibold">
-                {totalCount}
+              <span className="bg-accent text-bg px-2 py-0.5 text-[11px] font-bold">
+                {totalCount} piezas
               </span>
             ) : status === 'error' ? (
-              <AlertCircle size={14} className="text-destructive" />
+              <AlertCircle size={14} className="text-danger" />
             ) : null}
           </span>
         </div>
@@ -649,28 +653,28 @@ export function ToolcribLibraryPanel({
         <button
           type="button"
           onClick={() => setIsOpen((prev) => !prev)}
-          className="w-full flex items-center justify-between px-4 py-3 font-medium hover:bg-muted/50 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-t-lg"
+          className="w-full flex items-center justify-between px-5 py-3 font-medium bg-[#0D2B4D] text-white hover:bg-[#12365e] transition-colors outline-none border-b-2 border-line"
           aria-expanded={isOpen}
         >
-          <span className="flex items-center gap-2">
-            <FolderOpen size={16} className="text-primary" />
+          <span className="flex items-center gap-2.5 font-display font-black text-base uppercase tracking-tight text-white">
+            <FolderOpen size={16} className="text-accent" />
             Biblioteca Tool Crib
           </span>
-          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="flex items-center gap-2 font-mono text-xs text-white/80">
             {status === 'loading' ? (
-              <Loader2 size={14} className="animate-spin" />
+              <Loader2 size={14} className="animate-spin text-accent" />
             ) : status === 'ready' ? (
-              <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-full text-xs font-semibold">
+              <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-bold">
                 {totalCount}
               </span>
             ) : status === 'error' ? (
-              <AlertCircle size={14} className="text-destructive" />
+              <AlertCircle size={14} className="text-danger" />
             ) : null}
           </span>
         </button>
       )}
 
-      {listOpen && (isPage ? body : <div className="border-t border-border p-4">{body}</div>)}
+      {listOpen && (isPage ? body : <div className="p-4">{body}</div>)}
 
       <ToolcribUploadModal
         isOpen={isUploadModalOpen || !!updateDrawing}
@@ -830,13 +834,13 @@ function PartGroupRow({
   const isoFile = group.iso ? fileBasename(group.iso.sourcePath) : null;
 
   return (
-    <TableRow>
-      <TableCell className="font-medium whitespace-nowrap">
+    <TableRow className="border-b-2 border-line hover:bg-surface-2/60 transition-colors">
+      <TableCell className="font-medium whitespace-nowrap py-3">
         <div className="flex flex-col items-start">
           <div className="flex items-center gap-1.5">
-            <span>{group.partNumber}</span>
+            <span className="font-mono text-xs font-bold text-ink">{group.partNumber}</span>
             {group.cad && (
-              <span className="bg-muted text-muted-foreground border border-border text-[9px] font-mono px-1 py-0.5 rounded">
+              <span className="bg-surface-2 text-ink-dim border-2 border-line text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-none">
                 CAD
               </span>
             )}
@@ -845,14 +849,14 @@ function PartGroupRow({
                 type="button"
                 onClick={() => group.iso && onPreview(group.iso)}
                 disabled={!group.iso?.pdfUrl}
-                className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 text-[9px] font-mono px-1 py-0.5 rounded hover:bg-blue-500/20 disabled:opacity-50"
+                className="bg-draft/10 text-draft border-2 border-draft/40 hover:bg-draft/20 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-none transition-colors disabled:opacity-50"
                 title={group.iso.pdfUrl ? 'Ver ISO' : 'ISO sin PDF'}
               >
                 ISO
               </button>
             )}
             {!group.cad && (
-              <span className="text-[9px] font-mono text-muted-foreground">sin CAD</span>
+              <span className="text-[9px] font-mono text-ink-dim border border-line/60 px-1 py-0.2">sin CAD</span>
             )}
           </div>
           {printStat && printStat.count > 0 && (printView || group.iso) && (
@@ -862,7 +866,7 @@ function PartGroupRow({
                 const historyTarget = printView ?? group.iso;
                 if (historyTarget) onHistory(historyTarget);
               }}
-              className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded bg-muted/60 hover:bg-accent/10 border border-border hover:border-accent text-[10px] font-mono text-muted-foreground hover:text-accent transition-colors"
+              className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 bg-surface-2 hover:bg-accent/10 border-2 border-line hover:border-accent text-[10px] font-mono text-ink-dim hover:text-accent transition-colors rounded-none"
               title={`Impreso ${printStat.count} ${printStat.count === 1 ? 'vez' : 'veces'} (${printStat.totalCopies} copias). Clic para ver historial.`}
             >
               <Printer size={10} className="text-accent" />
@@ -875,48 +879,49 @@ function PartGroupRow({
             </button>
           )}
           {errorMessage && (
-            <span className="text-xs text-destructive mt-1 font-normal whitespace-normal">
+            <span className="text-[11px] font-mono text-danger mt-1 font-normal whitespace-normal">
               {errorMessage}
             </span>
           )}
         </div>
       </TableCell>
-      <TableCell>
+      <TableCell className="py-3">
         <div className="flex flex-col max-w-[200px] sm:max-w-xs">
-          <span className="truncate" title={group.description}>
+          <span className="truncate text-xs text-ink font-medium" title={group.description}>
             {group.description || 'Sin descripción'}
           </span>
-          <span className="text-xs text-muted-foreground truncate" title={cadFile ?? isoFile ?? ''}>
-            <FileText size={10} className="inline-block mr-1 -mt-0.5" />
+          <span className="text-[11px] font-mono text-ink-dim truncate" title={cadFile ?? isoFile ?? ''}>
+            <FileText size={10} className="inline-block mr-1 -mt-0.5 text-ink-dim" />
             {cadFile ?? isoFile ?? '(sin archivo)'}
             {cadFile && isoFile && cadFile !== isoFile ? ` · ${isoFile}` : ''}
           </span>
         </div>
       </TableCell>
-      <TableCell>
+      <TableCell className="py-3">
         <div className="flex flex-col items-start gap-0.5">
           {group.cad && (
-            <span className="inline-flex items-center justify-center rounded-md bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground ring-1 ring-inset ring-secondary/20">
+            <span className="inline-flex items-center justify-center bg-surface-2 border-2 border-line px-2 py-0.5 text-[11px] font-mono font-bold text-ink rounded-none">
               {group.cad.revision}
             </span>
           )}
           {group.iso && group.iso.revision !== group.cad?.revision && (
-            <span className="text-[10px] font-mono text-muted-foreground">
+            <span className="text-[10px] font-mono text-ink-dim">
               ISO {group.iso.revision}
             </span>
           )}
         </div>
       </TableCell>
-      <TableCell className="text-right">
-        <div className="flex items-center justify-end gap-2">
+      <TableCell className="text-right py-3">
+        <div className="flex items-center justify-end gap-1.5">
           {group.stlView && (
             <Button
               variant="outline"
               size="xs"
               onClick={() => group.stlView && onStl(group.stlView)}
               title="Abrir vista 3D (STL)"
+              className="border-2 border-line text-ink font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-surface-2 hover:border-accent hover:text-accent rounded-none h-7 px-2"
             >
-              <Box size={12} />
+              <Box size={11} />
               <span className="ml-1 hidden sm:inline">3D</span>
             </Button>
           )}
@@ -926,8 +931,9 @@ function PartGroupRow({
             onClick={() => previewView && onPreview(previewView)}
             disabled={!previewView?.pdfUrl}
             title={previewView?.pdfUrl ? 'Ver plano CAD' : 'Plano no disponible'}
+            className="border-2 border-line text-ink font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-surface-2 hover:border-accent hover:text-accent rounded-none h-7 px-2"
           >
-            <Eye size={12} />
+            <Eye size={11} />
             <span className="ml-1 hidden sm:inline">Ver</span>
           </Button>
           <Button
@@ -936,8 +942,9 @@ function PartGroupRow({
             onClick={() => printView && onPrint(printView)}
             disabled={printDisabled}
             title={printTitle}
+            className="border-2 border-line text-ink font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-surface-2 hover:border-accent hover:text-accent rounded-none h-7 px-2"
           >
-            {printBusy ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+            {printBusy ? <Loader2 size={11} className="animate-spin text-accent" /> : <Printer size={11} />}
             <span className="ml-1 hidden sm:inline">Imprimir</span>
           </Button>
           {pendingLinkLabel && onUseForPending && pendingView && (
@@ -946,8 +953,9 @@ function PartGroupRow({
               size="xs"
               onClick={() => onUseForPending(pendingView)}
               title={`Usar este plano para ${pendingLinkLabel}`}
+              className="bg-accent border-2 border-accent text-bg font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-accent/80 shadow-hard active:translate-x-0.5 active:translate-y-0.5 rounded-none h-7 px-2.5 flex items-center gap-1.5"
             >
-              <CheckCircle2 size={12} />
+              <CheckCircle2 size={11} />
               <span className="ml-1 hidden sm:inline">Usar para {pendingLinkLabel}</span>
             </Button>
           )}
@@ -964,13 +972,19 @@ function PartGroupRow({
                     ? 'Ya adjunto al análisis'
                     : 'Adjuntar ISO al análisis (o CAD si no hay ISO)'
               }
+              className={cn(
+                'font-mono font-bold uppercase text-[10px] tracking-wider rounded-none h-7 px-2.5 flex items-center gap-1.5 border-2',
+                attachTargetAttached
+                  ? 'bg-surface-2 border-line text-ink-dim'
+                  : 'bg-accent border-accent text-bg hover:bg-accent/80 shadow-hard active:translate-x-0.5 active:translate-y-0.5'
+              )}
             >
               {attachTargetAttached ? (
-                <CheckCircle2 size={12} />
+                <CheckCircle2 size={11} />
               ) : attachBusy ? (
-                <Loader2 size={12} className="animate-spin" />
+                <Loader2 size={11} className="animate-spin" />
               ) : (
-                <Plus size={12} />
+                <Plus size={11} />
               )}
               <span className="ml-1 hidden sm:inline">
                 {attachTargetAttached ? 'Adjunto' : 'Análisis'}
@@ -979,33 +993,33 @@ function PartGroupRow({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger
-              className={cn(buttonVariants({ variant: 'outline', size: 'icon-xs' }))}
+              className="h-7 w-7 rounded-none border-2 border-line bg-surface text-ink hover:bg-surface-2 hover:border-accent hover:text-accent transition-colors inline-flex items-center justify-center"
               title="Más acciones"
             >
               <MoreHorizontal size={12} />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[180px]">
+            <DropdownMenuContent align="end" className="min-w-[180px] bg-surface border-2 border-line shadow-hard-accent text-ink rounded-none p-1">
               {group.cad?.pdfUrl && (
-                <DropdownMenuItem onClick={() => group.cad && onPreview(group.cad)}>
-                  <Eye size={12} />
+                <DropdownMenuItem onClick={() => group.cad && onPreview(group.cad)} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                  <Eye size={12} className="mr-1.5" />
                   Ver CAD
                 </DropdownMenuItem>
               )}
               {group.iso?.pdfUrl && (
-                <DropdownMenuItem onClick={() => group.iso && onPreview(group.iso)}>
-                  <Eye size={12} />
+                <DropdownMenuItem onClick={() => group.iso && onPreview(group.iso)} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                  <Eye size={12} className="mr-1.5" />
                   Ver ISO
                 </DropdownMenuItem>
               )}
               {group.cad && (
-                <DropdownMenuItem onClick={() => group.cad && onUpdate(group.cad)}>
-                  <RefreshCcw size={12} />
+                <DropdownMenuItem onClick={() => group.cad && onUpdate(group.cad)} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                  <RefreshCcw size={12} className="mr-1.5" />
                   Nueva rev. CAD
                 </DropdownMenuItem>
               )}
               {group.iso && (
-                <DropdownMenuItem onClick={() => group.iso && onUpdate(group.iso)}>
-                  <RefreshCcw size={12} />
+                <DropdownMenuItem onClick={() => group.iso && onUpdate(group.iso)} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                  <RefreshCcw size={12} className="mr-1.5" />
                   Nueva rev. ISO
                 </DropdownMenuItem>
               )}
@@ -1013,8 +1027,9 @@ function PartGroupRow({
                 <DropdownMenuItem
                   disabled={cadAttached}
                   onClick={() => group.cad && onAttach(group.cad)}
+                  className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5"
                 >
-                  <Plus size={12} />
+                  <Plus size={12} className="mr-1.5" />
                   {cadAttached ? 'CAD ya adjunto' : 'Adjuntar CAD'}
                 </DropdownMenuItem>
               )}
@@ -1022,18 +1037,20 @@ function PartGroupRow({
                 <DropdownMenuItem
                   disabled={isoAttached}
                   onClick={() => group.iso && onAttach(group.iso)}
+                  className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5"
                 >
-                  <Plus size={12} />
+                  <Plus size={12} className="mr-1.5" />
                   {isoAttached ? 'ISO ya adjunto' : 'Adjuntar ISO'}
                 </DropdownMenuItem>
               )}
-              <DropdownMenuSeparator />
+              <DropdownMenuSeparator className="bg-line my-1" />
               {group.cad && (
                 <DropdownMenuItem
                   variant="destructive"
                   onClick={() => group.cad && onInactivate(group.cad)}
+                  className="font-mono text-xs cursor-pointer text-danger hover:bg-danger/10 rounded-none px-2 py-1.5"
                 >
-                  <Trash2 size={12} />
+                  <Trash2 size={12} className="mr-1.5" />
                   Eliminar CAD
                 </DropdownMenuItem>
               )}
@@ -1041,8 +1058,9 @@ function PartGroupRow({
                 <DropdownMenuItem
                   variant="destructive"
                   onClick={() => group.iso && onInactivate(group.iso)}
+                  className="font-mono text-xs cursor-pointer text-danger hover:bg-danger/10 rounded-none px-2 py-1.5"
                 >
-                  <Trash2 size={12} />
+                  <Trash2 size={12} className="mr-1.5" />
                   Eliminar ISO
                 </DropdownMenuItem>
               )}
@@ -1051,8 +1069,9 @@ function PartGroupRow({
                   key={extra.drawingId}
                   variant="destructive"
                   onClick={() => onInactivate(extra)}
+                  className="font-mono text-xs cursor-pointer text-danger hover:bg-danger/10 rounded-none px-2 py-1.5"
                 >
-                  <Trash2 size={12} />
+                  <Trash2 size={12} className="mr-1.5" />
                   Eliminar {extra.partNumber}
                 </DropdownMenuItem>
               ))}

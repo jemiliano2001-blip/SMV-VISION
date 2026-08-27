@@ -135,9 +135,9 @@ export function ComprasPanel(): ReactElement {
     return result;
   }, [items, searchQuery, sortField, sortOrder]);
 
-  const SortableHeader = ({ field, label, width }: { field: 'nombre' | 'tipo' | 'proveedor' | 'sku', label: string, width?: string }) => (
+  const SortableHeader = ({ field, label, width }: { field: 'nombre' | 'tipo' | 'proveedor' | 'sku'; label: string; width?: string }) => (
     <TableHead 
-      className={`px-4 py-3 text-[10px] font-black uppercase tracking-widest border-r-2 border-line cursor-pointer hover:bg-white/5 transition-colors select-none group text-white ${width ? width : ''}`}
+      className={`px-4 py-3 text-[10px] font-black uppercase tracking-widest border-r-2 border-line cursor-pointer hover:bg-surface-2 transition-colors select-none group text-ink-dim hover:text-ink ${width ? width : ''}`}
       onClick={() => {
         if (sortField === field) {
           setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -151,7 +151,7 @@ export function ComprasPanel(): ReactElement {
         {label}
         <ArrowUpDown 
           size={12} 
-          className={`transition-all duration-200 ${sortField === field ? 'text-accent opacity-100' : 'text-white/20 opacity-0 group-hover:opacity-100'} ${sortField === field && sortOrder === 'desc' ? 'rotate-180' : ''}`} 
+          className={`transition-all duration-200 ${sortField === field ? 'text-accent opacity-100' : 'text-ink-dim/40 opacity-0 group-hover:opacity-100'} ${sortField === field && sortOrder === 'desc' ? 'rotate-180' : ''}`} 
         />
       </div>
     </TableHead>
@@ -233,14 +233,14 @@ export function ComprasPanel(): ReactElement {
         ) : (
           <div className="border-2 border-line bg-surface shadow-hard relative">
             <Table>
-              <TableHeader className="bg-[#11161C] border-b-2 border-line text-white">
+              <TableHeader className="bg-surface-2 border-b-2 border-line text-ink-dim">
                 <TableRow className="border-0 hover:bg-transparent">
                   <SortableHeader field="nombre" label="Material / Descripción" />
                   <SortableHeader field="tipo" label="Tipo" width="w-28" />
                   <SortableHeader field="sku" label="SKU / Parte" />
                   <SortableHeader field="proveedor" label="Proveedor" />
-                  <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest border-r-2 border-line text-white">Notas</TableHead>
-                  <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-center w-28 text-white">Acciones</TableHead>
+                  <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest border-r-2 border-line text-ink-dim">Notas</TableHead>
+                  <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-center w-28 text-ink-dim">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

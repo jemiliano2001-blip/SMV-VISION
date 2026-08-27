@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Dark background container with subtle border -->
+  <rect width="64" height="64" rx="8" fill="#0D1014" />
+  <rect x="2" y="2" width="60" height="60" rx="6" stroke="#2A323C" stroke-width="2" />
+  
+  <!-- Technical corner ticks -->
+  <path d="M6 14V6H14" stroke="#FF4E00" stroke-width="2" stroke-linecap="square" />
+  <path d="M50 6H58V14" stroke="#FF4E00" stroke-width="2" stroke-linecap="square" />
+  <path d="M6 50V58H14" stroke="#FF4E00" stroke-width="2" stroke-linecap="square" />
+  <path d="M50 58H58V50" stroke="#FF4E00" stroke-width="2" stroke-linecap="square" />
+  
+  <!-- Isometric 3D precision cube / Boxes symbol -->
+  <!-- Top Face -->
+  <polygon points="32,16 48,25 32,34 16,25" fill="#FF4E00" />
+  
+  <!-- Left Face -->
+  <polygon points="16,27 30,35 30,49 16,41" fill="#D83F00" />
+  
+  <!-- Right Face -->
+  <polygon points="34,35 48,27 48,41 34,49" fill="#FFA270" />
+
+  <!-- Center highlight vertex lines -->
+  <line x1="32" y1="16" x2="32" y2="34" stroke="#FFFFFF" stroke-width="1.5" stroke-opacity="0.6" />
+  <line x1="16" y1="25" x2="32" y2="34" stroke="#FFFFFF" stroke-width="1.5" stroke-opacity="0.6" />
+  <line x1="48" y1="25" x2="32" y2="34" stroke="#FFFFFF" stroke-width="1.5" stroke-opacity="0.6" />
+</svg>

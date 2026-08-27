@@ -679,14 +679,14 @@ export function ReporteView({
 
           {/* Banner de Recuperación de Sesión IndexedDB */}
           {vision.savedSession && !vision.results && !vision.isExtracting && (
-            <div className="mb-6 p-4 bg-amber-50 border-2 border-black shadow-[4px_4px_0px_rgba(0,0,0,1)] flex items-center justify-between gap-4 flex-wrap">
+            <div className="mb-6 p-4 bg-warn/10 border-2 border-warn shadow-hard-accent flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3">
-                <RotateCcw className="text-black shrink-0" size={20} />
+                <RotateCcw className="text-warn shrink-0" size={20} />
                 <div>
-                  <h4 className="font-display font-black text-sm uppercase tracking-wide text-black">
+                  <h4 className="font-display font-black text-sm uppercase tracking-wide text-ink">
                     Sesión de auditoría previa recuperable
                   </h4>
-                  <p className="text-xs text-zinc-600 font-mono">
+                  <p className="text-xs text-ink-dim font-mono">
                     Hay {vision.savedSession.results.length} órdenes procesadas en caché ({new Date(vision.savedSession.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}).
                   </p>
                 </div>
@@ -695,14 +695,14 @@ export function ReporteView({
                 <button
                   type="button"
                   onClick={vision.restoreSavedSession}
-                  className="px-3.5 py-1.5 bg-black text-white text-xs font-black uppercase tracking-wider border-2 border-black hover:bg-zinc-800 transition-colors shadow-[2px_2px_0px_rgba(0,0,0,1)] hover:translate-x-0.5 hover:translate-y-0.5 active:scale-95"
+                  className="px-3.5 py-1.5 bg-accent text-bg text-xs font-mono font-bold uppercase tracking-wider border-2 border-accent hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5"
                 >
                   Restaurar Sesión
                 </button>
                 <button
                   type="button"
                   onClick={vision.dismissSavedSession}
-                  className="px-3 py-1.5 bg-white text-black text-xs font-black uppercase tracking-wider border-2 border-black hover:bg-gray-100 transition-colors"
+                  className="px-3 py-1.5 bg-surface text-ink text-xs font-mono font-bold uppercase tracking-wider border-2 border-line hover:bg-surface-2 transition-colors"
                 >
                   Descartar
                 </button>

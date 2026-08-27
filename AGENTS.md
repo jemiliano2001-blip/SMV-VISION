@@ -97,7 +97,7 @@ type ToolcribResult<T> = { ok: true; value: T } | { ok: false; reason: ToolcribF
 
 Key modules:
 - `client.ts` — Lazy singleton for `FirebaseApp` + `Firestore`. Returns `null` if config is missing; callers treat this as "feature disabled". Exports `__resetFirebaseClientForTests()` to clear cached singletons in tests.
-- `toolcrib.ts` — Read-only catalog queries (`listActiveDrawingViews`, `getActiveDrawingForPart`, `getDrawingById`) and `recordToolcribPrintLog` (write). Auth UID is resolved inside the writer — callers cannot spoof it.
+- `toolcrib.ts` — Read-only catalog queries (`listActiveDrawingViews`) and `recordToolcribPrintLog` (write). Auth UID is resolved inside the writer — callers cannot spoof it.
 - `purchases.ts` — CRUD for `purchases` collection. Exports `listPurchases`, `createPurchase`, `updatePurchase`, `deletePurchase`.
 - `odooOrders.ts` — Read-only queries for `odooSaleOrders` (`listOrdersToInvoice`, `listEntregasSinOC`). Same result-type contract; writing is done only by Cloud Function.
 - `syncOdoo.ts` — Wrapper cliente de `httpsCallable('triggerOdooSync')`.
@@ -177,11 +177,11 @@ The Vite build splits vendor code into named chunks to avoid one giant bundle: `
 - `src/lib/imageProcessing.ts` — `isValidBoundingBox`, `cropIsometricView`, `cropToBoxRaw`. Bounding-box validation is pure (testable in Node); the crop functions require a browser Canvas (not testable in Node without jsdom).
 - `src/lib/gemini.ts` — Low-level Gemini utilities: `callWithRetry` (exponential backoff), `preparePdfPart` / `prepareImagePart` (build `inlineData` objects for `@google/genai`). All Gemini calls go through these.
 - `src/lib/blueprintParsers.ts` — `parseBoundingBox` and `parseBlueprintResponse` parse/validate raw Gemini Vision JSON into typed `BlueprintSpec[]`. Also exports `isRecord` / `asString` type-narrowing helpers.
-- `src/components/charts/BarChart.tsx` / `LineChart.tsx` — Pure SVG chart components (no external charting library). **Currently unused** — not imported by any view, including `InicioView`. Check before assuming they're wired to anything.
+- `src/components/charts/BarChart.tsx` — Pure SVG chart component (no external charting library), used by `InicioView` for the "Carga por Requisitor" widget.
 
 ### Tests
 
-Unit tests live in `src/lib/__tests__/`. Test coverage is light; core logic tested includes `matching.ts`, `imageProcessing.ts`, `age.ts`. Run with `npm test` (single pass) or `npm run test:watch`. Priority: if modifying matching or image processing, run tests to catch regressions.
+Unit tests live in `src/lib/__tests__/` (191 tests across 17 files as of this writing). Core logic tested includes `matching.ts`, `imageProcessing.ts`, `age.ts`, `orderCrop.ts`. Run with `npm test` (single pass) or `npm run test:watch`. Priority: if modifying matching or image processing, run tests to catch regressions.
 
 ### Scripts
 

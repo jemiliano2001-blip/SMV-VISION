@@ -28,7 +28,7 @@ import Fuse from 'fuse.js';
 import {
   listActiveDrawingViews,
   listRecentPrintLogs,
-  recordToolcribPrintLogFireAndForget,
+  recordToolcribPrintLog,
   inactivatePart,
 } from '../lib/firebase/toolcrib';
 import type { ToolcribActiveDrawingView } from '../types';
@@ -40,7 +40,6 @@ import {
   attachDrawingForGroup,
   groupDrawingViews,
   matchesAssetFilter,
-  matchesFamily,
   matchesFamilyGroup,
   previewDrawingForGroup,
   printDrawingForGroup,
@@ -68,9 +67,6 @@ import {
 } from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
 import { log } from '../lib/log';
-
-export type { PartFamily, AssetFilter, ToolcribPartGroup };
-export { FAMILIES, ASSET_FILTERS, matchesFamily };
 
 export interface ToolcribAttachment {
   drawingId: string;
@@ -111,6 +107,15 @@ export interface ToolcribLibraryPanelProps {
    * `embedded` = bloque dentro de Generar Reporte.
    */
   variant?: 'page' | 'embedded';
+  /**
+   * Se dispara tras una mutación real del catálogo (inactivar, subir/actualizar
+   * un plano) — nunca en el fetch inicial. El panel mantiene su propia copia
+   * para mostrarse a sí mismo; este callback es para que el caller invalide la
+   * copia independiente que usa `useToolcribCatalog` (auto-matching de Órdenes,
+   * resolución de STL en Reporte), que si no se queda desactualizada hasta
+   * recargar la página.
+   */
+  onCatalogChanged?: () => void;
 }
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -145,31 +150,6 @@ function fileBasename(sourcePath: string): string {
   const trimmed = sourcePath.trim();
   if (!trimmed) return '(sin archivo)';
   return trimmed.split(/[\\/]/).pop() ?? trimmed;
-}
-
-function mergeGroupPrintStats(
-  group: ToolcribPartGroup,
-  printStats: ReadonlyMap<string, DrawingPrintStat>,
-): DrawingPrintStat | null {
-  let merged: DrawingPrintStat | null = null;
-  for (const member of group.members) {
-    const stat = printStats.get(member.drawingId);
-    if (!stat) continue;
-    if (!merged) {
-      merged = { ...stat };
-      continue;
-    }
-    merged.count += stat.count;
-    merged.totalCopies += stat.totalCopies;
-    if (
-      stat.lastPrintedAtUTC &&
-      (!merged.lastPrintedAtUTC || stat.lastPrintedAtUTC > merged.lastPrintedAtUTC)
-    ) {
-      merged.lastPrintedAtUTC = stat.lastPrintedAtUTC;
-      merged.lastOrderRef = stat.lastOrderRef;
-    }
-  }
-  return merged;
 }
 
 function FilterChip({
@@ -215,6 +195,7 @@ export function ToolcribLibraryPanel({
   pendingLinkLabel = null,
   onUseForPendingOrder,
   variant = 'embedded',
+  onCatalogChanged,
 }: ToolcribLibraryPanelProps): ReactElement {
   const isPage = variant === 'page';
   const [status, setStatus] = useState<LoadStatus>('idle');
@@ -239,6 +220,18 @@ export function ToolcribLibraryPanel({
       setIsOpen(true);
     }
   }, [initialSearchTerm]);
+
+  // Listener a nivel window (no depende de dónde viva el foco) — antes el
+  // cierre con Escape dejaba de funcionar en cuanto el usuario clickeaba
+  // dentro del <object> del PDF.
+  useEffect(() => {
+    if (!previewDrawing) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewDrawing(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewDrawing]);
 
   const loadLibrary = useCallback(async () => {
     setStatus('loading');
@@ -265,21 +258,23 @@ export function ToolcribLibraryPanel({
     setStatus('ready');
 
     void listRecentPrintLogs().then((logsRes) => {
-      if (logsRes.ok) {
-        const stats = new Map<string, DrawingPrintStat>();
-        for (const log of logsRes.value) {
-          const existing = stats.get(log.drawingId) ?? {
-            count: 0,
-            totalCopies: 0,
-            lastPrintedAtUTC: log.printedAtUTC,
-            lastOrderRef: log.orderRef,
-          };
-          existing.count += 1;
-          existing.totalCopies += log.copies;
-          stats.set(log.drawingId, existing);
-        }
-        setPrintStats(stats);
+      if (logsRes.ok === false) {
+        log.warn('[toolcrib] listRecentPrintLogs falló — badges de "Nx OT" no se mostrarán', logsRes.reason);
+        return;
       }
+      const stats = new Map<string, DrawingPrintStat>();
+      for (const entry of logsRes.value) {
+        const existing = stats.get(entry.drawingId) ?? {
+          count: 0,
+          totalCopies: 0,
+          lastPrintedAtUTC: entry.printedAtUTC,
+          lastOrderRef: entry.orderRef,
+        };
+        existing.count += 1;
+        existing.totalCopies += entry.copies;
+        stats.set(entry.drawingId, existing);
+      }
+      setPrintStats(stats);
     });
   }, []);
 
@@ -291,9 +286,25 @@ export function ToolcribLibraryPanel({
 
   const groups = useMemo(() => groupDrawingViews(views), [views]);
 
+  // Cada eje cuenta sobre el grupo ya acotado por el OTRO eje — así los chips
+  // de familia reflejan el filtro de archivo activo (y viceversa) en vez del
+  // catálogo completo, que es lo que hacía que un chip mostrara "120" y al
+  // hacer clic resolviera a 3 filas.
+  const assetMatchedForFamilyCounts = useMemo(() => {
+    return selectedAsset === 'all'
+      ? groups
+      : groups.filter((group) => matchesAssetFilter(group, selectedAsset));
+  }, [groups, selectedAsset]);
+
+  const familyMatchedForAssetCounts = useMemo(() => {
+    return selectedFamily === 'all'
+      ? groups
+      : groups.filter((group) => matchesFamilyGroup(group, selectedFamily));
+  }, [groups, selectedFamily]);
+
   const familyCounts = useMemo(() => {
     const counts: Record<PartFamily, number> = {
-      all: groups.length,
+      all: assetMatchedForFamilyCounts.length,
       punzones: 0,
       matrices: 0,
       bujes: 0,
@@ -302,7 +313,7 @@ export function ToolcribLibraryPanel({
       ensambles: 0,
       otros: 0,
     };
-    for (const group of groups) {
+    for (const group of assetMatchedForFamilyCounts) {
       for (const family of FAMILIES) {
         if (family.id !== 'all' && matchesFamilyGroup(group, family.id)) {
           counts[family.id] += 1;
@@ -310,17 +321,17 @@ export function ToolcribLibraryPanel({
       }
     }
     return counts;
-  }, [groups]);
+  }, [assetMatchedForFamilyCounts]);
 
   const assetCounts = useMemo(() => {
     const counts: Record<AssetFilter, number> = {
-      all: groups.length,
+      all: familyMatchedForAssetCounts.length,
       cad: 0,
       iso: 0,
       stl: 0,
       'missing-pdf': 0,
     };
-    for (const group of groups) {
+    for (const group of familyMatchedForAssetCounts) {
       for (const filter of ASSET_FILTERS) {
         if (filter.id !== 'all' && matchesAssetFilter(group, filter.id)) {
           counts[filter.id] += 1;
@@ -328,7 +339,7 @@ export function ToolcribLibraryPanel({
       }
     }
     return counts;
-  }, [groups]);
+  }, [familyMatchedForAssetCounts]);
 
   const filteredGroups = useMemo(() => {
     const familyMatched =
@@ -449,6 +460,7 @@ export function ToolcribLibraryPanel({
           throw new Error(res.reason);
         }
         void loadLibrary();
+        onCatalogChanged?.();
       } catch (error) {
         log.warn('[smv-vision][toolcrib] handleInactivate falló', error);
         setRowState((prev) => ({
@@ -526,7 +538,7 @@ export function ToolcribLibraryPanel({
         })}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {ASSET_FILTERS.filter((filter) => filter.id !== 'all').map((filter) => {
+        {ASSET_FILTERS.map((filter) => {
           const count = assetCounts[filter.id];
           if (filter.id === 'missing-pdf' && count === 0) return null;
           return (
@@ -535,9 +547,7 @@ export function ToolcribLibraryPanel({
               label={filter.label}
               count={count}
               selected={selectedAsset === filter.id}
-              onClick={() =>
-                setSelectedAsset((current) => (current === filter.id ? 'all' : filter.id))
-              }
+              onClick={() => setSelectedAsset(filter.id)}
             />
           );
         })}
@@ -545,7 +555,9 @@ export function ToolcribLibraryPanel({
     </div>
   );
 
-  const tableBlock = status === 'ready' && totalCount > 0 && (
+  // No exigimos status === 'ready': un refresh fallido (status 'error') no debe
+  // borrar la tabla si ya había un catálogo cargado de una consulta anterior.
+  const tableBlock = status !== 'loading' && totalCount > 0 && (
     <div className={cn('space-y-2', isPage && 'flex-1 min-h-0 flex flex-col')}>
       <p className="font-mono text-[11px] uppercase tracking-wider text-ink-dim shrink-0">
         Mostrando {visibleCount} de {totalCount} piezas
@@ -570,7 +582,9 @@ export function ToolcribLibraryPanel({
             {filteredGroups.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={4} className="h-24 text-center font-mono text-xs text-ink-dim uppercase">
-                  Ningún plano coincide con la búsqueda.
+                  {normalizeSearchTerm(searchTerm).length > 0
+                    ? 'Ningún plano coincide con la búsqueda.'
+                    : 'Ningún plano coincide con los filtros seleccionados.'}
                 </TableCell>
               </TableRow>
             ) : (
@@ -578,7 +592,7 @@ export function ToolcribLibraryPanel({
                 <PartGroupRow
                   key={group.key}
                   group={group}
-                  printStat={mergeGroupPrintStats(group, printStats)}
+                  printStats={printStats}
                   rowState={rowState}
                   attachedDrawingIds={attachedDrawingIds}
                   pendingLinkLabel={pendingLinkLabel}
@@ -684,6 +698,7 @@ export function ToolcribLibraryPanel({
         }}
         onSuccess={() => {
           void loadLibrary();
+          onCatalogChanged?.();
         }}
         initialPartNumber={updateDrawing?.partNumber}
         initialCustomer={updateDrawing?.customer}
@@ -692,15 +707,17 @@ export function ToolcribLibraryPanel({
       <ToolcribPrintModal
         drawing={printDrawing}
         onClose={() => setPrintDrawing(null)}
-        onSuccess={() => {
+        onSuccess={({ soNumber }) => {
           if (printDrawing) {
-            recordToolcribPrintLogFireAndForget({
+            // Espera a que el log de impresión llegue a Firestore antes de
+            // recargar — si no, el "Nx OT" no refleja la impresión recién
+            // hecha hasta el siguiente refresh manual.
+            void recordToolcribPrintLog({
               drawingId: printDrawing.drawingId,
               partId: printDrawing.partId,
               copies: 1,
-              orderRef: null,
-            });
-            void loadLibrary();
+              orderRef: soNumber,
+            }).then(() => loadLibrary());
           }
         }}
       />
@@ -713,13 +730,6 @@ export function ToolcribLibraryPanel({
           onClick={() => setPreviewDrawing(null)}
           role="dialog"
           aria-modal="true"
-          ref={(el) => {
-            if (el) el.focus();
-          }}
-          tabIndex={-1}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') setPreviewDrawing(null);
-          }}
         >
           <div
             className="bg-surface border-2 border-line shadow-hard-accent max-w-6xl w-full max-h-full flex flex-col"
@@ -782,7 +792,7 @@ export function ToolcribLibraryPanel({
 
 interface PartGroupRowProps {
   group: ToolcribPartGroup;
-  printStat: DrawingPrintStat | null;
+  printStats: ReadonlyMap<string, DrawingPrintStat>;
   rowState: Record<string, RowActionState>;
   attachedDrawingIds: ReadonlySet<string> | undefined;
   pendingLinkLabel: string | null | undefined;
@@ -799,7 +809,7 @@ interface PartGroupRowProps {
 
 function PartGroupRow({
   group,
-  printStat,
+  printStats,
   rowState,
   attachedDrawingIds,
   pendingLinkLabel,
@@ -817,6 +827,10 @@ function PartGroupRow({
   const previewView = previewDrawingForGroup(group);
   const attachView = attachDrawingForGroup(group);
   const pendingView = printView ?? group.iso;
+  // Mismo target que abrirá el historial al hacer clic — así el número del
+  // badge y lo que el modal muestra siempre coinciden (antes se sumaban las
+  // impresiones de todo el grupo pero el historial solo mostraba un plano).
+  const printStat = pendingView ? printStats.get(pendingView.drawingId) ?? null : null;
   const errorMember = group.members.find((member) => rowState[member.drawingId]?.status === 'error');
   const errorMessage = errorMember ? rowState[errorMember.drawingId]?.message : undefined;
   const attachBusy = group.members.some((member) => rowState[member.drawingId]?.status === 'attaching');
@@ -826,10 +840,12 @@ function PartGroupRow({
   const attachTargetAttached = attachView
     ? attachedDrawingIds?.has(attachView.drawingId) === true
     : false;
-  const printDisabled = printBusy || !printView;
+  const printDisabled = printBusy || !printView || !printView.pdfUrl;
   const printTitle = !printView
     ? 'ISO no se imprime como OT — falta el plano CAD'
-    : 'Imprimir OT';
+    : !printView.pdfUrl
+      ? 'Este plano no tiene un PDF accesible'
+      : 'Imprimir OT';
   const cadFile = group.cad ? fileBasename(group.cad.sourcePath) : null;
   const isoFile = group.iso ? fileBasename(group.iso.sourcePath) : null;
 
@@ -859,13 +875,10 @@ function PartGroupRow({
               <span className="text-[9px] font-mono text-ink-dim border border-line/60 px-1 py-0.2">sin CAD</span>
             )}
           </div>
-          {printStat && printStat.count > 0 && (printView || group.iso) && (
+          {printStat && printStat.count > 0 && pendingView && (
             <button
               type="button"
-              onClick={() => {
-                const historyTarget = printView ?? group.iso;
-                if (historyTarget) onHistory(historyTarget);
-              }}
+              onClick={() => onHistory(pendingView)}
               className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 bg-surface-2 hover:bg-accent/10 border-2 border-line hover:border-accent text-[10px] font-mono text-ink-dim hover:text-accent transition-colors rounded-none"
               title={`Impreso ${printStat.count} ${printStat.count === 1 ? 'vez' : 'veces'} (${printStat.totalCopies} copias). Clic para ver historial.`}
             >
@@ -951,9 +964,14 @@ function PartGroupRow({
             <Button
               variant="default"
               size="xs"
+              disabled={!pendingView.pdfUrl}
               onClick={() => onUseForPending(pendingView)}
-              title={`Usar este plano para ${pendingLinkLabel}`}
-              className="bg-accent border-2 border-accent text-bg font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-accent/80 shadow-hard active:translate-x-0.5 active:translate-y-0.5 rounded-none h-7 px-2.5 flex items-center gap-1.5"
+              title={
+                pendingView.pdfUrl
+                  ? `Usar este plano para ${pendingLinkLabel}`
+                  : 'Este plano no tiene un PDF accesible'
+              }
+              className="bg-accent border-2 border-accent text-bg font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-accent/80 shadow-hard active:translate-x-0.5 active:translate-y-0.5 rounded-none h-7 px-2.5 flex items-center gap-1.5 disabled:opacity-50 disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0"
             >
               <CheckCircle2 size={11} />
               <span className="ml-1 hidden sm:inline">Usar para {pendingLinkLabel}</span>

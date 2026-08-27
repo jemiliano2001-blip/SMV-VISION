@@ -1,18 +1,17 @@
 import type { BoundingBox, Order } from '../types';
 
-/** Aplica un recorte a una fila concreta del resultado por su índice estable. */
-export function applyOrderCropAtIndex(
+/** Aplica un recorte a una orden por identidad de objeto (no por índice: el índice puede
+ * apuntar a una lista filtrada distinta de `results`). */
+export function applyOrderCrop(
   results: Order[] | null,
-  resultIndex: number,
+  target: Order,
   newBox: BoundingBox,
   newCroppedUrl: string,
 ): Order[] | null {
-  if (!results || resultIndex < 0 || resultIndex >= results.length) {
-    return results;
-  }
+  if (!results) return results;
 
-  return results.map((order, index) =>
-    index === resultIndex
+  return results.map((order) =>
+    order === target
       ? {
           ...order,
           isometricBoundingBox: newBox,

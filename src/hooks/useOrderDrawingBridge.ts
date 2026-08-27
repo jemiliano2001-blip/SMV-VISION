@@ -28,7 +28,6 @@ export interface UseOrderDrawingBridgeResult {
     signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
   ) => OrderDrawingLink;
   upsertManual: (key: string, view: ToolcribActiveDrawingView) => OrderDrawingLink | null;
-  removeLink: (key: string) => void;
   getLink: (key: string) => OrderDrawingLink | undefined;
   clear: () => void;
   setPendingKey: (key: string | null) => void;
@@ -76,53 +75,45 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
 
   const upsertManual = useCallback(
     (key: string, view: ToolcribActiveDrawingView): OrderDrawingLink | null => {
-      let next: OrderDrawingLink | null = null;
-      setLinks((prev) => {
-        const base = prev[key];
-        if (!base) return prev;
-        next = applyManualDrawingToLink(base, view);
+      // `next` se calcula fuera del updater de setLinks: un updater puede
+      // invocarse más de una vez (p. ej. en StrictMode) y el guardado del
+      // alias de aquí abajo NO es idempotente — duplicaría el alias en
+      // Firestore si viviera dentro del updater.
+      const base = links[key];
+      if (!base) return null;
+      const next = applyManualDrawingToLink(base, view);
+      setLinks((prev) => ({ ...prev, [key]: next }));
 
-        // Guardar alias en Firestore para recordar el match en el futuro
-        // El número de parte es la identidad más estable; si no existe,
-        // guardamos la descripción completa, nunca una coincidencia parcial.
-        const pattern = (base.numeroParte || base.pieza || '').trim();
-        if (pattern) {
-          void savePartAlias({
-            pattern,
-            partNumber: view.partNumber,
-            drawingId: view.drawingId,
-          }).then((res) => {
-            if (res.ok) {
-              setAliases((cur) => [
-                ...cur.filter((a) => a.pattern.toUpperCase() !== pattern.toUpperCase()),
-                {
-                  id: res.value.id,
-                  pattern,
-                  partNumber: view.partNumber,
-                  drawingId: view.drawingId,
-                  createdAtUTC: new Date().toISOString(),
-                  createdByUid: null,
-                },
-              ]);
-            }
-          });
-        }
+      // Guardar alias en Firestore para recordar el match en el futuro.
+      // El número de parte es la identidad más estable; si no existe,
+      // guardamos la descripción completa, nunca una coincidencia parcial.
+      const pattern = (base.numeroParte || base.pieza || '').trim();
+      if (pattern) {
+        void savePartAlias({
+          pattern,
+          partNumber: view.partNumber,
+          drawingId: view.drawingId,
+        }).then((res) => {
+          if (res.ok) {
+            setAliases((cur) => [
+              ...cur.filter((a) => a.pattern.toUpperCase() !== pattern.toUpperCase()),
+              {
+                id: res.value.id,
+                pattern,
+                partNumber: view.partNumber,
+                drawingId: view.drawingId,
+                createdAtUTC: new Date().toISOString(),
+                createdByUid: null,
+              },
+            ]);
+          }
+        });
+      }
 
-        return { ...prev, [key]: next };
-      });
       return next;
     },
-    [],
+    [links],
   );
-
-  const removeLink = useCallback((key: string) => {
-    setLinks((prev) => {
-      if (!(key in prev)) return prev;
-      const { [key]: _removed, ...rest } = prev;
-      return rest;
-    });
-    setPendingKey((pk) => (pk === key ? null : pk));
-  }, []);
 
   const getLink = useCallback(
     (key: string): OrderDrawingLink | undefined => links[key],
@@ -153,7 +144,6 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
     aliases,
     resolveAndStore,
     upsertManual,
-    removeLink,
     getLink,
     clear,
     setPendingKey,

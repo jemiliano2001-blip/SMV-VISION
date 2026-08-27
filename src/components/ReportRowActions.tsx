@@ -49,7 +49,10 @@ export function ReportRowActions({
   const showAi = canGenerateAiIsometric(order);
   const showStl = Boolean(order.matchedStlUrl);
   const showHistorial = Boolean(order.matchedDrawingId);
-  const showVincular = !order.matchedDrawingId && !order.sourcePdfName;
+  // No basta con "sin matchedDrawingId": el catálogo puede haber propuesto un
+  // match sin que Visión lo haya confirmado (sourcePdfName vacío) — en ese caso
+  // la fila dice "Sin plano asociado" y aun así hay que poder vincular uno.
+  const showVincular = !order.sourcePdfName;
 
   return (
     <DropdownMenu>

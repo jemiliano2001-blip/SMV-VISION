@@ -17,7 +17,7 @@ import type { ToolcribActiveDrawingView } from '../types';
 export interface ToolcribPrintModalProps {
   drawing: ToolcribActiveDrawingView | null;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (info: { soNumber: string | null }) => void;
   /** Prefill desde Órdenes Odoo (número SO). */
   initialSoNumber?: string;
   /** Prefill desde Órdenes Odoo (cantidad pendiente). */
@@ -135,10 +135,11 @@ export function ToolcribPrintModal({
         notas: notas.trim(),
       });
 
+      const submittedSoNumber = soNumber.trim() || null;
       setSoNumber('');
       setCantidad('');
       setNotas('');
-      onSuccess();
+      onSuccess({ soNumber: submittedSoNumber });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al procesar el PDF para impresión.');

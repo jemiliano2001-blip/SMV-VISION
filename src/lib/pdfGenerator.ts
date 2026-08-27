@@ -8,7 +8,7 @@
 // jsPDF + jspdf-autotable (~373 KB / 122 KB gzip) solo se cargan al generar un
 // PDF — bajo demanda dentro de cada función, en vez de en el bundle inicial.
 import type { CellHookData, RowInput } from 'jspdf-autotable';
-import type { Order, AnalysisRunSummary } from '../types';
+import type { Order } from '../types';
 import { consolidateHotStamps } from './hotStamp';
 import {
   collapseDuplicateOrders,
@@ -31,7 +31,6 @@ function jsPdfImageFormat(dataUrl: string): 'JPEG' | 'PNG' {
 
 export interface ReportPdfOptions {
   hotStampRefImage?: string | null;
-  analysisSummary?: AnalysisRunSummary | null;
 }
 
 export async function generateSingleOrderPdf(order: Order): Promise<void> {
@@ -55,15 +54,6 @@ export async function generateSingleOrderPdf(order: Order): Promise<void> {
   doc.setFontSize(8);
   doc.setTextColor(255, 255, 255);
   doc.text(generatedAt.toLocaleString(), pageW - 40, 27, { align: 'right' });
-
-  if (order.prioridad === 'URGENTE') {
-    doc.setFillColor(255, 78, 0);
-    doc.rect(pageW - 110, 8, 70, 22, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(255, 255, 255);
-    doc.text('URGENTE', pageW - 75, 22, { align: 'center' });
-  }
 
   // ── Piece name ──────────────────────────────────────────────────────────
   let y = 72;
@@ -177,8 +167,11 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const generatedAt = new Date();
   const dateLabel = generatedAt.toLocaleDateString();
-  const auditedTotal = options?.analysisSummary?.totalAudited ?? orders.filter((entry) => entry.haSidoAuditada).length;
-  const totalOrders = options?.analysisSummary?.totalOrders ?? orders.length;
+  // Derivados siempre de `orders` (no de analysisSummary, fijado al final de
+  // la corrida original): así el encabezado refleja excluir/restaurar órdenes
+  // en modo edición en vez de imprimir los totales de antes de editar.
+  const auditedTotal = orders.filter((entry) => entry.haSidoAuditada).length;
+  const totalOrders = orders.length;
   const headerY = 40;
 
   // Consolida los punzones de estampado (hot stamps) en un solo renglón antes
@@ -214,22 +207,17 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
   // Nota: jsPDF (fuente estándar) solo soporta Latin-1 — los símbolos ≤ y ≈
   // salen como basura. Se usa texto ASCII. El · y × sí están en Latin-1.
   doc.text(
-    `${summary.vencidas} vencidas  ·  ${summary.criticas} críticas (3 días o menos)  ·  ${summary.urgentes} urgentes  ·  ${piezasLabel} piezas en total`,
+    `${summary.vencidas} vencidas  ·  ${summary.criticas} críticas (3 días o menos)  ·  ${piezasLabel} piezas en total`,
     40,
     headerY + 26,
   );
   doc.setFont('helvetica', 'normal');
 
   // Orden por urgencia: lo más vencido primero; sin fecha parseable al final.
-  // Se conserva el bloque URGENTE arriba del bloque Normal (prioridad del
-  // cliente). Las fechas multi-línea usan la primera línea (en computeDueDate).
+  // Las fechas multi-línea usan la primera línea (en computeDueDate).
   const sortByUrgency = (a: Order, b: Order): number => dueDaysOrInfinity(a) - dueDaysOrInfinity(b);
-  const sortGroup = (group: Order[]): Order[] => [
-    ...group.filter((o) => o.prioridad === 'URGENTE').sort(sortByUrgency),
-    ...group.filter((o) => o.prioridad !== 'URGENTE').sort(sortByUrgency),
-  ];
-  const sortedWithBlueprint = sortGroup(withBlueprint);
-  const sortedPendientes = sortGroup(pendientes);
+  const sortedWithBlueprint = [...withBlueprint].sort(sortByUrgency);
+  const sortedPendientes = [...pendientes].sort(sortByUrgency);
 
   const formatFechaCell = (raw: string): string => raw.split('\n').map((f) => {
     const days = getOrderAgeDays(f);
@@ -298,17 +286,6 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
     halign: 'center' as const,
   };
 
-  // Draws a 4pt-wide black bar on the left edge of the DIBUJO cell for URGENTE
-  // orders. B&W-friendly visual marker that survives photocopying.
-  const drawUrgenteIndicator = (
-    order: Order | undefined,
-    hookData: CellHookData,
-  ): void => {
-    if (!order || order.prioridad !== 'URGENTE' || hookData.column.index !== 0) return;
-    doc.setFillColor(0, 0, 0);
-    doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
-  };
-
   // Colorea la celda ENTREGA según la severidad de la fecha límite. El color
   // se pierde en fotocopias B/N, así que las vencidas además llevan una barra
   // negra (drawOverdueIndicator) que sí sobrevive.
@@ -356,7 +333,6 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
       didDrawCell: (hookData: CellHookData) => {
         if (hookData.section !== 'body') return;
         const order = sortedWithBlueprint[hookData.row.index];
-        drawUrgenteIndicator(order, hookData);
         if (hookData.column.index === 5) drawOverdueIndicator(order, hookData);
         if (hookData.column.index !== 0 || !order?.isometricView) return;
         const imageSize = 72;
@@ -422,11 +398,6 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
         if (hookData.section !== 'body') return;
         const order = sortedPendientes[hookData.row.index];
         if (!order) return;
-        // Barra URGENTE en la primera columna (ahora NOMBRE) en vez de DIBUJO.
-        if (order.prioridad === 'URGENTE' && hookData.column.index === 0) {
-          doc.setFillColor(0, 0, 0);
-          doc.rect(hookData.cell.x, hookData.cell.y, 4, hookData.cell.height, 'F');
-        }
         if (hookData.column.index === 4) drawOverdueIndicator(order, hookData);
       },
     });

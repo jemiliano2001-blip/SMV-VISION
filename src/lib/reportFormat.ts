@@ -155,7 +155,6 @@ export function collapseDuplicateOrders(orders: Order[]): Order[] {
 
 export interface ReportSummary {
   renglones: number;
-  urgentes: number;
   vencidas: number;
   criticas: number;
   totalPiezas: number;
@@ -163,17 +162,15 @@ export interface ReportSummary {
 
 /** Agrega métricas para la banda de resumen del encabezado. */
 export function summarizeOrders(orders: Order[]): ReportSummary {
-  let urgentes = 0;
   let vencidas = 0;
   let criticas = 0;
   let totalPiezas = 0;
   for (const o of orders) {
-    if (o.prioridad === 'URGENTE') urgentes += 1;
     const sev = dueSeverity(computeDueDate(o));
     if (sev === 'overdue') vencidas += 1;
     else if (sev === 'critical') criticas += 1;
     const q = parseCantidadNumber(o.cantidad);
     if (q !== null) totalPiezas += q;
   }
-  return { renglones: orders.length, urgentes, vencidas, criticas, totalPiezas };
+  return { renglones: orders.length, vencidas, criticas, totalPiezas };
 }

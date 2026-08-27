@@ -27,7 +27,6 @@ import {
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
-import { QuickPurchaseModal } from './QuickPurchaseModal';
 import { Button } from './ui/button';
 import {
   Table,
@@ -66,6 +65,21 @@ export interface OdooOrdersPanelProps {
   bridge: UseOrderDrawingBridgeResult;
   onSendToReport: (link: OrderDrawingLink) => Promise<void>;
   onOpenBiblioteca: (query: string, linkKey: string) => void;
+  /**
+   * Requisición rápida — delega al modal único de App para que
+   * `purchasedKeys` y el toast de confirmación sean consistentes sin
+   * importar desde qué vista se disparó (antes Órdenes tenía su propia
+   * copia del modal que no marcaba nada como comprado).
+   */
+  onQuickPurchase: (data: {
+    soNumber?: string;
+    poNumber?: string;
+    pieza?: string;
+    numeroParte?: string;
+    cantidad?: number | string;
+    material?: string | null;
+    rowKey?: string;
+  }) => void;
 }
 
 export function OdooOrdersPanel({
@@ -73,6 +87,7 @@ export function OdooOrdersPanel({
   bridge,
   onSendToReport,
   onOpenBiblioteca,
+  onQuickPurchase,
 }: OdooOrdersPanelProps) {
   const [orders, setOrders] = useState<OdooOrderView[]>([]);
   const [productionMap, setProductionMap] = useState<Map<string, ProductionStatus>>(new Map());
@@ -92,17 +107,6 @@ export function OdooOrdersPanel({
   const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
   const [batchPrinting, setBatchPrinting] = useState(false);
   const [batchPrintStatus, setBatchPrintStatus] = useState<string | null>(null);
-
-  // Requisición rápida de material / Compras
-  const [quickPurchaseData, setQuickPurchaseData] = useState<{
-    soNumber?: string;
-    poNumber?: string;
-    pieza?: string;
-    numeroParte?: string;
-    cantidad?: number | string;
-    material?: string | null;
-  } | null>(null);
-  const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
 
   // Compañía (partner) — vacío hasta elegir; no carga todas las órdenes de golpe.
   const [selectedPartnerKey, setSelectedPartnerKey] = useState<string | null>(null);
@@ -383,6 +387,7 @@ export function OdooOrdersPanel({
       setSelectedPartnerKey(partnerKey);
       setSearchTerm('');
       setSelectedRequisitor('ALL');
+      setSelectedLines(new Set());
       void fetchOrders(partnerKey);
     },
     [fetchOrders],
@@ -470,18 +475,13 @@ export function OdooOrdersPanel({
     return Array.from(set).sort();
   }, [orders]);
 
-  // Órdenes filtradas por texto de búsqueda y por requisitor seleccionado
-  const filteredOrders = useMemo(() => {
+  // Órdenes que pasan la búsqueda libre (sin aplicar el filtro de requisitor —
+  // esta base es la que usan los contadores del propio selector de requisitor,
+  // que no pueden auto-filtrarse por la opción que están a punto de ofrecer).
+  const searchMatchedOrders = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return orders;
     return orders.filter((o) => {
-      // Filtro por requisitor seleccionado
-      if (selectedRequisitor !== 'ALL') {
-        const reqName = o.requisitor || 'Sin Requisitor';
-        if (reqName !== selectedRequisitor) return false;
-      }
-
-      // Filtro por búsqueda libre
-      if (!searchTerm.trim()) return true;
-      const term = searchTerm.toLowerCase();
       const nameMatch = o.name.toLowerCase().includes(term);
       const poMatch = (o.client_order_ref || '').toLowerCase().includes(term);
       const partnerMatch = o.partner.toLowerCase().includes(term);
@@ -491,10 +491,17 @@ export function OdooOrdersPanel({
           l.product.toLowerCase().includes(term) ||
           l.description.toLowerCase().includes(term),
       );
-
       return nameMatch || poMatch || partnerMatch || reqMatch || lineMatch;
     });
-  }, [orders, selectedRequisitor, searchTerm]);
+  }, [orders, searchTerm]);
+
+  // Órdenes filtradas por texto de búsqueda y por requisitor seleccionado
+  const filteredOrders = useMemo(() => {
+    if (selectedRequisitor === 'ALL') return searchMatchedOrders;
+    return searchMatchedOrders.filter(
+      (o) => (o.requisitor || 'Sin Requisitor') === selectedRequisitor,
+    );
+  }, [searchMatchedOrders, selectedRequisitor]);
 
   // Agrupación de órdenes por Requisitor
   const groupedByRequisitor = useMemo(() => {
@@ -570,12 +577,18 @@ export function OdooOrdersPanel({
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => { exportDeliverySlip(order).catch((e) => log.error('[smv-vision] exportDeliverySlip falló', e)); }}
+              disabled={!order.order_lines.some((l) => l.qty_pending > 0)}
+              onClick={() => {
+                exportDeliverySlip(order).catch((e) => {
+                  log.error('[smv-vision] exportDeliverySlip falló', e);
+                  setLineActionError('No se pudo generar el PDF de remisión.');
+                });
+              }}
               className="flex items-center gap-2 bg-surface text-ink hover:bg-line ml-2"
-              title="Generar PDF de Remisión (Preview)"
+              title="Generar PDF de Remisión"
             >
               <Truck size={14} />
-              <span className="text-[10px] font-black tracking-widest uppercase">Remisión (Test)</span>
+              <span className="text-[10px] font-black tracking-widest uppercase">Remisión</span>
             </Button>
           </div>
         </div>
@@ -591,10 +604,13 @@ export function OdooOrdersPanel({
                     className="text-ink hover:text-accent flex items-center justify-center mx-auto"
                     title="Seleccionar / deseleccionar todas las líneas de esta orden"
                   >
-                    {order.order_lines.filter((l) => l.qty_pending > 0).length > 0 &&
-                    order.order_lines
-                      .filter((l) => l.qty_pending > 0)
-                      .every((_, idx) => selectedLines.has(makeOrderDrawingLinkKey(order.id, idx))) ? (
+                    {(() => {
+                      const pendingKeys = order.order_lines
+                        .map((l, idx) => ({ l, key: makeOrderDrawingLinkKey(order.id, idx) }))
+                        .filter(({ l }) => l.qty_pending > 0)
+                        .map(({ key }) => key);
+                      return pendingKeys.length > 0 && pendingKeys.every((k) => selectedLines.has(k));
+                    })() ? (
                       <CheckSquare size={16} className="text-accent" />
                     ) : (
                       <Square size={16} className="text-ink-dim" />
@@ -768,12 +784,13 @@ export function OdooOrdersPanel({
                               size="sm"
                               onClick={() => {
                                 const parsed = parseOdooLineLabels(line.product, line.description);
-                                setQuickPurchaseData({
+                                onQuickPurchase({
                                   soNumber: order.name,
                                   poNumber: order.client_order_ref || undefined,
                                   pieza: parsed.pieza || line.product,
                                   numeroParte: parsed.numeroParte || undefined,
                                   cantidad: line.qty_pending,
+                                  rowKey: lineKey,
                                 });
                               }}
                               className="inline-flex items-center gap-1 hover:border-accent hover:text-accent"
@@ -872,7 +889,7 @@ export function OdooOrdersPanel({
           <Button
             variant="ghost"
             onClick={() => setInvoicePanelOpen(true)}
-            disabled={loading || orders.length === 0}
+            disabled={loading || filteredOrders.length === 0}
             className="flex items-center gap-2 px-4 py-2 border-2 border-accent bg-accent text-bg hover:bg-accent/80 transition-colors disabled:opacity-30 text-[11px] font-black uppercase tracking-widest shadow-hard hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 h-auto rounded-none"
           >
             <Mail size={14} />
@@ -880,7 +897,12 @@ export function OdooOrdersPanel({
           </Button>
           <Button
             variant="ghost"
-            onClick={() => { exportPdf(filteredOrders, productionMap).catch((e) => log.error('[smv-vision] exportPdf falló', e)); }}
+            onClick={() => {
+              exportPdf(filteredOrders, productionMap).catch((e) => {
+                log.error('[smv-vision] exportPdf falló', e);
+                setLineActionError('No se pudo generar el PDF del reporte de órdenes.');
+              });
+            }}
             disabled={loading || filteredOrders.length === 0}
             className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
           >
@@ -994,7 +1016,7 @@ export function OdooOrdersPanel({
               <List size={14} />
               <span>Todas las Órdenes</span>
               <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
-                {orders.length}
+                {filteredOrders.length}
               </span>
             </button>
 
@@ -1026,9 +1048,11 @@ export function OdooOrdersPanel({
                 onChange={(e) => setSelectedRequisitor(e.target.value)}
                 className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer"
               >
-                <option value="ALL">TODOS ({orders.length})</option>
+                <option value="ALL">TODOS ({searchMatchedOrders.length})</option>
                 {uniqueRequisitores.map((req) => {
-                  const count = orders.filter((o) => (o.requisitor || 'Sin Requisitor') === req).length;
+                  const count = searchMatchedOrders.filter(
+                    (o) => (o.requisitor || 'Sin Requisitor') === req,
+                  ).length;
                   return (
                     <option key={req} value={req}>
                       {req} ({count})
@@ -1192,7 +1216,7 @@ export function OdooOrdersPanel({
       <InvoiceRequestPanel
         open={invoicePanelOpen}
         onClose={() => setInvoicePanelOpen(false)}
-        orders={orders}
+        orders={filteredOrders}
         productionMap={productionMap}
       />
 
@@ -1205,36 +1229,17 @@ export function OdooOrdersPanel({
           setPrintSoNumber('');
           setPrintCantidad('');
         }}
-        onSuccess={() => {
+        onSuccess={({ soNumber }) => {
           if (printDrawing) {
             recordToolcribPrintLogFireAndForget({
               drawingId: printDrawing.drawingId,
               partId: printDrawing.partId,
               copies: 1,
-              orderRef: printSoNumber || null,
+              orderRef: soNumber,
             });
           }
         }}
       />
-
-      {/* ── Modal de Requisición Rápida de Compras ── */}
-      <QuickPurchaseModal
-        open={quickPurchaseData !== null}
-        defaultData={quickPurchaseData}
-        onClose={() => setQuickPurchaseData(null)}
-        onSuccess={() => {
-          setPurchaseToast('✓ Requisición guardada con éxito en Compras.');
-          setTimeout(() => setPurchaseToast(null), 4000);
-        }}
-      />
-
-      {/* ── Toast de confirmación de compra ── */}
-      {purchaseToast && (
-        <div className="fixed bottom-6 right-6 z-50 bg-[#0D2B4D] text-white border-2 border-accent shadow-hard px-4 py-2.5 font-mono text-xs flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-          <span className="text-accent font-bold">✓</span>
-          <span>{purchaseToast}</span>
-        </div>
-      )}
     </div>
   );
 }

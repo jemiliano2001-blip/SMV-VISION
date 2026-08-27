@@ -1,5 +1,6 @@
 import { doc, onSnapshot, type Timestamp } from 'firebase/firestore';
 import { getFirestoreClient } from './client';
+import { log } from '../log';
 
 const SYNC_META_COLLECTION = 'syncMeta';
 const SYNC_META_DOC = 'odoo';
@@ -83,6 +84,12 @@ export function subscribeToOdooSyncMeta(
         partners: normalizePartners(data.partners),
       });
     },
-    () => cb(null), // error handler — treat as "no data"
+    (error) => {
+      // No distinguimos "sin permiso" de "nunca corrió" en la UI (requeriría
+      // cambiar la firma del callback en los 3 consumidores) pero al menos
+      // dejamos el motivo real en el log — antes desaparecía sin rastro.
+      log.warn('[smv-vision][syncMeta] onSnapshot falló, chip de sync sin datos', error);
+      cb(null);
+    },
   );
 }

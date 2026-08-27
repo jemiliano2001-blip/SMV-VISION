@@ -327,19 +327,23 @@ describe('selectBestBlueprintMatch', () => {
   });
 
   it('boosts score for .iso files', () => {
+    // pieza_detectada no es idéntico a orderPiece a propósito: un match
+    // exacto de string satura bestSpecScore en 100 (ver calculatePieceMatchScore)
+    // y no deja margen para observar el bono de ISO tras el clamp a 100.
     const specs: BlueprintSpec[] = [
       { pieza_detectada: 'HEX BLOCK', isometricBoundingBox: [0, 0, 100, 100] },
     ];
-    const resultISO = selectBestBlueprintMatch('HEX BLOCK', {
+    const resultISO = selectBestBlueprintMatch('HEX BLOCK ASSEMBLY', {
       fileLabel: 'catalog.iso.pdf',
       specs,
     });
-    const resultRegular = selectBestBlueprintMatch('HEX BLOCK', {
+    const resultRegular = selectBestBlueprintMatch('HEX BLOCK ASSEMBLY', {
       fileLabel: 'catalog.pdf',
       specs,
     });
 
     expect(resultISO.score).toBeGreaterThan(resultRegular.score);
+    expect(resultISO.score).toBeLessThanOrEqual(100);
   });
 
   it('accepts numeroParte as additional identifier source', () => {

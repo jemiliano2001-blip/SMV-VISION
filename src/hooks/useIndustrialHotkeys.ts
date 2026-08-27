@@ -37,14 +37,16 @@ export function useIndustrialHotkeys({
   enabled = true,
 }: IndustrialHotkeysOptions): void {
   useEffect(() => {
-    if (!enabled) return;
-
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Escape siempre funciona, incluso dentro de inputs
+      // Escape siempre funciona, incluso dentro de inputs o con enabled=false
+      // (enabled=false representa "hay un modal abierto", y Escape debe poder
+      // cerrarlo — solo se bloquean los atajos de navegación/edición).
       if (event.key === 'Escape') {
         onEscape?.();
         return;
       }
+
+      if (!enabled) return;
 
       // Si el usuario está escribiendo en un input, no capturar letras simples
       const inInput = isInputElement(event.target);

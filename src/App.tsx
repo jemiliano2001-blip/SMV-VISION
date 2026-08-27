@@ -5,6 +5,7 @@
 
 import { useCallback, useRef, useState, Suspense, lazy } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { toast } from 'sonner';
 import type { Order, OrderDrawingLink, ToolcribActiveDrawingView } from './types';
 import { makeOrderDrawingLinkKey, getReportDrawingSnapshot } from './lib/orderDrawingBridge';
 import { AppShell, type AppView } from './components/shell/AppShell';
@@ -31,10 +32,7 @@ const StlViewerModal = lazy(() =>
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
   const [biblioSearchPrefill, setBiblioSearchPrefill] = useState('');
-  const [cropAdjustTarget, setCropAdjustTarget] = useState<{
-    order: Order;
-    resultIndex: number;
-  } | null>(null);
+  const [cropAdjustTarget, setCropAdjustTarget] = useState<Order | null>(null);
   const [quickPurchaseData, setQuickPurchaseData] = useState<{
     soNumber?: string;
     poNumber?: string;
@@ -44,7 +42,6 @@ export default function App() {
     material?: string | null;
     rowKey?: string;
   } | null>(null);
-  const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
   const [purchasedKeys, setPurchasedKeys] = useState<Set<string>>(() => new Set());
   const [historyDrawing, setHistoryDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [stlDrawing, setStlDrawing] = useState<ToolcribActiveDrawingView | null>(null);
@@ -55,8 +52,13 @@ export default function App() {
   const bridge = useOrderDrawingBridge();
 
   // Atajos de teclado para taller (hotkeys industriales)
+  const anyModalOpen = Boolean(
+    vision.previewOrder || cropAdjustTarget || quickPurchaseData || historyDrawing || stlDrawing,
+  );
+
   useIndustrialHotkeys({
     activeView,
+    enabled: !anyModalOpen,
     onToggleEdit: () => vision.setEditMode(!vision.editMode),
     onExportPdf: vision.downloadPdf,
     onNavigate: (v) => setActiveView(v as AppView),
@@ -70,9 +72,21 @@ export default function App() {
   });
 
   // Navegación
-  const navigate = useCallback((view: AppView) => {
-    setActiveView(view);
-  }, []);
+  const navigate = useCallback(
+    (view: AppView) => {
+      setActiveView((prev) => {
+        // Si el usuario sale de Biblioteca sin usar el vínculo pendiente,
+        // lo descartamos — si no, reaparece (con el buscador obsoleto) la
+        // próxima vez que entre, sin ninguna pista de por qué.
+        if (prev === 'biblioteca' && view !== 'biblioteca' && bridge.pendingKey) {
+          bridge.setPendingKey(null);
+          setBiblioSearchPrefill('');
+        }
+        return view;
+      });
+    },
+    [bridge],
+  );
 
   const handleSendToReport = useCallback(
     async (link: OrderDrawingLink) => {
@@ -151,7 +165,7 @@ export default function App() {
 
   return (
     <>
-      <AppShell activeView={activeView} onNavigate={navigate} version="v3.1.PRO">
+      <AppShell activeView={activeView} onNavigate={navigate} version={`v${__APP_VERSION__}`}>
         {/* ── Generar Reporte — montado siempre, oculto para preservar PDFs/resultados ── */}
         <div className="h-full" style={{ display: activeView === 'reporte' ? 'block' : 'none' }}>
           <ReporteView
@@ -188,6 +202,7 @@ export default function App() {
                   bridge={bridge}
                   onSendToReport={handleSendToReport}
                   onOpenBiblioteca={handleOpenBiblioteca}
+                  onQuickPurchase={setQuickPurchaseData}
                 />
               )}
               {activeView === 'biblioteca' && (
@@ -195,6 +210,11 @@ export default function App() {
                   searchPrefill={biblioSearchPrefill}
                   pendingLink={pendingBibliotecaLink}
                   onUseDrawingForPending={handleUseDrawingForPending}
+                  onCancelPending={() => {
+                    bridge.setPendingKey(null);
+                    setBiblioSearchPrefill('');
+                  }}
+                  onCatalogChanged={() => void catalog.reload()}
                 />
               )}
               {activeView === 'compras' && <ComprasPanel />}
@@ -206,12 +226,11 @@ export default function App() {
 
       {/* Modal de edición y ajuste interactivo de encuadre / recorte */}
       <CropAdjustModal
-        order={cropAdjustTarget?.order ?? null}
+        order={cropAdjustTarget}
         open={cropAdjustTarget !== null}
         onClose={() => setCropAdjustTarget(null)}
-        onSaveCrop={(_order, newBox, newCroppedUrl) => {
-          if (!cropAdjustTarget) return;
-          vision.handleUpdateOrderCrop(cropAdjustTarget.resultIndex, newBox, newCroppedUrl);
+        onSaveCrop={(order, newBox, newCroppedUrl) => {
+          vision.handleUpdateOrderCrop(order, newBox, newCroppedUrl);
         }}
       />
 
@@ -225,8 +244,9 @@ export default function App() {
           if (key) {
             setPurchasedKeys((prev) => new Set(prev).add(key));
           }
-          setPurchaseToast('✓ Requisición guardada con éxito en Compras.');
-          setTimeout(() => setPurchaseToast(null), 4000);
+          toast.success('Requisición guardada con éxito en Compras.', {
+            action: { label: 'Ir a Compras', onClick: () => setActiveView('compras') },
+          });
         }}
       />
 
@@ -243,23 +263,6 @@ export default function App() {
         </Suspense>
       )}
 
-      {/* Toast de confirmación de compra */}
-      {purchaseToast && (
-        <div className="fixed bottom-6 right-6 z-50 bg-[#0D2B4D] text-white border-2 border-accent shadow-hard px-4 py-2.5 font-mono text-xs flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-          <span className="text-accent font-bold">✓</span>
-          <span>{purchaseToast}</span>
-          <button
-            type="button"
-            className="ml-2 underline text-accent hover:text-white"
-            onClick={() => {
-              setPurchaseToast(null);
-              setActiveView('compras');
-            }}
-          >
-            Ir a Compras
-          </button>
-        </div>
-      )}
     </>
   );
 }

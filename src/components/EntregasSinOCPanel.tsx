@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, FileWarning, RefreshCw, AlertCircle } from 'lucide-react';
+import { Loader2, FileWarning, RefreshCw, AlertCircle, X } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Table,
@@ -45,8 +45,17 @@ export function EntregasSinOCPanel() {
 
   const handleRefreshSync = async () => {
     setSyncing(true);
+    setError(null);
     try {
-      await triggerOdooSync();
+      const result = await triggerOdooSync();
+      if (result.ok === false) {
+        setError(
+          result.reason === 'not-authenticated'
+            ? 'Debes iniciar sesión para sincronizar.'
+            : `No se pudo sincronizar con Odoo: ${result.reason}`,
+        );
+        return;
+      }
       await fetchOrders();
     } finally {
       setSyncing(false);
@@ -107,7 +116,7 @@ export function EntregasSinOCPanel() {
             <Loader2 size={32} className="animate-spin text-warn" />
             <p className="font-mono text-[11px] uppercase tracking-widest">Obteniendo entregas sin OC…</p>
           </div>
-        ) : error ? (
+        ) : error && orders.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-danger space-y-4">
             <AlertCircle size={48} />
             <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
@@ -117,11 +126,26 @@ export function EntregasSinOCPanel() {
             <FileWarning size={48} className="text-line" />
             <p className="font-display font-black text-2xl uppercase italic">No hay entregas pendientes de OC</p>
             <p className="font-mono text-xs uppercase tracking-widest">
-              Todas las entregas de Suprajit cuentan con una Orden de Compra asociada.
+              Ninguna de las entregas recientes de Suprajit está pendiente de Orden de Compra.
             </p>
           </div>
         ) : (
           <div className="space-y-6 max-w-6xl mx-auto">
+            {error && (
+              <div className="flex items-start gap-2 border border-danger/50 bg-danger/10 px-3 py-2 text-sm text-danger">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span className="grow">{error}</span>
+                <button
+                  type="button"
+                  onClick={() => setError(null)}
+                  className="text-danger/70 hover:text-danger shrink-0"
+                  title="Cerrar"
+                  aria-label="Cerrar error"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             {orders.map((order) => {
               const ageDays = order.date_order ? getOrderAgeDays(order.date_order.split(' ')[0]) : null;
 
@@ -154,7 +178,7 @@ export function EntregasSinOCPanel() {
                       <div className="text-right">
                         <p className="text-[10px] uppercase font-black tracking-widest opacity-80">Líneas entregadas</p>
                         <p className="font-display text-xl font-black">
-                          {order.order_lines.filter(l => l.qty_delivered > 0).length} / {order.order_lines.length}
+                          {order.order_lines.filter(l => l.qty_pending <= 0).length} / {order.order_lines.length}
                         </p>
                       </div>
                     </div>

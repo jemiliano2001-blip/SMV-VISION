@@ -211,13 +211,9 @@ export async function listOrdersToInvoice(options: {
       ? normalizePartnerKey(options.partnerKeyPrefix)
       : null;
 
-  if (!partnerKey && !partnerKeyPrefix) {
-    log.warn(
-      '[smv-vision][odoo-orders] listOrdersToInvoice requiere partnerKey o partnerKeyPrefix',
-    );
-    return { ok: false, reason: 'read-failed' };
-  }
-
+  // Sin partnerKey ni partnerKeyPrefix (incluido un prefijo vacio): "todas las
+  // companias", no un error. Antes un prefijo vacio devolvia read-failed y el
+  // boton "Todas" de Inicio caia siempre al fallback de SUPRAJIT.
   try {
     const max = Math.min(options.max ?? DEFAULT_MAX, DEFAULT_MAX);
     const constraints = partnerKey
@@ -226,12 +222,14 @@ export async function listOrdersToInvoice(options: {
           where('partnerKey', '==', partnerKey),
           fbLimit(max),
         ]
-      : [
+      : partnerKeyPrefix
+      ? [
           where('toInvoice', '==', true),
-          where('partnerKey', '>=', partnerKeyPrefix as string),
-          where('partnerKey', '<=', `${partnerKeyPrefix as string}\uf8ff`),
+          where('partnerKey', '>=', partnerKeyPrefix),
+          where('partnerKey', '<=', `${partnerKeyPrefix}\uf8ff`),
           fbLimit(max),
-        ];
+        ]
+      : [where('toInvoice', '==', true), fbLimit(max)];
 
     const q = query(collection(database, ODOO_ORDERS_COLLECTION), ...constraints);
 
@@ -274,7 +272,7 @@ export async function listEntregasSinOC(options?: {
     const q = query(
       collection(database, ODOO_ORDERS_COLLECTION),
       orderBy('date_order', 'desc'),
-      fbLimit(options?.max ?? DEFAULT_MAX),
+      fbLimit(Math.min(options?.max ?? DEFAULT_MAX, DEFAULT_MAX)),
     );
 
     const snap = await getDocs(q);
@@ -293,9 +291,9 @@ export async function listEntregasSinOC(options?: {
 
       if (hasPo) return; // Si tiene OC, no nos interesa
       
-      // Solo nos interesan las que siguen siendo Cotizaciones (draft)
+      // Solo nos interesan las que siguen siendo Cotizaciones (draft o sent)
       // Odoo states: draft, sent, sale, done, cancel
-      if (normalized.state !== 'draft') return;
+      if (normalized.state !== 'draft' && normalized.state !== 'sent') return;
 
       // Debe tener alguna remisión (stock.picking) en estado 'done'
       // o líneas con qty_delivered > 0

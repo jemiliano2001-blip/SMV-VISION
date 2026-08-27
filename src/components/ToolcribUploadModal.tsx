@@ -47,6 +47,17 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
       setError('Por favor completa todos los campos requeridos y selecciona un PDF.');
       return;
     }
+    if (file.type !== 'application/pdf') {
+      setError('El archivo debe ser un PDF (el selector aceptó otro tipo por su extensión).');
+      return;
+    }
+    const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // coincide con storage.rules para toolcrib/{partId}/**
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(
+        `El PDF pesa ${(file.size / (1024 * 1024)).toFixed(1)} MB — el máximo permitido es 10 MB.`,
+      );
+      return;
+    }
 
     setIsUploading(true);
     setError(null);

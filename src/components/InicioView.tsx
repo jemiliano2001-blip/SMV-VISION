@@ -20,6 +20,8 @@ import {
   Boxes,
   Activity,
   Building2,
+  AlertCircle,
+  X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -67,6 +69,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
   const [selectedPartnerKey, setSelectedPartnerKey] = useState<string>('ALL');
   const [syncing, setSyncing] = useState(false);
   const [syncElapsed, setSyncElapsed] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Cargar órdenes activas para métricas de carga y semáforo de antigüedad
@@ -77,19 +80,29 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         const res = await listOrdersToInvoice({ partnerKeyPrefix: '' });
         if (res.ok) {
           setOrders(res.value);
+          setError(null);
         } else {
           // Fallback a Suprajit si no trae prefijo vacío
           const fallback = await listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX });
-          if (fallback.ok) setOrders(fallback.value);
+          if (fallback.ok) {
+            setOrders(fallback.value);
+            setError(null);
+          } else {
+            setError('No fue posible cargar las órdenes. Los datos mostrados pueden estar desactualizados.');
+          }
         }
       } else {
         const res = await listOrdersToInvoice({ partnerKey: partnerKeyFilter });
         if (res.ok) {
           setOrders(res.value);
+          setError(null);
+        } else {
+          setError('No fue posible cargar las órdenes. Los datos mostrados pueden estar desactualizados.');
         }
       }
     } catch {
       setOrders([]);
+      setError('No fue posible cargar las órdenes. Los datos mostrados pueden estar desactualizados.');
     } finally {
       setLoadingOrders(false);
     }
@@ -116,6 +129,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     if (syncing) return;
     setSyncing(true);
     setSyncElapsed(0);
+    setError(null);
 
     if (syncTimerRef.current) clearInterval(syncTimerRef.current);
     syncTimerRef.current = setInterval(() => {
@@ -130,7 +144,15 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     }, 1000);
 
     try {
-      await triggerOdooSync();
+      const result = await triggerOdooSync();
+      if (result.ok === false) {
+        setError(
+          result.reason === 'not-authenticated'
+            ? 'Debes iniciar sesión para sincronizar.'
+            : `No se pudo sincronizar con Odoo: ${result.reason}`,
+        );
+        return;
+      }
       await loadOrders(selectedPartnerKey);
       const sin = await listEntregasSinOC();
       if (sin.ok) setSinOc(sin.value.length);
@@ -178,7 +200,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     let mid = 0; // 7 - 15 días
     let critical = 0; // > 15 días
     for (const o of orders) {
-      const age = o.date_order ? getOrderAgeDays(o.date_order) : 0;
+      const age = o.date_order ? getOrderAgeDays(o.date_order.split(' ')[0]) : 0;
       if (age === null || age < 7) {
         recent += 1;
       } else if (age <= 15) {
@@ -220,6 +242,25 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
           <p className="font-mono text-[11px] text-ink-dim capitalize">{now}</p>
         </div>
       </motion.header>
+
+      {error && (
+        <motion.div
+          variants={item}
+          className="mb-6 flex items-start gap-2 border-2 border-danger bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <span className="grow font-mono text-xs">{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="text-danger/70 hover:text-danger shrink-0"
+            title="Cerrar"
+            aria-label="Cerrar error"
+          >
+            <X size={14} />
+          </button>
+        </motion.div>
+      )}
 
       {/* ── Métricas Principales (KPI Cards) ── */}
       <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -502,12 +543,11 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
   );
 }
 
-function StatCard({ icon: Icon, value, label, tone = 'text-ink', small = false, onClick }: {
+function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
   icon: LucideIcon;
   value: string;
   label: string;
   tone?: string;
-  small?: boolean;
   onClick?: () => void;
 }) {
   const body = (
@@ -518,7 +558,7 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', small = false, 
           <ArrowRight size={14} className="text-ink-dim opacity-0 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
-      <p className={`font-display font-black italic leading-none ${small ? 'text-2xl' : 'text-4xl'} ${tone}`}>
+      <p className={`font-display font-black italic leading-none text-4xl ${tone}`}>
         {value}
       </p>
       <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mt-2">{label}</p>

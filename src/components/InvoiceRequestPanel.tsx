@@ -92,6 +92,7 @@ export function InvoiceRequestPanel({
   // Map: orderId → selection state
   const [selections, setSelections] = useState<Map<string, OrderSelection>>(new Map());
   const [copiedField, setCopiedField] = useState<'body' | 'subject' | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [step, setStep] = useState<'select' | 'preview'>('select');
 
   // Reset state when opening
@@ -145,6 +146,11 @@ export function InvoiceRequestPanel({
     return entries;
   }, [eligibleOrders, selections]);
 
+  const hasIncompleteRemision = useMemo(
+    () => selectedEntries.some((e) => e.type === 'remision' && !e.remisionDetail?.trim()),
+    [selectedEntries],
+  );
+
   const emailContent = useMemo(
     () => (selectedEntries.length > 0 ? buildEmailContent(selectedEntries) : null),
     [selectedEntries],
@@ -153,7 +159,12 @@ export function InvoiceRequestPanel({
   const handleSendEmail = useCallback(() => {
     if (!emailContent) return;
     const uri = buildMailtoUri(emailContent);
-    window.open(uri, '_blank');
+    const win = window.open(uri, '_blank');
+    if (!win) {
+      setCopyError(
+        'El navegador bloqueó la ventana del correo. Usa "Copiar Todo" y pégalo en tu cliente de correo.',
+      );
+    }
   }, [emailContent]);
 
   const handleCopy = useCallback(
@@ -162,8 +173,13 @@ export function InvoiceRequestPanel({
       const text = field === 'body' ? emailContent.body : emailContent.subject;
       const ok = await copyToClipboard(text);
       if (ok) {
+        setCopyError(null);
         setCopiedField(field);
         setTimeout(() => setCopiedField(null), 2000);
+      } else {
+        setCopyError(
+          'No se pudo copiar al portapapeles (requiere HTTPS o localhost). Selecciona el texto manualmente.',
+        );
       }
     },
     [emailContent],
@@ -413,18 +429,35 @@ export function InvoiceRequestPanel({
           )}
         </AnimatePresence>
 
+        {copyError && (
+          <div className="mx-5 mb-3 flex items-start gap-2 border border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger">
+            <span className="grow">{copyError}</span>
+            <button
+              type="button"
+              onClick={() => setCopyError(null)}
+              className="shrink-0 text-danger/70 hover:text-danger"
+              aria-label="Cerrar"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         {/* ── Footer ── */}
         <DialogFooter className="border-t-2 border-line px-5 py-3 bg-surface-2 flex items-center justify-between gap-3 sm:flex-row flex-wrap m-0 rounded-none">
           <p className="font-mono text-[10px] text-ink-dim m-0 text-left w-full sm:w-auto flex-1">
             {selectedEntries.length === 0
               ? 'Selecciona al menos una orden'
-              : `${selectedEntries.length} orden(es) · ${selectedEntries.filter((e) => e.type === 'factura').length} factura(s) · ${selectedEntries.filter((e) => e.type === 'remision').length} remisión(es)`}
+              : hasIncompleteRemision
+                ? 'Escribe el detalle de entrega en cada remisión seleccionada'
+                : `${selectedEntries.length} orden(es) · ${selectedEntries.filter((e) => e.type === 'factura').length} factura(s) · ${selectedEntries.filter((e) => e.type === 'remision').length} remisión(es)`}
           </p>
           <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
             {step === 'select' ? (
               <Button
                 onClick={() => setStep('preview')}
-                disabled={selectedEntries.length === 0}
+                disabled={selectedEntries.length === 0 || hasIncompleteRemision}
+                title={hasIncompleteRemision ? 'Completa el detalle de entrega de cada remisión' : undefined}
                 className="bg-accent text-bg text-[11px] font-black uppercase tracking-widest shadow-hard hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 rounded-none disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0 h-10 px-6"
               >
                 Ver Preview <ChevronRight size={14} className="ml-2" />

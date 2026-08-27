@@ -55,7 +55,7 @@ export function QuickPurchaseModal({
       const partLabel = defaultData.numeroParte || defaultData.pieza || 'Pieza';
       setNombre(`${mat}para ${partLabel} (SO ${defaultData.soNumber || '—'})`);
       setSku(defaultData.numeroParte || '');
-      setTipo(defaultData.material ? 'metal' : 'metal');
+      setTipo('metal');
       setProveedor('');
       setLink('');
 

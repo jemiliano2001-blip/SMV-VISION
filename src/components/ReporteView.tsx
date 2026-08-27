@@ -82,7 +82,6 @@ export function EditableCantidad({
 
 interface ReportTableRowProps {
   order: Order;
-  resultIndex: number;
   isPurchased: boolean;
   editMode: boolean;
   isExtracting: boolean;
@@ -91,7 +90,7 @@ interface ReportTableRowProps {
   onExcludeOrder: (order: Order) => void;
   onDownloadSinglePdf: (order: Order) => void;
   onPreviewOrder: (order: Order) => void;
-  onEncuadre: (target: { order: Order; resultIndex: number }) => void;
+  onEncuadre: (order: Order) => void;
   onQuickPurchase: (data: {
     soNumber?: string;
     poNumber?: string;
@@ -110,7 +109,6 @@ interface ReportTableRowProps {
 
 export const ReportTableRow = memo(function ReportTableRow({
   order,
-  resultIndex,
   isPurchased,
   editMode,
   isExtracting,
@@ -274,7 +272,7 @@ export const ReportTableRow = memo(function ReportTableRow({
             order={order}
             isExtracting={isExtracting}
             isAiGenerating={isAiGenerating}
-            onEncuadre={() => onEncuadre({ order, resultIndex })}
+            onEncuadre={() => onEncuadre(order)}
             onComprar={() => {
               onQuickPurchase({
                 soNumber: order.orden.split('\n')[0],
@@ -389,7 +387,7 @@ export interface ReporteViewProps {
   vision: VisionAnalysisHook;
   catalog: UseToolcribCatalogResult;
   purchasedKeys: Set<string>;
-  onEncuadre: (target: { order: Order; resultIndex: number }) => void;
+  onEncuadre: (order: Order) => void;
   onQuickPurchase: (data: {
     soNumber?: string;
     poNumber?: string;
@@ -418,7 +416,12 @@ export function ReporteView({
     (order: Order): ToolcribActiveDrawingView | null => {
       if (!order.matchedDrawingId) return null;
       const fromCatalog = catalog.views.find((v) => v.drawingId === order.matchedDrawingId);
-      if (fromCatalog) return fromCatalog;
+      if (fromCatalog) {
+        // El catálogo puede no traer stlUrl (p. ej. tras "Restaurar Sesión" sin
+        // recargar el catálogo) aunque el snapshot de la orden sí lo tenga —
+        // sin este fallback "Ver 3D" se ve habilitado y el clic no hace nada.
+        return fromCatalog.stlUrl ? fromCatalog : { ...fromCatalog, stlUrl: order.matchedStlUrl ?? null };
+      }
       return {
         drawingId: order.matchedDrawingId,
         partId: order.matchedPartId ?? '',
@@ -535,6 +538,7 @@ export function ReporteView({
             <ToolcribLibraryPanel
               onAttachDrawing={vision.handleAttachToolcribDrawing}
               attachedDrawingIds={vision.attachedToolcribDrawingIds}
+              onCatalogChanged={() => void catalog.reload()}
             />
           </div>
 
@@ -564,6 +568,8 @@ export function ReporteView({
                       <div className="flex items-center gap-2 overflow-hidden">
                         {vision.workshopLoadingStates[pdf.id] === 'loading' ? (
                           <Loader2 size={12} className="text-accent animate-spin shrink-0" />
+                        ) : vision.workshopLoadingStates[pdf.id] === 'error' ? (
+                          <AlertCircle size={12} className="text-danger shrink-0" />
                         ) : (
                           <CheckCircle2 size={12} className="text-ok shrink-0" />
                         )}
@@ -655,21 +661,28 @@ export function ReporteView({
                 )}
                 <button
                   onClick={vision.copyResults}
-                  className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors"
+                  disabled={vision.isExtracting}
+                  className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors disabled:opacity-40 disabled:pointer-events-none"
                 >
                   {vision.copying ? 'Copiado' : 'Copiar JSON'}
                 </button>
                 <button
                   onClick={vision.downloadCsv}
-                  className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors"
+                  disabled={vision.isExtracting}
+                  className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors disabled:opacity-40 disabled:pointer-events-none"
                   title="Descargar dataset completo como CSV (ignora filtros de vista)"
                 >
                   CSV
                 </button>
                 <button
                   onClick={vision.downloadPdf}
-                  className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5"
-                  title="Exportar PDF del dataset completo (ignora filtros de vista)"
+                  disabled={vision.isExtracting}
+                  className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none disabled:shadow-none"
+                  title={
+                    vision.isExtracting
+                      ? 'Espera a que termine la auditoría para exportar'
+                      : 'Exportar PDF del dataset completo (ignora filtros de vista)'
+                  }
                 >
                   Exportar Reporte (PDF)
                 </button>
@@ -795,6 +808,8 @@ export function ReporteView({
                         className={`h-2 transition-all duration-500 ${
                           vision.workshopLoadingStates[pdf.id] === 'done'
                             ? 'bg-ok w-8'
+                            : vision.workshopLoadingStates[pdf.id] === 'error'
+                            ? 'bg-danger w-8'
                             : vision.workshopLoadingStates[pdf.id] === 'loading'
                             ? 'bg-accent w-4 animate-pulse'
                             : 'bg-line w-2'
@@ -806,13 +821,22 @@ export function ReporteView({
               </motion.div>
             )}
 
-            {vision.error && (
+            {vision.error && (!vision.results || vision.isExtracting) && (
               <motion.div
                 key="error"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="grow border-2 border-danger bg-danger/5 p-12 flex flex-col items-center justify-center text-center"
+                className="grow border-2 border-danger bg-danger/5 p-12 flex flex-col items-center justify-center text-center relative"
               >
+                <button
+                  type="button"
+                  onClick={() => vision.setError(null)}
+                  className="absolute top-4 right-4 text-ink-dim hover:text-ink p-1"
+                  title="Cerrar"
+                  aria-label="Cerrar error"
+                >
+                  <X size={18} />
+                </button>
                 <AlertCircle className="text-danger w-20 h-20 mb-6" />
                 <h3 className="text-ink font-display font-black text-2xl uppercase italic mb-4">
                   Error Crítico Visión AI
@@ -823,13 +847,28 @@ export function ReporteView({
               </motion.div>
             )}
 
-            {vision.results && !vision.isExtracting && !vision.error && (
+            {vision.results && !vision.isExtracting && (
               <motion.div
                 key="results"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 className="grow flex flex-col"
               >
+                {vision.error && (
+                  <div className="mb-3 flex items-start gap-2 border-2 border-danger bg-danger/10 px-3 py-2 text-sm text-danger">
+                    <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                    <span className="grow font-mono text-xs">{vision.error}</span>
+                    <button
+                      type="button"
+                      onClick={() => vision.setError(null)}
+                      className="text-danger/70 hover:text-danger shrink-0"
+                      title="Cerrar"
+                      aria-label="Cerrar error"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
                 {/* Barra de filtros (dark). Los filtros NO se aplican a las exportaciones (PDF/CSV) */}
                 <div className="border-2 border-line bg-surface px-4 py-3 flex items-center gap-3 flex-wrap">
                   <div className="grow flex items-center gap-2 border border-line px-2 py-1.5 bg-surface-2 min-w-[180px]">
@@ -853,20 +892,11 @@ export function ReporteView({
                   <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none text-ink-dim hover:text-ink">
                     <input
                       type="checkbox"
-                      checked={vision.filterUrgentOnly}
-                      onChange={(e) => vision.setFilterUrgentOnly(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    Solo URGENTE
-                  </label>
-                  <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none text-ink-dim hover:text-ink">
-                    <input
-                      type="checkbox"
                       checked={vision.filterMissingOnly}
                       onChange={(e) => vision.setFilterMissingOnly(e.target.checked)}
                       className="accent-accent"
                     />
-                    Sin plano
+                    Sin vista 3D
                   </label>
                   <span className="text-[10px] font-mono text-ink-dim ml-auto">
                     {vision.filteredResults?.length ?? 0} / {vision.results.length}
@@ -944,11 +974,10 @@ export function ReporteView({
                       </tr>
                     </thead>
                     <tbody>
-                      {(vision.filteredResults ?? vision.results).map((order, idx) => (
+                      {(vision.filteredResults ?? vision.results).map((order) => (
                         <ReportTableRow
-                          key={idx}
+                          key={purchaseRowKey(order)}
                           order={order}
-                          resultIndex={idx}
                           isPurchased={purchasedKeys.has(purchaseRowKey(order))}
                           editMode={vision.editMode}
                           isExtracting={vision.isExtracting}

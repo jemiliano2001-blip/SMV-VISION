@@ -62,7 +62,7 @@ import {
   viewFromSnapshot,
 } from '../lib/orderDrawingBridge';
 import { downloadOrdersCsv } from '../lib/excelExport';
-import { applyOrderCropAtIndex } from '../lib/orderCrop';
+import { applyOrderCrop } from '../lib/orderCrop';
 import { listPartAliases } from '../lib/firebase/aliases';
 import { normalizeAliasKey } from '../lib/aliasKey';
 
@@ -127,7 +127,6 @@ export interface UseVisionAnalysisOptions {}
 export interface VisionAnalysisHook {
   // File state
   workshopPdfs: WorkshopPdfUpload[];
-  orderLoadingState: 'idle' | 'loading' | 'done' | 'error';
   workshopLoadingStates: Record<string, 'idle' | 'loading' | 'done' | 'error'>;
   toolcribPdfToDrawing: Record<string, string>;
   attachedToolcribDrawingIds: Set<string>;
@@ -148,7 +147,6 @@ export interface VisionAnalysisHook {
   // Results display
   draggingZone: 'workshop' | null;
   resultsFilter: string;
-  filterUrgentOnly: boolean;
   filterMissingOnly: boolean;
   filteredResults: Order[] | null;
   previewOrder: Order | null;
@@ -183,7 +181,6 @@ export interface VisionAnalysisHook {
   // Export actions
   downloadPdf: () => void;
   downloadCsv: () => void;
-  downloadJson: () => void;
   downloadSingleOrderPdf: (order: Order) => void;
   copyResults: () => Promise<void>;
   // Edit handlers
@@ -192,16 +189,14 @@ export interface VisionAnalysisHook {
   handleExcludeOrder: (order: Order) => void;
   handleRestoreOrder: (entry: { order: Order }) => void;
   handleRestoreAll: () => void;
-  handleUpdateOrderCrop: (resultIndex: number, newBox: BoundingBox, newCroppedUrl: string) => void;
+  handleUpdateOrderCrop: (target: Order, newBox: BoundingBox, newCroppedUrl: string) => void;
   // Display setters
   setResultsFilter: (v: string) => void;
-  setFilterUrgentOnly: (v: boolean) => void;
   setFilterMissingOnly: (v: boolean) => void;
   setDraggingZone: (zone: 'workshop' | null) => void;
   setEditMode: (v: boolean) => void;
   setPreviewOrder: (order: Order | null) => void;
   setError: (msg: string | null) => void;
-  setSeedWarning: (msg: string | null) => void;
   // Session Recovery
   savedSession: SavedAuditSession<Order, AnalysisRunSummary> | null;
   restoreSavedSession: () => void;
@@ -215,7 +210,6 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractingStep, setExtractingStep] = useState<string>('');
   const [workshopLoadingStates, setWorkshopLoadingStates] = useState<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
-  const [orderLoadingState, setOrderLoadingState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [results, setResults] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [seedWarning, setSeedWarning] = useState<string | null>(null);
@@ -254,6 +248,19 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
   useEffect(() => {
     seededBridgeLinksRef.current = seededBridgeLinks;
   }, [seededBridgeLinks]);
+  // Refs espejo de workshopPdfs/toolcribPdfToDrawing: la auto-auditoría desde
+  // Órdenes hace seedFromBridgeLinks() (setState) e inmediatamente llama
+  // extractInfo() de forma síncrona, antes de que React comitee el re-render.
+  // Leer el state directo en ese instante da la copia vieja y provoca una
+  // descarga + análisis duplicado del mismo plano.
+  const workshopPdfsRef = useRef<WorkshopPdfUpload[]>([]);
+  useEffect(() => {
+    workshopPdfsRef.current = workshopPdfs;
+  }, [workshopPdfs]);
+  const toolcribPdfToDrawingRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    toolcribPdfToDrawingRef.current = toolcribPdfToDrawing;
+  }, [toolcribPdfToDrawing]);
 
 
   const workshopStatePatchQueueRef = useRef<Record<string, 'done' | 'error'>>({});
@@ -265,7 +272,6 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
 
   // Filtros aplicados a la tabla de resultados.
   const [resultsFilter, setResultsFilter] = useState('');
-  const [filterUrgentOnly, setFilterUrgentOnly] = useState(false);
   const [filterMissingOnly, setFilterMissingOnly] = useState(false);
 
   // Modal con la imagen completa del plano cuando el usuario hace click en la
@@ -504,27 +510,15 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     downloadOrdersCsv(results);
   }, [results]);
 
-  const downloadJson = useCallback(() => {
-    if (!results) return;
-    const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `smv_vision_orders_${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }, [results]);
-
   const downloadPdf = useCallback(() => {
     if (!results) return;
     generateReportPdf(results, {
       hotStampRefImage: hotStampRefImageRef.current,
-      analysisSummary,
     }).catch((e) => {
       log.error('[smv-vision] generateReportPdf falló', e);
       setError('No fue posible generar el PDF del reporte.');
     });
-  }, [results, analysisSummary]);
+  }, [results]);
 
   const downloadSingleOrderPdf = useCallback((order: Order) => {
     generateSingleOrderPdf(order).catch((e) => {
@@ -611,10 +605,13 @@ No inventes información.` },
     setOriginalResults(null);
     setAnalysisSummary(null);
     setExtractingStep('Iniciando análisis...');
-    setOrderLoadingState('loading');
 
-    // Lista local para manejar PDFs adjuntados dinámicamente durante esta corrida
-    let currentWorkshopPdfs = [...workshopPdfs];
+    // Lista local para manejar PDFs adjuntados dinámicamente durante esta corrida.
+    // Se lee del ref (no del state cerrado en este closure) porque la
+    // auto-auditoría desde Órdenes llama extractInfo() justo después de
+    // seedFromBridgeLinks() con un closure potencialmente viejo — el ref
+    // siempre refleja el valor más reciente, sin importar qué closure corre.
+    let currentWorkshopPdfs = [...workshopPdfsRef.current];
 
     const runStart = performance.now();
     let pdfRasterMs = 0;
@@ -635,12 +632,10 @@ No inventes información.` },
       orderFetchMs += performance.now() - orderAiStart;
 
       if (!odooResult.ok) {
-        setOrderLoadingState('error');
         throw new Error('Fallo al obtener órdenes de Odoo');
       }
 
-      setOrderLoadingState('done');
-      
+
       // Mapear órdenes de Odoo a ExtractedOrder, excluyendo líneas completamente entregadas.
       const rawOrders: ExtractedOrder[] = [];
       for (const order of odooResult.value) {
@@ -699,7 +694,7 @@ No inventes información.` },
       if (libResult.ok) {
         const library = libResult.value;
         log.debug('[smv-vision][library] entradas cargadas:', library.map((v) => `${v.partNumber} pdfUrl=${v.pdfUrl ? '✓' : '✗null'}`));
-        const autoAttachedIds = new Set(Object.values(toolcribPdfToDrawing));
+        const autoAttachedIds = new Set(Object.values(toolcribPdfToDrawingRef.current));
 
         const aliasResult = await listPartAliases();
         const aliases = aliasResult.ok ? aliasResult.value : [];
@@ -905,13 +900,6 @@ No inventes información.` },
 
 
 
-      if (currentWorkshopPdfs.length === 0) {
-        setError('No se encontraron planos para las piezas detectadas. Sube planos manualmente o verifica la biblioteca.');
-        extractingRef.current = false;
-        setIsExtracting(false);
-        return;
-      }
-
       // 2. Render initial results immediately (progressive render) — orders only,
       // blueprints will fill in their isometric views as they finish analyzing.
       const catalogFields = (order: ExtractedOrder): Partial<Order> => {
@@ -932,6 +920,16 @@ No inventes información.` },
         ...catalogFields(order),
       }));
       setResults(initialResults);
+
+      if (currentWorkshopPdfs.length === 0) {
+        // Las órdenes ya se leyeron de Odoo — no hay razón para tirarlas solo
+        // porque no se encontró ningún plano; el usuario puede adjuntarlos a
+        // mano desde la fila (Vincular plano) o desde Biblioteca.
+        setError('No se encontraron planos para las piezas detectadas. Sube planos manualmente o vincúlalos desde Biblioteca.');
+        extractingRef.current = false;
+        setIsExtracting(false);
+        return;
+      }
 
       // Best-match tracking per order index, mutated as blueprints complete.
       // `isIso` permite que un ISO proteja su posición contra planos CAD con score mayor.
@@ -1479,9 +1477,9 @@ Reglas de extracción (ESTILO UT2033):
   }, [originalResults]);
 
   const handleUpdateOrderCrop = useCallback(
-    (resultIndex: number, newBox: BoundingBox, newCroppedUrl: string) => {
+    (target: Order, newBox: BoundingBox, newCroppedUrl: string) => {
       snapshotOriginalOnce();
-      setResults((prev) => applyOrderCropAtIndex(prev, resultIndex, newBox, newCroppedUrl));
+      setResults((prev) => applyOrderCrop(prev, target, newBox, newCroppedUrl));
     },
     [snapshotOriginalOnce],
   );
@@ -1500,18 +1498,17 @@ Reglas de extracción (ESTILO UT2033):
     if (!results) return null;
     const term = resultsFilter.trim().toLowerCase();
     return results.filter((order) => {
-      if (filterUrgentOnly && order.prioridad !== 'URGENTE') return false;
       if (filterMissingOnly && order.isometricView) return false;
       if (term.length === 0) return true;
       return [order.pieza, order.numero_parte ?? '', order.orden, order.sourcePdfName ?? '']
         .join(' ').toLowerCase().includes(term);
     });
-  }, [results, resultsFilter, filterUrgentOnly, filterMissingOnly]);
+  }, [results, resultsFilter, filterMissingOnly]);
 
   return {
     // File state
     workshopPdfs,
-    orderLoadingState, workshopLoadingStates,
+    workshopLoadingStates,
     toolcribPdfToDrawing, attachedToolcribDrawingIds,
     // Analysis state
     isExtracting, extractingStep, error, seedWarning, results,
@@ -1519,7 +1516,7 @@ Reglas de extracción (ESTILO UT2033):
     // Edit mode
     editMode, originalResults, excludedOrders, auditedCount,
     // Results display
-    draggingZone, resultsFilter, filterUrgentOnly, filterMissingOnly,
+    draggingZone, resultsFilter, filterMissingOnly,
     filteredResults, previewOrder,
 
     // Actions
@@ -1533,13 +1530,13 @@ Reglas de extracción (ESTILO UT2033):
     aiIsoGeneratingKey,
     isAiIsoGenerating,
     removeFile, buildDropHandlers,
-    downloadPdf, downloadCsv, downloadJson,
+    downloadPdf, downloadCsv,
     downloadSingleOrderPdf, copyResults,
     snapshotOriginalOnce, handleEditCantidad, handleExcludeOrder,
     handleRestoreOrder, handleRestoreAll, handleUpdateOrderCrop,
     // Setters
-    setResultsFilter, setFilterUrgentOnly, setFilterMissingOnly,
-    setDraggingZone, setEditMode, setPreviewOrder, setError, setSeedWarning,
+    setResultsFilter, setFilterMissingOnly,
+    setDraggingZone, setEditMode, setPreviewOrder, setError,
     // Session Recovery
     savedSession, restoreSavedSession, dismissSavedSession,
   };

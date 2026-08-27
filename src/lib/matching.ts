@@ -396,7 +396,10 @@ export function selectBestBlueprintMatch(
 
   return {
     spec: matchedSpec,
-    score: Math.max(fileScore, bestSpecScore),
+    // El bono de ISO (+15) puede empujar fileScore pasado 100 — se clampea
+    // solo aquí (para mostrar/exportar), no antes, para no tocar los
+    // umbrales de comparación de arriba.
+    score: Math.min(100, Math.max(fileScore, bestSpecScore)),
   };
 }
 

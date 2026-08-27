@@ -17,7 +17,6 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  deleteDoc,
   type Firestore,
 } from 'firebase/firestore';
 
@@ -147,23 +146,6 @@ export async function savePartAlias(payload: {
     return { ok: true, value: { id: docId } };
   } catch (error) {
     log.warn('[smv-vision][aliases] savePartAlias falló', error);
-    return { ok: false, reason: 'write-failed' };
-  }
-}
-
-/**
- * Elimina un alias aprendido de Firestore.
- */
-export async function deletePartAlias(id: string): Promise<AliasResult<void>> {
-  const db = resolveDb();
-  if (!db) return { ok: false, reason: 'not-configured' };
-  if (!isAuthed()) return { ok: false, reason: 'not-authenticated' };
-
-  try {
-    await deleteDoc(doc(db, PART_ALIASES_COLLECTION, id));
-    return { ok: true, value: undefined };
-  } catch (error) {
-    log.warn('[smv-vision][aliases] deletePartAlias falló', error);
     return { ok: false, reason: 'write-failed' };
   }
 }

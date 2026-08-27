@@ -14,12 +14,16 @@ export interface BibliotecaViewProps {
   searchPrefill?: string;
   pendingLink?: OrderDrawingLink | null;
   onUseDrawingForPending?: (view: ToolcribActiveDrawingView) => void;
+  onCancelPending?: () => void;
+  onCatalogChanged?: () => void;
 }
 
 export function BibliotecaView({
   searchPrefill = '',
   pendingLink = null,
   onUseDrawingForPending,
+  onCancelPending,
+  onCatalogChanged,
 }: BibliotecaViewProps): ReactElement {
   const pendingLabel = pendingLink
     ? `${pendingLink.soNumber}${pendingLink.numeroParte ? ` · ${pendingLink.numeroParte}` : ''}`
@@ -37,9 +41,20 @@ export function BibliotecaView({
           Imprimir queda en el audit log.
         </p>
         {pendingLink && (
-          <p className="mt-3 border-2 border-accent bg-accent/10 px-3 py-2 font-mono text-[11px] text-ink max-w-xl">
-            Elige un plano y pulsa <strong>Usar para {pendingLabel}</strong> para vincularlo a la orden sin volver a buscar.
-          </p>
+          <div className="mt-3 flex items-center gap-3 border-2 border-accent bg-accent/10 px-3 py-2 max-w-xl">
+            <p className="font-mono text-[11px] text-ink flex-1">
+              Elige un plano y pulsa <strong>Usar para {pendingLabel}</strong> para vincularlo a la orden sin volver a buscar.
+            </p>
+            {onCancelPending && (
+              <button
+                type="button"
+                onClick={onCancelPending}
+                className="shrink-0 font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim hover:text-accent underline"
+              >
+                Cancelar
+              </button>
+            )}
+          </div>
         )}
       </header>
 
@@ -50,6 +65,7 @@ export function BibliotecaView({
           initialSearchTerm={searchPrefill}
           pendingLinkLabel={pendingLabel}
           onUseForPendingOrder={onUseDrawingForPending}
+          onCatalogChanged={onCatalogChanged}
         />
       </div>
     </div>

@@ -75,9 +75,13 @@ export function ComprasPanel(): ReactElement {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nombre.trim()) return;
+    setError(null);
+    if (!nombre.trim()) {
+      setError('El nombre del material es obligatorio.');
+      return;
+    }
     setIsSaving(true);
-    
+
     if (editingItem) {
       const res = await updatePurchase(editingItem.id, {
         nombre, tipo, sku, proveedor, link, notas
@@ -134,6 +138,17 @@ export function ComprasPanel(): ReactElement {
 
     return result;
   }, [items, searchQuery, sortField, sortOrder]);
+
+  // Solo avisa — nunca bloquea el guardado. El usuario decide si es un
+  // duplicado real o dos entradas legítimas con nombre parecido.
+  const duplicateWarning = useMemo(() => {
+    const normalized = nombre.trim().toLowerCase();
+    if (!normalized) return null;
+    const match = items.find(
+      (i) => i.id !== editingItem?.id && i.nombre.trim().toLowerCase() === normalized,
+    );
+    return match ? `Ya existe un material con este nombre: "${match.nombre}".` : null;
+  }, [nombre, items, editingItem]);
 
   const SortableHeader = ({ field, label, width }: { field: 'nombre' | 'tipo' | 'proveedor' | 'sku'; label: string; width?: string }) => (
     <TableHead 
@@ -209,6 +224,11 @@ export function ComprasPanel(): ReactElement {
               </span>
             </div>
           </div>
+          {items.length >= 500 && (
+            <p className="mt-2 font-mono text-[10px] text-warn uppercase tracking-widest">
+              Mostrando los 500 más recientes — puede haber más materiales sin listar aquí.
+            </p>
+          )}
         </div>
       </div>
 
@@ -322,8 +342,14 @@ export function ComprasPanel(): ReactElement {
             </Button>
           </DialogHeader>
           <DialogDescription className="sr-only">Modal para crear o editar un material en el directorio.</DialogDescription>
-          
+
           <form onSubmit={handleSave} className="p-5 space-y-4">
+            {error && (
+              <div className="flex items-start gap-2 border border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger leading-snug">
+                <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                <span className="text-left">{error}</span>
+              </div>
+            )}
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Nombre / Descripción *</label>
               <Input
@@ -333,6 +359,9 @@ export function ComprasPanel(): ReactElement {
                 className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
                 placeholder="Ej. Acero M2 de 1/2 x 7/8 x 20"
               />
+              {duplicateWarning && (
+                <p className="mt-1 text-[10px] font-mono text-warn">{duplicateWarning}</p>
+              )}
             </div>
             
             <div className="grid grid-cols-2 gap-4">
@@ -370,6 +399,7 @@ export function ComprasPanel(): ReactElement {
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Link de Compra</label>
               <Input
+                type="url"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
                 className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"

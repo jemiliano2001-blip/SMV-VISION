@@ -1,3 +1,5 @@
+const WORKER_TIMEOUT_MS = 45_000;
+
 export interface RasterizeNormalizeOptions {
   maxDim: number;
   renderScale: number;
@@ -108,7 +110,21 @@ export function rasterizeAndNormalizePdf(
   };
 
   return new Promise<RasterizeNormalizeResult>((resolve, reject) => {
-    pendingRequests.set(id, { resolve, reject });
+    const timer = window.setTimeout(() => {
+      pendingRequests.delete(id);
+      reject(new Error('El worker de rasterizado no respondió a tiempo (posible cuelgue).'));
+    }, WORKER_TIMEOUT_MS);
+
+    pendingRequests.set(id, {
+      resolve: (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (reason) => {
+        window.clearTimeout(timer);
+        reject(reason);
+      },
+    });
     worker.postMessage(request);
   });
 }

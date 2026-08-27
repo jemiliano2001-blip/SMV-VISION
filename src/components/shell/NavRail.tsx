@@ -10,7 +10,7 @@
 import { useCallback, type ReactElement } from 'react';
 import {
   LayoutDashboard, ScanLine, Library,
-  LogOut, Loader2, Ghost, Boxes, CloudDownload, ShoppingCart, Moon, Sun, FileWarning, ExternalLink, BarChart3, type LucideIcon,
+  LogOut, Loader2, Ghost, Boxes, CloudDownload, ShoppingCart, Moon, Sun, FileWarning, ExternalLink, BarChart3, Wrench, type LucideIcon,
 } from 'lucide-react';
 
 import { useTheme } from 'next-themes';
@@ -19,7 +19,7 @@ import { signOutUser, useFirebaseUser } from '../../lib/firebase/auth';
 import { useSyncMeta } from '../../hooks/useSyncMeta';
 import { Badge } from '../ui/badge';
 
-export type AppView = 'inicio' | 'reporte' | 'biblioteca' | 'odoo' | 'compras' | 'entregas-sin-oc';
+export type AppView = 'inicio' | 'reporte' | 'biblioteca' | 'odoo' | 'compras' | 'entregas-sin-oc' | 'herramental';
 
 interface NavItemDef {
   view: AppView;
@@ -32,6 +32,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: 'reporte', label: 'Generar Reporte', icon: ScanLine },
   { view: 'odoo', label: 'Órdenes Odoo', icon: CloudDownload },
   { view: 'biblioteca', label: 'Biblioteca', icon: Library },
+  { view: 'herramental', label: 'Herramental', icon: Wrench },
   { view: 'compras', label: 'Compras', icon: ShoppingCart },
   { view: 'entregas-sin-oc', label: 'Entregas sin OC', icon: FileWarning },
 ];

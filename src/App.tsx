@@ -14,6 +14,7 @@ import { ReporteView } from './components/ReporteView';
 import { OdooOrdersPanel } from './components/OdooOrdersPanel';
 import { BibliotecaView } from './components/BibliotecaView';
 import { ComprasPanel } from './components/ComprasPanel';
+import { ToolingHubView } from './components/tooling/ToolingHubView';
 import { EntregasSinOCPanel } from './components/EntregasSinOCPanel';
 import { CropAdjustModal } from './components/CropAdjustModal';
 import { QuickPurchaseModal } from './components/QuickPurchaseModal';
@@ -218,6 +219,7 @@ export default function App() {
                 />
               )}
               {activeView === 'compras' && <ComprasPanel />}
+              {activeView === 'herramental' && <ToolingHubView />}
               {activeView === 'entregas-sin-oc' && <EntregasSinOCPanel />}
             </motion.div>
           )}

@@ -299,27 +299,103 @@ function toError(err: unknown): Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
-  // Todas las compañías con facturación pendiente (no solo SUPRAJIT).
-  const domain = [
-    ["invoice_status", "in", ["to invoice", "upselling"]],
+  // 1. Detectar campos disponibles en sale.order para incluir campos personalizados de Orden de Compra / PO
+  let availableFields: Record<string, { string?: string; type?: string }> = {};
+  try {
+    availableFields = await executeKw<Record<string, { string?: string; type?: string }>>(
+      odoo,
+      "sale.order",
+      "fields_get",
+      [[], { attributes: ["string", "type"] }],
+    );
+  } catch (e) {
+    logger.warn("[sync] fields_get en sale.order falló, usando campos por defecto", e);
+  }
+
+  const candidatePoFields = [
+    "client_order_ref",
+    "x_studio_orden_de_compra",
+    "x_orden_compra",
+    "x_orden_de_compra",
+    "orden_compra",
+    "x_studio_po",
+    "x_po",
+    "x_purchase_order",
+    "purchase_order",
+    "po_number",
+    "x_po_number",
+    "x_studio_oc",
+    "x_oc",
+    "oc",
   ];
-  const fields = [
+
+  const detectedPoFields = new Set<string>();
+  const hasFieldsMeta = Object.keys(availableFields).length > 0;
+  for (const name of candidatePoFields) {
+    if (!hasFieldsMeta || name in availableFields) {
+      detectedPoFields.add(name);
+    }
+  }
+  if (hasFieldsMeta) {
+    for (const [name, meta] of Object.entries(availableFields)) {
+      const label = (meta.string || "").toLowerCase();
+      if (
+        label.includes("orden de compra") ||
+        label.includes("orden compra") ||
+        label.includes("purchase order") ||
+        label.includes("orden de trabajo cliente")
+      ) {
+        detectedPoFields.add(name);
+      }
+    }
+  }
+
+  const baseFields = [
     "name",
     "date_order",
     "partner_id",
-    "client_order_ref",
     "invoice_status",
     "state",
     "requisitor",
   ];
+
+  const fields = hasFieldsMeta ?
+    Array.from(new Set([...baseFields.filter((f) => f in availableFields || !f.startsWith("x_")), ...detectedPoFields])) :
+    ["name", "date_order", "partner_id", "client_order_ref", "invoice_status", "state", "requisitor"];
+
+  const domain = [
+    ["invoice_status", "in", ["to invoice", "upselling"]],
+  ];
+
   const rows = await executeKw<OdooRow[]>(
     odoo,
     "sale.order",
     "search_read",
     [[domain], { fields, limit: 0, order: "date_order desc" }],
   );
+
   return rows.map((row) => {
-    const ref = row["client_order_ref"];
+    let poVal: string | null = null;
+    for (const f of detectedPoFields) {
+      const v = row[f];
+      if (typeof v === "string" && v.trim() !== "") {
+        poVal = v.trim();
+        break;
+      } else if (typeof v === "number") {
+        poVal = String(v);
+        break;
+      }
+    }
+
+    if (!poVal) {
+      const ref = row["client_order_ref"];
+      if (typeof ref === "string" && ref.trim() !== "") {
+        poVal = ref.trim();
+      } else if (typeof ref === "number") {
+        poVal = String(ref);
+      }
+    }
+
     const req = row["requisitor"];
     return {
       id: numOf(row["id"]),
@@ -328,7 +404,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
         row["date_order"] :
         false,
       partner: many2oneName(row["partner_id"]) || "Sin cliente",
-      client_order_ref: typeof ref === "string" && ref.trim() !== "" ? ref.trim() : null,
+      client_order_ref: poVal,
       requisitor: typeof req === "string" && req.trim() !== "" ? req.trim() : null,
       invoice_status: strOf(row["invoice_status"]) || "no",
       state: strOf(row["state"]) || "unknown",

@@ -99,10 +99,16 @@ export function OrderCard({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 sm:gap-4 mt-1 font-mono text-[9px] sm:text-[10px] opacity-80 uppercase tracking-widest flex-wrap">
-            <span>PO: {order.client_order_ref || 'N/A'}</span>
+          <div className="flex items-center gap-3 sm:gap-4 mt-1 font-mono text-[9px] sm:text-[10px] uppercase tracking-widest flex-wrap">
+            {order.client_order_ref ? (
+              <span className="bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 px-1.5 py-0.5 font-bold">
+                PO: {order.client_order_ref}
+              </span>
+            ) : (
+              <span className="opacity-60">PO: N/A</span>
+            )}
             {order.date_order && (
-              <span>
+              <span className="opacity-80">
                 FECHA: {order.date_order.split(' ')[0]}
                 {ageDays !== null && ` (${formatAgeDays(ageDays)})`}
               </span>

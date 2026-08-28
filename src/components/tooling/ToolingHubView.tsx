@@ -52,41 +52,42 @@ export function ToolingHubView(): ReactElement {
   return (
     <div className="min-h-full bp-grid-lg flex flex-col">
       {/* Header Fijo */}
-      <div className="sticky top-0 z-20 bg-bg/95 backdrop-blur border-b-2 border-line px-6 lg:px-8 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="sticky top-0 z-20 bg-bg/95 backdrop-blur border-b-2 border-line px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
           <div>
-            <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-0.5">
+            <p className="font-mono text-[9px] sm:text-[10px] uppercase tracking-[3px] sm:tracking-[4px] text-accent mb-0.5">
               Ingeniería & Maquinado CNC
             </p>
-            <h1 className="font-display font-black text-3xl lg:text-4xl uppercase italic tracking-[-1.5px] leading-none flex items-center gap-3">
-              Herramental & Cálculo Técnico
+            <h1 className="font-display font-black text-2xl sm:text-3xl lg:text-4xl uppercase italic tracking-[-1px] sm:tracking-[-1.5px] leading-none flex items-center gap-3">
+              Herramental & Cálculo
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <span className="bg-surface border-2 border-line px-3 py-1 text-xs font-mono font-bold shadow-hard">
-              ⚙️ Máquinas Haas VF & ST
+            <span className="bg-surface border-2 border-line px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-mono font-bold shadow-hard">
+              ⚙️ Haas VF & ST
             </span>
           </div>
         </div>
 
         {/* Barra de Pestañas con Navegación Horizontal */}
-        <div className="mt-4 flex items-center gap-1.5 overflow-x-auto pb-1 border-t border-line/40 pt-3 scrollbar-none">
+        <div className="mt-3 sm:mt-4 flex items-center gap-1.5 overflow-x-auto pb-1 border-t border-line/40 pt-2.5 sm:pt-3 scrollbar-none">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
+                type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`px-3.5 py-2 text-xs font-mono font-black uppercase whitespace-nowrap flex items-center gap-2 border-2 transition-all shrink-0 ${
+                className={`px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-mono font-black uppercase whitespace-nowrap flex items-center gap-1.5 sm:gap-2 border-2 transition-all shrink-0 ${
                   isActive
                     ? 'border-accent bg-accent text-bg shadow-none translate-x-[1px] translate-y-[1px]'
                     : 'border-line bg-surface text-ink hover:bg-surface-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
                 }`}
               >
                 <Icon size={14} />
-                <span className="hidden sm:inline">{tab.label}</span>
-                <span className="sm:hidden">{tab.shortLabel}</span>
+                <span className="hidden md:inline">{tab.label}</span>
+                <span className="md:hidden">{tab.shortLabel}</span>
               </button>
             );
           })}
@@ -94,7 +95,7 @@ export function ToolingHubView(): ReactElement {
       </div>
 
       {/* Contenido Dinámico de la Pestaña Activa */}
-      <div className="flex-1 p-6 lg:p-8 overflow-y-auto">
+      <div className="flex-1 p-3.5 sm:p-6 lg:p-8 overflow-y-auto">
         {activeTab === 'calculadora' && <SpeedsFeedsCalculatorTab />}
         {activeTab === 'asesor_planos' && <BlueprintAdvisorTab />}
         {activeTab === 'boveda' && <ToolingVaultTab />}

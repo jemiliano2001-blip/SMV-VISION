@@ -69,16 +69,16 @@ export function EntregasSinOCPanel() {
   return (
     <div className="h-full flex flex-col bg-bg">
       {/* ── Header ── */}
-      <header className="shrink-0 border-b-2 border-line bg-surface px-6 py-4 flex items-center justify-between flex-wrap gap-4">
+      <header className="shrink-0 border-b-2 border-line bg-surface px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <div className="size-10 bg-warn text-bg flex items-center justify-center corner-ticks shadow-hard">
-            <FileWarning size={22} strokeWidth={2.5} />
+          <div className="size-9 sm:size-10 bg-warn text-bg flex items-center justify-center corner-ticks shadow-hard shrink-0">
+            <FileWarning size={20} strokeWidth={2.5} />
           </div>
           <div>
-            <h1 className="font-display font-black text-2xl uppercase tracking-tight italic leading-none">
+            <h1 className="font-display font-black text-xl sm:text-2xl uppercase tracking-tight italic leading-none">
               Entregas sin OC (Suprajit)
             </h1>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-ink-dim mt-1">
+            <p className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-ink-dim mt-1">
               Cotizaciones entregadas sin orden de compra capturada
             </p>
           </div>
@@ -86,7 +86,7 @@ export function EntregasSinOCPanel() {
         <div className="flex items-center gap-2 flex-wrap">
           {effectiveLastSyncDate && (
             <div
-              className={`font-mono text-[10px] uppercase tracking-widest px-3 py-2 border-2 ${
+              className={`font-mono text-[9px] sm:text-[10px] uppercase tracking-widest px-2.5 sm:px-3 py-1.5 sm:py-2 border-2 ${
                 isError
                   ? 'border-danger/50 bg-danger/10 text-danger'
                   : 'border-line text-ink-dim'
@@ -101,7 +101,7 @@ export function EntregasSinOCPanel() {
             variant="ghost"
             onClick={() => void handleRefreshSync()}
             disabled={loading || syncing}
-            className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 border-2 border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[10px] sm:text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
           >
             <RefreshCw size={14} className={(loading || syncing) ? 'animate-spin' : ''} />
             {syncing ? 'Sincronizando…' : loading ? 'Cargando…' : 'Refrescar Odoo'}
@@ -110,7 +110,7 @@ export function EntregasSinOCPanel() {
       </header>
 
       {/* ── Contenido ── */}
-      <main className="flex-1 overflow-y-auto p-6">
+      <main className="flex-1 overflow-y-auto p-3.5 sm:p-6">
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4">
             <Loader2 size={32} className="animate-spin text-warn" />
@@ -122,9 +122,9 @@ export function EntregasSinOCPanel() {
             <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
           </div>
         ) : orders.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-12 text-center max-w-2xl mx-auto">
+          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-8 sm:p-12 text-center max-w-2xl mx-auto">
             <FileWarning size={48} className="text-line" />
-            <p className="font-display font-black text-2xl uppercase italic">No hay entregas pendientes de OC</p>
+            <p className="font-display font-black text-xl sm:text-2xl uppercase italic">No hay entregas pendientes de OC</p>
             <p className="font-mono text-xs uppercase tracking-widest">
               Ninguna de las entregas recientes de Suprajit está pendiente de Orden de Compra.
             </p>
@@ -151,18 +151,18 @@ export function EntregasSinOCPanel() {
 
               return (
                 <div key={order.id} className="border-2 border-warn bg-warn/5 flex flex-col shadow-hard">
-                  <div className="border-b-2 border-warn bg-warn text-bg px-5 py-3 flex items-center justify-between flex-wrap gap-4">
+                  <div className="border-b-2 border-warn bg-warn text-bg px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
                     <div>
-                      <div className="flex items-center gap-3">
-                        <h2 className="font-display font-black text-xl tracking-tight uppercase text-black">
+                      <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                        <h2 className="font-display font-black text-lg sm:text-xl tracking-tight uppercase text-black">
                           {order.name}
                         </h2>
-                        <span className="bg-black text-white px-2 py-0.5 text-[10px] font-black uppercase tracking-widest">
+                        <span className="bg-black text-white px-2 py-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-widest">
                           {order.partner}
                         </span>
                       </div>
-                      <div className="flex items-center gap-4 mt-1 font-mono text-[10px] uppercase tracking-widest text-black/80">
-                        <span>ESTADO ODOO: {order.state.toUpperCase()}</span>
+                      <div className="flex items-center gap-3 sm:gap-4 mt-1 font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-black/80 flex-wrap">
+                        <span>ESTADO: {order.state.toUpperCase()}</span>
                         {order.date_order && (
                           <span>
                             FECHA: {order.date_order.split(' ')[0]}
@@ -171,21 +171,21 @@ export function EntregasSinOCPanel() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-4 text-black">
-                      <span className="px-2 py-1 text-[10px] font-black uppercase tracking-widest font-mono bg-black text-warn">
+                    <div className="flex items-center gap-4 text-black ml-auto sm:ml-0">
+                      <span className="px-2 py-1 text-[9px] sm:text-[10px] font-black uppercase tracking-widest font-mono bg-black text-warn">
                         FALTA OC
                       </span>
                       <div className="text-right">
-                        <p className="text-[10px] uppercase font-black tracking-widest opacity-80">Líneas entregadas</p>
-                        <p className="font-display text-xl font-black">
+                        <p className="text-[9px] uppercase font-black tracking-widest opacity-80">Líneas entregadas</p>
+                        <p className="font-display text-lg sm:text-xl font-black">
                           {order.order_lines.filter(l => l.qty_pending <= 0).length} / {order.order_lines.length}
                         </p>
                       </div>
                     </div>
                   </div>
                   
-                  <div className="p-0 bg-surface">
-                    <Table className="w-full text-left border-collapse">
+                  <div className="p-0 bg-surface overflow-x-auto">
+                    <Table className="w-full text-left border-collapse min-w-[550px] sm:min-w-full">
                       <TableHeader>
                         <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
                           <TableHead className="px-5 py-2 font-bold w-1/2 text-ink-dim h-auto">Producto</TableHead>

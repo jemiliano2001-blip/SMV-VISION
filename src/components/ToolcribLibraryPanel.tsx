@@ -522,7 +522,7 @@ export function ToolcribLibraryPanel({
 
   const filters = (
     <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none flex-nowrap sm:flex-wrap">
         {FAMILIES.map((family) => {
           const count = familyCounts[family.id];
           if (family.id !== 'all' && count === 0) return null;
@@ -537,7 +537,7 @@ export function ToolcribLibraryPanel({
           );
         })}
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none flex-nowrap sm:flex-wrap">
         {ASSET_FILTERS.map((filter) => {
           const count = assetCounts[filter.id];
           if (filter.id === 'missing-pdf' && count === 0) return null;
@@ -569,7 +569,7 @@ export function ToolcribLibraryPanel({
           isPage ? 'flex-1 min-h-0' : 'max-h-[400px]',
         )}
       >
-        <Table>
+        <Table className="min-w-[620px] sm:min-w-full">
           <TableHeader className="sticky top-0 bg-surface-2 border-b-2 border-line z-10">
             <TableRow className="border-b-2 border-line hover:bg-transparent">
               <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5">Número de Parte</TableHead>

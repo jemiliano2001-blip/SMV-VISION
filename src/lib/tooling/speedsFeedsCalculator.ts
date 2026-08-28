@@ -91,15 +91,25 @@ export function calculateTurningSpeedsFeeds(input: SpeedsFeedsTurningInput): Spe
     tips.push(`Para mejorar el acabado superficial a Ra < 1.6 µm, reduce el avance a ${(Math.sqrt(1.6 * 32 * safeRadius / 1000)).toFixed(2)} mm/rev o usa radio de punta mayor.`);
   }
 
+  // Conversiones Imperiales
+  const surfaceSpeedSfm = Number((safeVc * 3.28084).toFixed(1));
+  const feedRateIpm = Number((feedRateMmMin / 25.4).toFixed(2));
+  const mrrIn3Min = Number((mrrCm3Min / 16.387).toFixed(2));
+  const theoreticalSurfaceRoughnessRaUin = Number((theoreticalSurfaceRoughnessRaUm * 39.37).toFixed(1));
+
   return {
     rpm,
     surfaceSpeedMMin: safeVc,
+    surfaceSpeedSfm,
     feedRateMmMin,
+    feedRateIpm,
     mrrCm3Min,
+    mrrIn3Min,
     netPowerKw,
     netPowerHp,
     motorPowerHpRequired,
     theoreticalSurfaceRoughnessRaUm,
+    theoreticalSurfaceRoughnessRaUin,
     theoreticalSurfaceRoughnessRzUm,
     warnings,
     tips,
@@ -200,6 +210,8 @@ export function calculateMillingSpeedsFeeds(input: SpeedsFeedsMillingInput): Spe
     tips.push(`Chip Thinning Activo (${radialChipThinningFactor}x): Al fresar con paso radial ligero (${(radialRatio * 100).toFixed(0)}% del diámetro), puedes aumentar el avance a ${adjustedFeedIpm} IPM (${adjustedFeedMmMin} mm/min) sin sobrecargar el filo.`);
   }
 
+  const mrrIn3Min = Number((mrrCm3Min / 16.387).toFixed(2));
+
   return {
     rpm,
     tableFeedIpm,
@@ -208,6 +220,7 @@ export function calculateMillingSpeedsFeeds(input: SpeedsFeedsMillingInput): Spe
     radialChipThinningFactor,
     adjustedFeedIpm,
     mrrCm3Min,
+    mrrIn3Min,
     netPowerKw,
     netPowerHp,
     motorPowerHpRequired,

@@ -174,17 +174,17 @@ export function ComprasPanel(): ReactElement {
 
   return (
     <div className="min-h-full bp-grid-lg flex flex-col">
-      <div className="sticky top-0 z-20 bg-bg/95 backdrop-blur border-b-2 border-line px-6 lg:px-8 py-4">
+      <div className="sticky top-0 z-20 bg-bg/95 backdrop-blur border-b-2 border-line px-4 sm:px-6 lg:px-8 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-0.5">Directorio</p>
-            <h1 className="font-display font-black text-3xl lg:text-4xl uppercase italic tracking-[-1.5px] leading-none flex items-center gap-3">
+            <h1 className="font-display font-black text-2xl sm:text-3xl lg:text-4xl uppercase italic tracking-[-1px] sm:tracking-[-1.5px] leading-none flex items-center gap-3">
               Compras y Materiales
             </h1>
           </div>
           <Button
             onClick={handleOpenAdd}
-            className="bg-accent text-bg px-4 py-2 text-[11px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-2 rounded-none h-10"
+            className="bg-accent text-bg px-4 py-2 text-[11px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-2 rounded-none h-9 sm:h-10"
           >
             <Plus size={14} /> Nuevo Material
           </Button>
@@ -197,7 +197,7 @@ export function ComprasPanel(): ReactElement {
           </div>
         )}
 
-        <div className="mt-5">
+        <div className="mt-4 sm:mt-5">
           <div className="flex flex-col sm:flex-row gap-3 items-center w-full">
             <div className="relative flex-1 w-full group">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim group-focus-within:text-accent transition-colors" size={16} />
@@ -232,7 +232,7 @@ export function ComprasPanel(): ReactElement {
         </div>
       </div>
 
-      <div className="flex-1 p-6 lg:p-8 overflow-y-auto">
+      <div className="flex-1 p-3.5 sm:p-6 lg:p-8 overflow-y-auto">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-40 text-ink-dim font-mono text-[11px] uppercase tracking-widest">
             <Loader2 size={24} className="animate-spin mb-3 text-accent" />
@@ -251,8 +251,8 @@ export function ComprasPanel(): ReactElement {
              <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[2px]">No se encontraron materiales que coincidan con la búsqueda</p>
           </div>
         ) : (
-          <div className="border-2 border-line bg-surface shadow-hard relative">
-            <Table>
+          <div className="border-2 border-line bg-surface shadow-hard relative overflow-x-auto">
+            <Table className="min-w-[650px] sm:min-w-full">
               <TableHeader className="bg-surface-2 border-b-2 border-line text-ink-dim">
                 <TableRow className="border-0 hover:bg-transparent">
                   <SortableHeader field="nombre" label="Material / Descripción" />

@@ -83,23 +83,23 @@ export function OrderCard({
 
   return (
     <div className="border-2 border-line bg-surface flex flex-col shadow-hard">
-      <div className="border-b-2 border-line bg-[#0D2B4D] text-white px-5 py-3 flex items-center justify-between flex-wrap gap-4">
+      <div className="border-b-2 border-line bg-[#0D2B4D] text-white px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
         <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h2 className="font-display font-black text-xl tracking-tight uppercase">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+            <h2 className="font-display font-black text-lg sm:text-xl tracking-tight uppercase">
               {order.name}
             </h2>
-            <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-black uppercase tracking-widest">
+            <span className="bg-accent text-bg px-2 py-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-widest">
               {order.partner}
             </span>
             {order.requisitor && (
-              <span className="bg-surface-2 text-ink border border-line/40 px-2.5 py-0.5 text-[10px] font-mono font-bold flex items-center gap-1.5 uppercase tracking-wide">
+              <span className="bg-surface-2 text-ink border border-line/40 px-2 py-0.5 text-[9px] sm:text-[10px] font-mono font-bold flex items-center gap-1 uppercase tracking-wide">
                 <User size={11} className="text-accent" />
                 {order.requisitor}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-4 mt-1 font-mono text-[10px] opacity-80 uppercase tracking-widest">
+          <div className="flex items-center gap-3 sm:gap-4 mt-1 font-mono text-[9px] sm:text-[10px] opacity-80 uppercase tracking-widest flex-wrap">
             <span>PO: {order.client_order_ref || 'N/A'}</span>
             {order.date_order && (
               <span>
@@ -109,30 +109,30 @@ export function OrderCard({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          <span className={`px-2 py-1 text-[10px] font-black uppercase tracking-widest font-mono ${badge.cls}`}>
+        <div className="flex items-center gap-3 sm:gap-4 ml-auto sm:ml-0">
+          <span className={`px-2 py-1 text-[9px] sm:text-[10px] font-black uppercase tracking-widest font-mono ${badge.cls}`}>
             {badge.label}
           </span>
           <div className="text-right">
-            <p className="text-[10px] uppercase font-black tracking-widest opacity-60">Líneas</p>
-            <p className="font-display text-xl font-black">{order.order_lines.length}</p>
+            <p className="text-[9px] uppercase font-black tracking-widest opacity-60">Líneas</p>
+            <p className="font-display text-lg sm:text-xl font-black">{order.order_lines.length}</p>
           </div>
           <Button
             variant="secondary"
             size="sm"
             disabled={!order.order_lines.some((l) => l.qty_pending > 0)}
             onClick={() => onExportDeliverySlip(order)}
-            className="flex items-center gap-2 bg-surface text-ink hover:bg-line ml-2"
+            className="flex items-center gap-1.5 bg-surface text-ink hover:bg-line ml-1 sm:ml-2 h-8 px-2.5"
             title="Generar PDF de Remisión"
           >
-            <Truck size={14} />
-            <span className="text-[10px] font-black tracking-widest uppercase">Remisión</span>
+            <Truck size={13} />
+            <span className="text-[9px] sm:text-[10px] font-black tracking-widest uppercase">Remisión</span>
           </Button>
         </div>
       </div>
 
-      <div className="p-0">
-        <Table className="w-full text-left border-collapse">
+      <div className="p-0 overflow-x-auto">
+        <Table className="w-full text-left border-collapse min-w-[650px] sm:min-w-full">
           <TableHeader>
             <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
               <TableHead className="w-10 px-3 py-2 text-center h-auto">

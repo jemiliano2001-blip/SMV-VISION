@@ -263,7 +263,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       )}
 
       {/* ── Métricas Principales (KPI Cards) ── */}
-      <motion.section variants={item} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <motion.section variants={item} className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
         <StatCard
           icon={CloudDownload}
           value={show(totalToInvoiceOrders || (orders.length > 0 ? orders.length : undefined))}
@@ -284,7 +284,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
           tone={sinOc ? 'text-warn' : undefined}
           onClick={() => onNavigate('entregas-sin-oc')}
         />
-        <div className="corner-ticks bg-surface border-2 border-line p-4 flex flex-col justify-between">
+        <div className="corner-ticks bg-surface border-2 border-line p-3 sm:p-4 flex flex-col justify-between">
           <div className="flex items-start justify-between mb-2">
             <RefreshCw size={16} className={`text-ink-dim ${syncing ? 'animate-spin text-accent' : ''}`} />
             <Button
@@ -292,18 +292,18 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
               size="sm"
               onClick={() => void handleTriggerSync()}
               disabled={syncing}
-              className="h-6 px-2 text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-bg transition-colors"
+              className="h-6 px-1.5 sm:px-2 text-[8px] sm:text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-bg transition-colors"
               title="Disparar sincronización con Odoo ahora"
             >
               {syncing ? `${syncElapsed}s` : 'Sincronizar'}
             </Button>
           </div>
           <div>
-            <p className={`font-display font-black italic leading-none text-2xl ${isError ? 'text-danger' : isStale ? 'text-warn' : 'text-ink'}`}>
+            <p className={`font-display font-black italic leading-none text-xl sm:text-2xl lg:text-3xl truncate ${isError ? 'text-danger' : isStale ? 'text-warn' : 'text-ink'}`}>
               {effectiveLastSyncDate ? formatRelativeTime(effectiveLastSyncDate) : '—'}
             </p>
-            <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mt-2">
-              {isError ? 'Sync Odoo · Fallo' : isStale ? 'Sync Odoo · Desactualizado' : 'Último sync Odoo'}
+            <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
+              {isError ? 'Sync · Fallo' : isStale ? 'Sync · Desactualizado' : 'Último sync Odoo'}
             </p>
           </div>
         </div>
@@ -311,15 +311,15 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
 
       {/* ── Selector de Compañía para Widgets Analíticos ── */}
       {partnersList.length > 0 && (
-        <motion.section variants={item} className="mb-4 flex items-center gap-2 flex-wrap">
-          <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim flex items-center gap-1.5 mr-2">
+        <motion.section variants={item} className="mb-6 flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-none flex-nowrap sm:flex-wrap">
+          <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim flex items-center gap-1.5 mr-2 shrink-0">
             <Building2 size={13} className="text-accent" />
             Filtrar análisis por:
           </span>
           <button
             type="button"
             onClick={() => setSelectedPartnerKey('ALL')}
-            className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors ${
+            className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors shrink-0 ${
               selectedPartnerKey === 'ALL'
                 ? 'border-accent bg-accent text-bg'
                 : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
@@ -334,7 +334,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
                 key={p.key}
                 type="button"
                 onClick={() => setSelectedPartnerKey(p.key)}
-                className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors flex items-center gap-1.5 ${
+                className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors flex items-center gap-1.5 shrink-0 ${
                   isSelected
                     ? 'border-accent bg-accent text-bg'
                     : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
@@ -558,15 +558,17 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
           <ArrowRight size={14} className="text-ink-dim opacity-0 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
-      <p className={`font-display font-black italic leading-none text-4xl ${tone}`}>
+      <p className={`font-display font-black italic leading-none text-2xl sm:text-3xl lg:text-4xl truncate ${tone}`}>
         {value}
       </p>
-      <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mt-2">{label}</p>
+      <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
+        {label}
+      </p>
     </>
   );
 
   if (!onClick) {
-    return <div className="corner-ticks bg-surface border-2 border-line p-4">{body}</div>;
+    return <div className="corner-ticks bg-surface border-2 border-line p-3 sm:p-4">{body}</div>;
   }
 
   return (
@@ -575,7 +577,7 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
       onClick={onClick}
       whileHover={{ y: -2, boxShadow: '4px 4px 0px var(--color-accent)' }}
       whileTap={{ y: 0, boxShadow: '0px 0px 0px var(--color-accent)' }}
-      className="group corner-ticks bg-surface border-2 border-line p-4 text-left transition-colors hover:border-accent outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="group corner-ticks bg-surface border-2 border-line p-3 sm:p-4 text-left transition-colors hover:border-accent outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       {body}
     </motion.button>

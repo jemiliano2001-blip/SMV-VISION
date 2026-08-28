@@ -16,16 +16,21 @@ describe('Speeds & Feeds Calculator', () => {
 
       // RPM = (200 * 1000) / (pi * 38) = 1675.29 -> 1675
       expect(result.rpm).toBe(1675);
-      // Feed rate = 1675 * 0.25 = 418.8 mm/min
+      // SFM = 200 * 3.28084 = 656.2
+      expect(result.surfaceSpeedSfm).toBe(656.2);
+      // Feed rate = 1675 * 0.25 = 418.8 mm/min -> 16.49 IPM
       expect(result.feedRateMmMin).toBe(418.8);
-      // MRR = 200 * 2.0 * 0.25 = 100 cm3/min
+      expect(result.feedRateIpm).toBe(16.49);
+      // MRR = 200 * 2.0 * 0.25 = 100 cm3/min -> 6.1 in3/min
       expect(result.mrrCm3Min).toBe(100);
+      expect(result.mrrIn3Min).toBe(6.1);
       // Net power kW = (200 * 2.0 * 0.25 * 2100) / 60000 = 3.5 kW
       expect(result.netPowerKw).toBe(3.5);
       // Motor HP required = (4.69 / 0.80) = 5.86 HP
       expect(result.motorPowerHpRequired).toBe(5.86);
-      // Theoretical Ra = (0.25^2 / (32 * 0.8)) * 1000 = (0.0625 / 25.6) * 1000 = 2.44 um
+      // Theoretical Ra = (0.25^2 / (32 * 0.8)) * 1000 = (0.0625 / 25.6) * 1000 = 2.44 um -> 96.1 uin
       expect(result.theoreticalSurfaceRoughnessRaUm).toBe(2.44);
+      expect(result.theoreticalSurfaceRoughnessRaUin).toBe(96.1);
       expect(result.warnings).toHaveLength(0);
     });
 

@@ -352,7 +352,7 @@ export function OdooOrdersPanel({
       )}
 
       {/* ── Compañías (partners) — carga perezosa ── */}
-      <section className="shrink-0 border-b-2 border-line bg-surface px-6 py-3">
+      <section className="shrink-0 border-b-2 border-line bg-surface px-4 sm:px-6 py-3">
         <div className="flex items-center gap-2 mb-2">
           <Building2 size={14} className="text-accent" />
           <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim">
@@ -364,7 +364,7 @@ export function OdooOrdersPanel({
             Sin compañías en el último sync. Pulsa Refrescar para sincronizar Odoo.
           </p>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none flex-nowrap sm:flex-wrap">
             {partners.map((partner) => {
               const selected = selectedPartnerKey === partner.key;
               return (
@@ -372,7 +372,7 @@ export function OdooOrdersPanel({
                   key={partner.key}
                   type="button"
                   onClick={() => selectPartner(partner.key)}
-                  className={`flex items-center gap-2 px-3 py-1.5 border-2 text-[11px] font-black uppercase tracking-wider transition-colors ${
+                  className={`flex items-center gap-2 px-3 py-1.5 border-2 text-[11px] font-black uppercase tracking-wider transition-colors shrink-0 ${
                     selected
                       ? 'border-accent bg-accent text-bg'
                       : 'border-line bg-surface-2 text-ink hover:border-accent hover:text-accent'
@@ -395,20 +395,20 @@ export function OdooOrdersPanel({
 
       {/* ── Subheader / Barra de Navegación y Filtros por Requisitor ── */}
       {selectedPartnerKey && (
-        <section className="shrink-0 border-b-2 border-line bg-surface-2 px-6 py-3 flex items-center justify-between flex-wrap gap-4">
+        <section className="shrink-0 border-b-2 border-line bg-surface-2 px-4 sm:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           {/* Selector de Modo de Vista */}
-          <div className="flex items-center border-2 border-line bg-surface p-0.5 shadow-sm">
+          <div className="flex items-center border-2 border-line bg-surface p-0.5 shadow-sm shrink-0">
             <button
               type="button"
               onClick={() => filters.setViewMode('all')}
-              className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
                 filters.viewMode === 'all'
                   ? 'bg-[#0D2B4D] text-white shadow-sm'
                   : 'text-ink-dim hover:text-ink hover:bg-surface-2'
               }`}
             >
               <List size={14} />
-              <span>Todas las Órdenes</span>
+              <span>Todas</span>
               <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
                 {filters.filteredOrders.length}
               </span>
@@ -417,7 +417,7 @@ export function OdooOrdersPanel({
             <button
               type="button"
               onClick={() => filters.setViewMode('by_requisitor')}
-              className={`flex items-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
                 filters.viewMode === 'by_requisitor'
                   ? 'bg-[#0D2B4D] text-white shadow-sm'
                   : 'text-ink-dim hover:text-ink hover:bg-surface-2'
@@ -432,15 +432,15 @@ export function OdooOrdersPanel({
           </div>
 
           {/* Barra de Filtros y Búsqueda */}
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
             {/* Selector Filtro de Requisitor */}
-            <div className="flex items-center gap-2 bg-surface border-2 border-line px-3 py-1 text-xs">
-              <User size={14} className="text-accent" />
-              <span className="font-mono text-[10px] uppercase font-bold text-ink-dim">Ingeniero:</span>
+            <div className="flex items-center gap-2 bg-surface border-2 border-line px-3 py-1.5 text-xs">
+              <User size={14} className="text-accent shrink-0" />
+              <span className="font-mono text-[10px] uppercase font-bold text-ink-dim shrink-0">Ing:</span>
               <select
                 value={filters.selectedRequisitor}
                 onChange={(e) => filters.setSelectedRequisitor(e.target.value)}
-                className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer"
+                className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer w-full"
               >
                 <option value="ALL">TODOS ({filters.searchMatchedOrders.length})</option>
                 {filters.uniqueRequisitores.map((req) => {
@@ -461,10 +461,10 @@ export function OdooOrdersPanel({
               <Search size={14} className="absolute left-3 text-ink-dim" />
               <input
                 type="text"
-                placeholder="Buscar SO, PO, requisitor, pieza…"
+                placeholder="Buscar SO, PO, pieza…"
                 value={filters.searchTerm}
                 onChange={(e) => filters.setSearchTerm(e.target.value)}
-                className="bg-surface border-2 border-line pl-8 pr-8 py-1 font-mono text-xs text-ink placeholder:text-ink-dim focus:outline-none focus:border-accent w-64 uppercase"
+                className="bg-surface border-2 border-line pl-8 pr-8 py-1.5 font-mono text-xs text-ink placeholder:text-ink-dim focus:outline-none focus:border-accent w-full sm:w-60 uppercase"
               />
               {filters.searchTerm && (
                 <button
@@ -481,7 +481,7 @@ export function OdooOrdersPanel({
       )}
 
       {/* ── Contenido Principal ── */}
-      <main className="flex-1 overflow-y-auto p-6">
+      <main className="flex-1 overflow-y-auto p-3 sm:p-6">
         {lineActions.lineActionError && (
           <div className="mb-4 flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             <AlertCircle size={16} className="shrink-0 mt-0.5" />

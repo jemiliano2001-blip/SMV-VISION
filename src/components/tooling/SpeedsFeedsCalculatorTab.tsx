@@ -6,6 +6,7 @@ import {
   Sliders,
   Cpu,
   Layers,
+  Ruler,
 } from 'lucide-react';
 import { MATERIAL_DATABASE } from '../../lib/tooling/materialDatabase';
 import { HAAS_MACHINE_PROFILES } from '../../lib/tooling/haasProfiles';
@@ -15,25 +16,34 @@ import {
 } from '../../lib/tooling/speedsFeedsCalculator';
 import { Input } from '../ui/input';
 
+type UnitSystem = 'imperial' | 'metric';
+
 export function SpeedsFeedsCalculatorTab(): ReactElement {
+  const [unitSystem, setUnitSystem] = useState<UnitSystem>('imperial');
   const [operationMode, setOperationMode] = useState<'turning' | 'milling'>('turning');
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>('steel_4140');
   const [selectedHaasId, setSelectedHaasId] = useState<string>('haas_st20');
 
-  // ── Inputs Torneado ──
-  const [turningDiameter, setTurningDiameter] = useState<number>(38); // mm
-  const [turningVc, setTurningVc] = useState<number>(220); // m/min
-  const [turningFeed, setTurningFeed] = useState<number>(0.25); // mm/rev
-  const [turningAp, setTurningAp] = useState<number>(2.0); // mm
-  const [turningNoseRadius, setTurningNoseRadius] = useState<number>(0.8); // mm
+  // ── Inputs Torneado (Almacenados en Imperial/Métrico según sistema) ──
+  const [turningDiameterInch, setTurningDiameterInch] = useState<number>(1.5); // 1.500"
+  const [turningSfm, setTurningSfm] = useState<number>(450); // SFM
+  const [turningFeedIpr, setTurningFeedIpr] = useState<number>(0.008); // in/rev
+  const [turningApInch, setTurningApInch] = useState<number>(0.080); // in
+  const [turningNoseRadiusInch, setTurningNoseRadiusInch] = useState<number>(0.0312); // 1/32"
+
+  const [turningDiameterMm, setTurningDiameterMm] = useState<number>(38); // mm
+  const [turningVc, setTurningVc] = useState<number>(140); // m/min
+  const [turningFeedMm, setTurningFeedMm] = useState<number>(0.20); // mm/rev
+  const [turningApMm, setTurningApMm] = useState<number>(2.0); // mm
+  const [turningNoseRadiusMm, setTurningNoseRadiusMm] = useState<number>(0.8); // mm
 
   // ── Inputs Fresado ──
   const [millingToolDiaInch, setMillingToolDiaInch] = useState<number>(0.5); // 1/2"
   const [millingFlutes, setMillingFlutes] = useState<number>(4);
   const [millingSfm, setMillingSfm] = useState<number>(350);
-  const [millingChipLoad, setMillingChipLoad] = useState<number>(0.003); // in/tooth
-  const [millingApMm, setMillingApMm] = useState<number>(6.0); // axial DOC mm
-  const [millingAeMm, setMillingAeMm] = useState<number>(3.0); // radial WOC mm
+  const [millingChipLoadInch, setMillingChipLoadInch] = useState<number>(0.003); // in/tooth
+  const [millingApInch, setMillingApInch] = useState<number>(0.250); // in
+  const [millingAeInch, setMillingAeInch] = useState<number>(0.125); // in
 
   const selectedMaterial = useMemo(() => {
     return MATERIAL_DATABASE.find(m => m.id === selectedMaterialId) || MATERIAL_DATABASE[0];
@@ -43,11 +53,15 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
     setSelectedMaterialId(matId);
     const mat = MATERIAL_DATABASE.find(m => m.id === matId);
     if (!mat) return;
-    // Auto-ajustar velocidades recomendadas
-    setTurningVc(mat.vcTurningMMin[0] + 20);
-    setTurningFeed(mat.recommendedFeedTurningMm.desbaste);
-    setMillingSfm(mat.sfmMilling[0] + 50);
-    setMillingChipLoad(mat.recommendedChipLoadInch[0]);
+    // Auto-ajustar velocidades recomendadas en ambos sistemas
+    const sfmTurn = mat.sfmTurning ? mat.sfmTurning[0] : Math.round(mat.vcTurningMMin[0] * 3.28);
+    setTurningSfm(sfmTurn);
+    setTurningVc(mat.vcTurningMMin[0]);
+    setTurningFeedIpr(mat.recommendedFeedTurningInch?.desbaste ?? 0.008);
+    setTurningFeedMm(mat.recommendedFeedTurningMm.desbaste);
+
+    setMillingSfm(mat.sfmMilling[0]);
+    setMillingChipLoadInch(mat.recommendedChipLoadInch[0]);
     if (mat.group === 'N') {
       setMillingFlutes(3);
     } else if (mat.group === 'M') {
@@ -57,67 +71,133 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
     }
   };
 
+  // Convertir valores para el cálculo según el sistema activo
   const turningResult = useMemo(() => {
+    const dMm = unitSystem === 'imperial' ? turningDiameterInch * 25.4 : turningDiameterMm;
+    const vcMMin = unitSystem === 'imperial' ? turningSfm / 3.28084 : turningVc;
+    const fnMm = unitSystem === 'imperial' ? turningFeedIpr * 25.4 : turningFeedMm;
+    const apMm = unitSystem === 'imperial' ? turningApInch * 25.4 : turningApMm;
+    const rMm = unitSystem === 'imperial' ? turningNoseRadiusInch * 25.4 : turningNoseRadiusMm;
+
     return calculateTurningSpeedsFeeds({
-      diameterMm: turningDiameter,
-      cuttingSpeedMMin: turningVc,
-      feedPerRevMm: turningFeed,
-      depthOfCutMm: turningAp,
-      noseRadiusMm: turningNoseRadius,
+      diameterMm: dMm,
+      cuttingSpeedMMin: vcMMin,
+      feedPerRevMm: fnMm,
+      depthOfCutMm: apMm,
+      noseRadiusMm: rMm,
       materialId: selectedMaterialId,
       haasMachineId: selectedHaasId,
     });
-  }, [turningDiameter, turningVc, turningFeed, turningAp, turningNoseRadius, selectedMaterialId, selectedHaasId]);
+  }, [
+    unitSystem,
+    turningDiameterInch,
+    turningDiameterMm,
+    turningSfm,
+    turningVc,
+    turningFeedIpr,
+    turningFeedMm,
+    turningApInch,
+    turningApMm,
+    turningNoseRadiusInch,
+    turningNoseRadiusMm,
+    selectedMaterialId,
+    selectedHaasId,
+  ]);
 
   const millingResult = useMemo(() => {
+    const apMm = millingApInch * 25.4;
+    const aeMm = millingAeInch * 25.4;
+
     return calculateMillingSpeedsFeeds({
       toolDiameterInch: millingToolDiaInch,
       numberOfFlutes: millingFlutes,
       surfaceFeetPerMinute: millingSfm,
-      chipLoadInch: millingChipLoad,
-      axialDepthOfCutMm: millingApMm,
-      radialDepthOfCutMm: millingAeMm,
+      chipLoadInch: millingChipLoadInch,
+      axialDepthOfCutMm: apMm,
+      radialDepthOfCutMm: aeMm,
       materialId: selectedMaterialId,
       haasMachineId: selectedHaasId,
     });
-  }, [millingToolDiaInch, millingFlutes, millingSfm, millingChipLoad, millingApMm, millingAeMm, selectedMaterialId, selectedHaasId]);
+  }, [
+    millingToolDiaInch,
+    millingFlutes,
+    millingSfm,
+    millingChipLoadInch,
+    millingApInch,
+    millingAeInch,
+    selectedMaterialId,
+    selectedHaasId,
+  ]);
 
   return (
     <div className="space-y-6">
-      {/* Header Selector: Torneado vs Fresado & Material & Haas Machine */}
+      {/* Header Selector: Operación + Sistema de Unidades + Material & Haas Machine */}
       <div className="border-2 border-line bg-surface p-4 shadow-hard">
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
           {/* Tabs Operación */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
+              type="button"
               onClick={() => {
                 setOperationMode('turning');
                 setSelectedHaasId('haas_st20');
               }}
-              className={`px-4 py-2 text-xs font-black uppercase tracking-wider flex items-center gap-2 border-2 border-line transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${
+              className={`px-3.5 py-2 text-xs font-black uppercase tracking-wider flex items-center gap-2 border-2 border-line transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${
                 operationMode === 'turning'
                   ? 'bg-accent text-bg border-accent shadow-none translate-x-[2px] translate-y-[2px]'
                   : 'bg-surface-2 text-ink hover:bg-surface-2/80'
               }`}
             >
-              <RotateCcw size={15} /> Torneado CNC (Torno Haas ST)
+              <RotateCcw size={15} /> Torneado CNC (Haas ST)
             </button>
             <button
+              type="button"
               onClick={() => {
                 setOperationMode('milling');
                 setSelectedHaasId('haas_vf2');
               }}
-              className={`px-4 py-2 text-xs font-black uppercase tracking-wider flex items-center gap-2 border-2 border-line transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${
+              className={`px-3.5 py-2 text-xs font-black uppercase tracking-wider flex items-center gap-2 border-2 border-line transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${
                 operationMode === 'milling'
                   ? 'bg-accent text-bg border-accent shadow-none translate-x-[2px] translate-y-[2px]'
                   : 'bg-surface-2 text-ink hover:bg-surface-2/80'
               }`}
             >
-              <Layers size={15} /> Fresado CNC (Haas VMC CAT40)
+              <Layers size={15} /> Fresado CNC (Haas VF)
             </button>
           </div>
 
-          {/* Selectores de Material y Máquina */}
+          {/* Selector de Unidades: Imperial (Pulgadas) vs Métrico (mm) */}
+          <div className="flex items-center border-2 border-line bg-surface-2 p-0.5 shadow-sm">
+            <span className="font-mono text-[9px] uppercase font-bold text-ink-dim px-2 flex items-center gap-1">
+              <Ruler size={11} className="text-accent" /> Unidades:
+            </span>
+            <button
+              type="button"
+              onClick={() => setUnitSystem('imperial')}
+              className={`px-3 py-1 text-[11px] font-mono font-black uppercase tracking-wider transition-all ${
+                unitSystem === 'imperial'
+                  ? 'bg-accent text-bg font-bold shadow-sm'
+                  : 'text-ink-dim hover:text-ink'
+              }`}
+            >
+              Pulgadas (Imperial)
+            </button>
+            <button
+              type="button"
+              onClick={() => setUnitSystem('metric')}
+              className={`px-3 py-1 text-[11px] font-mono font-black uppercase tracking-wider transition-all ${
+                unitSystem === 'metric'
+                  ? 'bg-accent text-bg font-bold shadow-sm'
+                  : 'text-ink-dim hover:text-ink'
+              }`}
+            >
+              Milímetros (Métrico)
+            </button>
+          </div>
+        </div>
+
+        {/* Fila de Selectores: Material y Máquina Haas */}
+        <div className="mt-4 pt-3 border-t-2 border-line/40 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
             <div>
               <label className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
@@ -155,24 +235,14 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
               </select>
             </div>
           </div>
-        </div>
 
-        {/* Resumen del Material Seleccionado */}
-        <div className="mt-4 pt-3 border-t-2 border-line/50 flex flex-wrap items-center gap-4 text-xs font-mono">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-3 text-xs font-mono">
             <span className="bg-accent/20 text-accent font-bold px-2 py-0.5 border border-accent/40 text-[10px]">
               GRUPO {selectedMaterial.group}
             </span>
-            <span className="font-bold text-ink">{selectedMaterial.name}</span>
-          </div>
-          <div className="text-ink-dim">
-            Dureza: <span className="text-ink font-bold">{selectedMaterial.hardnessTypical}</span>
-          </div>
-          <div className="text-ink-dim">
-            Fuerza de corte Kc: <span className="text-accent font-bold">{selectedMaterial.kc} N/mm²</span>
-          </div>
-          <div className="text-ink-dim text-[11px] italic hidden sm:block">
-            {selectedMaterial.chipCharacteristics}
+            <span className="text-ink-dim font-bold">
+              Dureza: <span className="text-ink">{selectedMaterial.hardnessTypical}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -186,108 +256,242 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
               <Sliders size={16} className="text-accent" />
               Parámetros de Corte ({operationMode === 'turning' ? 'Torno' : 'Fresa'})
             </h3>
-            <span className="font-mono text-[10px] text-ink-dim uppercase">Ajuste Dinámico</span>
+            <span className="font-mono text-[10px] text-accent uppercase font-bold">
+              {unitSystem === 'imperial' ? 'Pulgadas (Imperial)' : 'Métrico (mm)'}
+            </span>
           </div>
 
           {operationMode === 'turning' ? (
             <>
+              {/* Diámetro de la pieza */}
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
                   <span className="font-bold">Diámetro de la Pieza (D)</span>
-                  <span className="text-accent font-bold">{turningDiameter} mm</span>
+                  <span className="text-accent font-bold">
+                    {unitSystem === 'imperial'
+                      ? `${turningDiameterInch.toFixed(3)}" (${(turningDiameterInch * 25.4).toFixed(1)} mm)`
+                      : `${turningDiameterMm} mm (${(turningDiameterMm / 25.4).toFixed(3)}")`}
+                  </span>
                 </div>
-                <Input
-                  type="number"
-                  step="0.5"
-                  value={turningDiameter}
-                  onChange={(e) => setTurningDiameter(Number(e.target.value))}
-                  className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
-                />
-                <input
-                  type="range"
-                  min="3"
-                  max="150"
-                  value={turningDiameter}
-                  onChange={(e) => setTurningDiameter(Number(e.target.value))}
-                  className="w-full mt-1 accent-accent"
-                />
+                {unitSystem === 'imperial' ? (
+                  <>
+                    <Input
+                      type="number"
+                      step="0.05"
+                      min="0.1"
+                      max="10"
+                      value={turningDiameterInch}
+                      onChange={(e) => setTurningDiameterInch(Number(e.target.value))}
+                      className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                    />
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0].map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setTurningDiameterInch(d)}
+                          className={`text-[9px] font-mono px-2 py-0.5 border ${
+                            turningDiameterInch === d
+                              ? 'bg-accent text-bg border-accent font-bold'
+                              : 'bg-surface-2 border-line text-ink hover:border-accent'
+                          }`}
+                        >
+                          {d}&quot;
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      value={turningDiameterMm}
+                      onChange={(e) => setTurningDiameterMm(Number(e.target.value))}
+                      className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                    />
+                    <input
+                      type="range"
+                      min="3"
+                      max="150"
+                      value={turningDiameterMm}
+                      onChange={(e) => setTurningDiameterMm(Number(e.target.value))}
+                      className="w-full mt-1 accent-accent"
+                    />
+                  </>
+                )}
               </div>
 
+              {/* Velocidad de corte */}
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="font-bold">Velocidad de Corte (Vc)</span>
-                  <span className="text-accent font-bold">{turningVc} m/min</span>
+                  <span className="font-bold">
+                    {unitSystem === 'imperial' ? 'Velocidad Superficial (SFM)' : 'Velocidad de Corte (Vc)'}
+                  </span>
+                  <span className="text-accent font-bold">
+                    {unitSystem === 'imperial'
+                      ? `${turningSfm} SFM (${(turningSfm / 3.28084).toFixed(0)} m/min)`
+                      : `${turningVc} m/min (${(turningVc * 3.28084).toFixed(0)} SFM)`}
+                  </span>
                 </div>
-                <Input
-                  type="number"
-                  step="5"
-                  value={turningVc}
-                  onChange={(e) => setTurningVc(Number(e.target.value))}
-                  className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
-                />
-                <p className="text-[10px] font-mono text-ink-dim mt-0.5">
-                  Rango recomendado para {selectedMaterial.name}: {selectedMaterial.vcTurningMMin[0]} - {selectedMaterial.vcTurningMMin[1]} m/min
-                </p>
-              </div>
-
-              <div>
-                <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="font-bold">Avance por Revolución (fn)</span>
-                  <span className="text-accent font-bold">{turningFeed} mm/rev</span>
-                </div>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={turningFeed}
-                  onChange={(e) => setTurningFeed(Number(e.target.value))}
-                  className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
-                />
-                <div className="flex gap-2 mt-1">
-                  <button
-                    onClick={() => setTurningFeed(0.08)}
-                    className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
-                  >
-                    Acabado (0.08)
-                  </button>
-                  <button
-                    onClick={() => setTurningFeed(0.18)}
-                    className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
-                  >
-                    Medio (0.18)
-                  </button>
-                  <button
-                    onClick={() => setTurningFeed(0.28)}
-                    className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
-                  >
-                    Desbaste (0.28)
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Profundidad (ap)</label>
+                {unitSystem === 'imperial' ? (
                   <Input
                     type="number"
-                    step="0.1"
-                    value={turningAp}
-                    onChange={(e) => setTurningAp(Number(e.target.value))}
+                    step="10"
+                    value={turningSfm}
+                    onChange={(e) => setTurningSfm(Number(e.target.value))}
                     className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
                   />
-                  <span className="text-[9px] font-mono text-ink-dim">mm por pasada</span>
+                ) : (
+                  <Input
+                    type="number"
+                    step="5"
+                    value={turningVc}
+                    onChange={(e) => setTurningVc(Number(e.target.value))}
+                    className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                  />
+                )}
+              </div>
+
+              {/* Avance por revolución */}
+              <div>
+                <div className="flex justify-between text-xs font-mono mb-1">
+                  <span className="font-bold">
+                    {unitSystem === 'imperial' ? 'Avance por Rev (IPR)' : 'Avance por Rev (fn)'}
+                  </span>
+                  <span className="text-accent font-bold">
+                    {unitSystem === 'imperial'
+                      ? `${turningFeedIpr.toFixed(4)}" IPR (${(turningFeedIpr * 25.4).toFixed(2)} mm/rev)`
+                      : `${turningFeedMm} mm/rev (${(turningFeedMm / 25.4).toFixed(4)}" IPR)`}
+                  </span>
                 </div>
+                {unitSystem === 'imperial' ? (
+                  <>
+                    <Input
+                      type="number"
+                      step="0.0005"
+                      value={turningFeedIpr}
+                      onChange={(e) => setTurningFeedIpr(Number(e.target.value))}
+                      className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                    />
+                    <div className="flex gap-2 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setTurningFeedIpr(0.003)}
+                        className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
+                      >
+                        Acabado (.003&quot;)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTurningFeedIpr(0.007)}
+                        className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
+                      >
+                        Medio (.007&quot;)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTurningFeedIpr(0.012)}
+                        className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
+                      >
+                        Desbaste (.012&quot;)
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={turningFeedMm}
+                      onChange={(e) => setTurningFeedMm(Number(e.target.value))}
+                      className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                    />
+                    <div className="flex gap-2 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setTurningFeedMm(0.08)}
+                        className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
+                      >
+                        Acabado (0.08)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTurningFeedMm(0.18)}
+                        className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
+                      >
+                        Medio (0.18)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTurningFeedMm(0.28)}
+                        className="text-[9px] font-mono px-2 py-0.5 bg-surface-2 border border-line hover:border-accent"
+                      >
+                        Desbaste (0.28)
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Profundidad de corte y Radio de punta */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono font-bold mb-1">
+                    {unitSystem === 'imperial' ? 'Profundidad (DOC ap)' : 'Profundidad (ap)'}
+                  </label>
+                  {unitSystem === 'imperial' ? (
+                    <>
+                      <Input
+                        type="number"
+                        step="0.005"
+                        value={turningApInch}
+                        onChange={(e) => setTurningApInch(Number(e.target.value))}
+                        className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                      />
+                      <span className="text-[9px] font-mono text-ink-dim">
+                        pulgadas ({(turningApInch * 25.4).toFixed(1)} mm)
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={turningApMm}
+                        onChange={(e) => setTurningApMm(Number(e.target.value))}
+                        className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
+                      />
+                      <span className="text-[9px] font-mono text-ink-dim">mm por pasada</span>
+                    </>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-xs font-mono font-bold mb-1">Radio Punta (r)</label>
-                  <select
-                    value={turningNoseRadius}
-                    onChange={(e) => setTurningNoseRadius(Number(e.target.value))}
-                    className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
-                  >
-                    <option value={0.2}>0.2 mm (R02 - Fino)</option>
-                    <option value={0.4}>0.4 mm (R04 - Acabado)</option>
-                    <option value={0.8}>0.8 mm (R08 - General)</option>
-                    <option value={1.2}>1.2 mm (R12 - Desbaste)</option>
-                  </select>
+                  {unitSystem === 'imperial' ? (
+                    <select
+                      value={turningNoseRadiusInch}
+                      onChange={(e) => setTurningNoseRadiusInch(Number(e.target.value))}
+                      className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
+                    >
+                      <option value={0.0078}>.008&quot; (R02 - Fino)</option>
+                      <option value={0.0156}>1/64&quot; (.016&quot; - R04)</option>
+                      <option value={0.0312}>1/32&quot; (.031&quot; - R08)</option>
+                      <option value={0.0468}>3/64&quot; (.047&quot; - R12)</option>
+                    </select>
+                  ) : (
+                    <select
+                      value={turningNoseRadiusMm}
+                      onChange={(e) => setTurningNoseRadiusMm(Number(e.target.value))}
+                      className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
+                    >
+                      <option value={0.2}>0.2 mm (R02 - Fino)</option>
+                      <option value={0.4}>0.4 mm (R04 - Acabado)</option>
+                      <option value={0.8}>0.8 mm (R08 - General)</option>
+                      <option value={1.2}>1.2 mm (R12 - Desbaste)</option>
+                    </select>
+                  )}
                 </div>
               </div>
             </>
@@ -296,22 +500,26 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
               {/* Controles de Fresado */}
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="font-bold">Diámetro Fresa (D)</span>
-                  <span className="text-accent font-bold">{millingToolDiaInch}" ({ (millingToolDiaInch * 25.4).toFixed(2) } mm)</span>
+                  <span className="font-bold">Diámetro de Fresa (D)</span>
+                  <span className="text-accent font-bold">
+                    {millingToolDiaInch}&quot; ({(millingToolDiaInch * 25.4).toFixed(2)} mm)
+                  </span>
                 </div>
                 <select
                   value={millingToolDiaInch}
                   onChange={(e) => setMillingToolDiaInch(Number(e.target.value))}
                   className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
                 >
-                  <option value={0.125}>1/8" (3.17 mm)</option>
-                  <option value={0.25}>1/4" (6.35 mm)</option>
-                  <option value={0.375}>3/8" (9.52 mm)</option>
-                  <option value={0.5}>1/2" (12.70 mm)</option>
-                  <option value={0.625}>5/8" (15.87 mm)</option>
-                  <option value={0.75}>3/4" (19.05 mm)</option>
-                  <option value={1.0}>1.0" (25.40 mm)</option>
-                  <option value={2.0}>2.0" (50.8 mm - Face Mill)</option>
+                  <option value={0.125}>1/8&quot; (0.125&quot; - 3.17 mm)</option>
+                  <option value={0.1875}>3/16&quot; (0.188&quot; - 4.76 mm)</option>
+                  <option value={0.25}>1/4&quot; (0.250&quot; - 6.35 mm)</option>
+                  <option value={0.3125}>5/16&quot; (0.313&quot; - 7.94 mm)</option>
+                  <option value={0.375}>3/8&quot; (0.375&quot; - 9.52 mm)</option>
+                  <option value={0.5}>1/2&quot; (0.500&quot; - 12.70 mm)</option>
+                  <option value={0.625}>5/8&quot; (0.625&quot; - 15.87 mm)</option>
+                  <option value={0.75}>3/4&quot; (0.750&quot; - 19.05 mm)</option>
+                  <option value={1.0}>1.0&quot; (1.000&quot; - 25.40 mm)</option>
+                  <option value={2.0}>2.0&quot; (2.000&quot; - Face Mill 50.8 mm)</option>
                 </select>
               </div>
 
@@ -344,40 +552,44 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
 
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="font-bold">Chip Load (fz / FPT)</span>
-                  <span className="text-accent font-bold">{millingChipLoad}"/diente</span>
+                  <span className="font-bold">Chip Load (IPT / FPT)</span>
+                  <span className="text-accent font-bold">{millingChipLoadInch}&quot; / diente</span>
                 </div>
                 <Input
                   type="number"
                   step="0.0005"
-                  value={millingChipLoad}
-                  onChange={(e) => setMillingChipLoad(Number(e.target.value))}
+                  value={millingChipLoadInch}
+                  onChange={(e) => setMillingChipLoadInch(Number(e.target.value))}
                   className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Prof. Axial (ap)</label>
+                  <label className="block text-xs font-mono font-bold mb-1">Prof. Axial (ap / DOC)</label>
                   <Input
                     type="number"
-                    step="0.5"
-                    value={millingApMm}
-                    onChange={(e) => setMillingApMm(Number(e.target.value))}
+                    step="0.025"
+                    value={millingApInch}
+                    onChange={(e) => setMillingApInch(Number(e.target.value))}
                     className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
                   />
-                  <span className="text-[9px] font-mono text-ink-dim">mm profundidad</span>
+                  <span className="text-[9px] font-mono text-ink-dim">
+                    pulgadas ({(millingApInch * 25.4).toFixed(1)} mm)
+                  </span>
                 </div>
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Paso Radial (ae)</label>
+                  <label className="block text-xs font-mono font-bold mb-1">Paso Radial (ae / WOC)</label>
                   <Input
                     type="number"
-                    step="0.5"
-                    value={millingAeMm}
-                    onChange={(e) => setMillingAeMm(Number(e.target.value))}
+                    step="0.025"
+                    value={millingAeInch}
+                    onChange={(e) => setMillingAeInch(Number(e.target.value))}
                     className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
                   />
-                  <span className="text-[9px] font-mono text-ink-dim">mm stepover</span>
+                  <span className="text-[9px] font-mono text-ink-dim">
+                    pulgadas ({(millingAeInch * 25.4).toFixed(1)} mm)
+                  </span>
                 </div>
               </div>
             </>
@@ -389,7 +601,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
           {/* Tarjetas Principales de Salida */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="border-2 border-line bg-surface p-4 shadow-hard text-center">
-              <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">Velocidad Husillo</span>
+              <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">
+                Velocidad Husillo
+              </span>
               <span className="font-display font-black text-2xl lg:text-3xl text-accent block mt-1">
                 {(operationMode === 'turning' ? turningResult.rpm : millingResult.rpm).toLocaleString()}
               </span>
@@ -397,12 +611,26 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
             </div>
 
             <div className="border-2 border-line bg-surface p-4 shadow-hard text-center">
-              <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">Avance de Mesa (F)</span>
+              <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">
+                Avance de Mesa (F)
+              </span>
               <span className="font-display font-black text-2xl lg:text-3xl text-ink block mt-1">
-                {operationMode === 'turning' ? turningResult.feedRateMmMin : millingResult.tableFeedMmMin}
+                {unitSystem === 'imperial'
+                  ? operationMode === 'turning'
+                    ? `${turningResult.feedRateIpm} IPM`
+                    : `${millingResult.tableFeedIpm} IPM`
+                  : operationMode === 'turning'
+                    ? `${turningResult.feedRateMmMin} mm/min`
+                    : `${millingResult.tableFeedMmMin} mm/min`}
               </span>
               <span className="font-mono text-[10px] text-ink-dim font-bold">
-                mm/min {operationMode === 'milling' ? `(${millingResult.tableFeedIpm} IPM)` : ''}
+                {unitSystem === 'imperial'
+                  ? operationMode === 'turning'
+                    ? `(${turningResult.feedRateMmMin} mm/min)`
+                    : `(${millingResult.tableFeedMmMin} mm/min)`
+                  : operationMode === 'turning'
+                    ? `(${turningResult.feedRateIpm} IPM)`
+                    : `(${millingResult.tableFeedIpm} IPM)`}
               </span>
             </div>
 
@@ -412,27 +640,30 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
               </span>
               <span className="font-display font-black text-2xl lg:text-3xl text-ok block mt-1">
                 {operationMode === 'turning'
-                  ? `${turningResult.theoreticalSurfaceRoughnessRaUm} µm`
+                  ? unitSystem === 'imperial'
+                    ? `${turningResult.theoreticalSurfaceRoughnessRaUin} µin`
+                    : `${turningResult.theoreticalSurfaceRoughnessRaUm} µm`
                   : `${millingResult.radialChipThinningFactor}x`}
               </span>
               <span className="font-mono text-[10px] text-ink-dim font-bold">
                 {operationMode === 'turning'
-                  ? `(Rz ~ ${turningResult.theoreticalSurfaceRoughnessRzUm} µm)`
+                  ? unitSystem === 'imperial'
+                    ? `(${turningResult.theoreticalSurfaceRoughnessRaUm} µm)`
+                    : `(${turningResult.theoreticalSurfaceRoughnessRaUin} µin)`
                   : millingResult.radialChipThinningFactor > 1
                     ? `Avance Ajust: ${millingResult.adjustedFeedIpm} IPM`
                     : 'Sin compensación'}
               </span>
-              {operationMode === 'milling' && (
-                <span className="font-mono text-[9px] text-ink-dim/70 block mt-0.5">
-                  Viruta real por diente: {millingResult.effectiveChipLoadInch}" (programada: {millingChipLoad}")
-                </span>
-              )}
             </div>
 
             <div className="border-2 border-line bg-surface p-4 shadow-hard text-center">
-              <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">Potencia Requerida</span>
+              <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">
+                Potencia Requerida
+              </span>
               <span className="font-display font-black text-2xl lg:text-3xl text-ink block mt-1">
-                {operationMode === 'turning' ? turningResult.motorPowerHpRequired : millingResult.motorPowerHpRequired}
+                {operationMode === 'turning'
+                  ? turningResult.motorPowerHpRequired
+                  : millingResult.motorPowerHpRequired}
               </span>
               <span className="font-mono text-[10px] text-ink-dim font-bold">
                 HP ({operationMode === 'turning' ? turningResult.netPowerKw : millingResult.netPowerKw} kW)
@@ -440,34 +671,48 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
             </div>
           </div>
 
+          {/* Tarjeta de Tasa de Remoción (MRR) */}
+          <div className="border-2 border-line bg-surface p-3 px-4 shadow-hard flex items-center justify-between flex-wrap gap-2">
+            <span className="font-mono text-xs uppercase font-bold text-ink-dim">
+              Tasa de Remoción de Material (MRR):
+            </span>
+            <span className="font-mono text-sm font-black text-accent">
+              {operationMode === 'turning'
+                ? `${turningResult.mrrIn3Min} in³/min (${turningResult.mrrCm3Min} cm³/min)`
+                : `${millingResult.mrrIn3Min} in³/min (${millingResult.mrrCm3Min} cm³/min)`}
+            </span>
+          </div>
+
           {/* Fórmulas Aplicadas y Desglose Técnico */}
           <div className="border-2 border-line bg-surface p-4 shadow-hard">
             <h4 className="font-display font-black text-xs uppercase tracking-wider text-ink mb-2 flex items-center gap-2">
               <Cpu size={14} className="text-accent" />
-              Fórmulas Aplicadas en Tiempo Real
+              Fórmulas Aplicadas en Tiempo Real (Sistema {unitSystem === 'imperial' ? 'Imperial' : 'Métrico'})
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono bg-surface-2 p-3 border border-line">
               <div>
                 <span className="text-ink-dim block text-[10px]">Cálculo de RPM:</span>
                 <code className="text-ink font-bold">
                   {operationMode === 'turning'
-                    ? `n = (Vc × 1000) / (π × D) = (${turningVc} × 1000) / (π × ${turningDiameter}) = ${turningResult.rpm} RPM`
-                    : `n = (SFM × 3.82) / D = (${millingSfm} × 3.82) / ${millingToolDiaInch} = ${millingResult.rpm} RPM`}
+                    ? unitSystem === 'imperial'
+                      ? `n = (SFM × 3.82) / D = (${turningSfm} × 3.82) / ${turningDiameterInch}" = ${turningResult.rpm} RPM`
+                      : `n = (Vc × 1000) / (π × D) = (${turningVc} × 1000) / (π × ${turningDiameterMm}) = ${turningResult.rpm} RPM`
+                    : `n = (SFM × 3.82) / D = (${millingSfm} × 3.82) / ${millingToolDiaInch}" = ${millingResult.rpm} RPM`}
                 </code>
               </div>
               <div>
-                <span className="text-ink-dim block text-[10px]">Tasa de Remoción (MRR):</span>
+                <span className="text-ink-dim block text-[10px]">Avance de Mesa (Feed):</span>
                 <code className="text-ink font-bold">
                   {operationMode === 'turning'
-                    ? `MRR = Vc × ap × fn = ${turningResult.mrrCm3Min} cm³/min`
-                    : `MRR = ap × ae × vf = ${millingResult.mrrCm3Min} cm³/min`}
+                    ? `vf = n × fn = ${turningResult.rpm} × ${unitSystem === 'imperial' ? `${turningFeedIpr}"` : `${turningFeedMm}mm`} = ${unitSystem === 'imperial' ? `${turningResult.feedRateIpm} IPM` : `${turningResult.feedRateMmMin} mm/min`}`
+                    : `vf = n × fz × Z = ${millingResult.rpm} × ${millingChipLoadInch}" × ${millingFlutes} = ${millingResult.tableFeedIpm} IPM`}
                 </code>
               </div>
               <div>
-                <span className="text-ink-dim block text-[10px]">Potencia de Corte:</span>
+                <span className="text-ink-dim block text-[10px]">Potencia de Corte Estimada:</span>
                 <code className="text-ink font-bold">
-                  Pc = (MRR × Kc) / (60 × 10³) = {operationMode === 'turning' ? turningResult.netPowerKw : millingResult.netPowerKw} kW (
-                  {operationMode === 'turning' ? turningResult.motorPowerHpRequired : millingResult.motorPowerHpRequired} HP motor)
+                  Pc = {operationMode === 'turning' ? turningResult.netPowerHp : millingResult.netPowerHp} HP netos (
+                  {operationMode === 'turning' ? turningResult.motorPowerHpRequired : millingResult.motorPowerHpRequired} HP motor al 80% ef.)
                 </code>
               </div>
               <div>
@@ -476,7 +721,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 </span>
                 <code className="text-ink font-bold">
                   {operationMode === 'turning'
-                    ? `Ra = fn² / (32 × r) = ${turningFeed}² / (32 × ${turningNoseRadius}) = ${turningResult.theoreticalSurfaceRoughnessRaUm} µm`
+                    ? `Ra = fn² / (32 × r) = ${turningResult.theoreticalSurfaceRoughnessRaUin} µin (${turningResult.theoreticalSurfaceRoughnessRaUm} µm)`
                     : `RCTF = 1 / √(1 - (1 - 2×ae/D)²) = ${millingResult.radialChipThinningFactor}`}
                 </code>
               </div>

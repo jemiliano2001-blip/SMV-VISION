@@ -14,12 +14,16 @@ export interface MaterialSpec {
   vcTurningMMin: [number, number];
   /** Velocidad de corte recomendada en fresado con carburo (SFM) [min, max] */
   sfmMilling: [number, number];
+  /** Velocidad de corte recomendada en torneado con carburo (SFM) [min, max] */
+  sfmTurning?: [number, number];
   /** Fuerza de corte específica Kc (N/mm²) para cálculo de potencia */
   kc: number;
   /** Chip load recomendado para endmill de 1/2" en fresado (pulgadas / diente) [min, max] */
   recommendedChipLoadInch: [number, number];
   /** Avance recomendado en torneado (mm/rev) */
   recommendedFeedTurningMm: { desbaste: number; acabado: number };
+  /** Avance recomendado en torneado (pulgadas/rev - IPR) */
+  recommendedFeedTurningInch?: { desbaste: number; acabado: number };
   hardnessTypical: string;
   chipCharacteristics: string;
 }
@@ -54,12 +58,16 @@ export interface SpeedsFeedsTurningInput {
 export interface SpeedsFeedsTurningResult {
   rpm: number;
   surfaceSpeedMMin: number;
+  surfaceSpeedSfm: number;
   feedRateMmMin: number;
+  feedRateIpm: number;
   mrrCm3Min: number;
+  mrrIn3Min: number;
   netPowerKw: number;
   netPowerHp: number;
   motorPowerHpRequired: number; // con 80% eficiencia
   theoreticalSurfaceRoughnessRaUm: number; // Ra en micrómetros
+  theoreticalSurfaceRoughnessRaUin: number; // Ra en micro-pulgadas (µin)
   theoreticalSurfaceRoughnessRzUm: number; // Rz aprox 4 * Ra
   warnings: string[];
   tips: string[];
@@ -84,6 +92,7 @@ export interface SpeedsFeedsMillingResult {
   radialChipThinningFactor: number; // RCTF
   adjustedFeedIpm: number;
   mrrCm3Min: number;
+  mrrIn3Min: number;
   netPowerKw: number;
   netPowerHp: number;
   motorPowerHpRequired: number;

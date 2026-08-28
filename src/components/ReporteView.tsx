@@ -955,7 +955,7 @@ export function ReporteView({
                     </div>
                   </div>
 
-                  <table className="w-full text-left border-collapse">
+                  <table className="w-full text-left border-collapse min-w-[650px] sm:min-w-full">
                     <thead className="sticky top-0 z-20">
                       <tr className="bg-[#11161C] text-white">
                         <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 w-[50%]">

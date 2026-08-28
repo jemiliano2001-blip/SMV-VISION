@@ -104,13 +104,18 @@ describe('descriptiveTokens', () => {
   });
 
   it('filters out stop words', () => {
-    const result = descriptiveTokens('TOOL CRIB PART NUMBER SUPRAJIT HEX BLOCK');
+    const result = descriptiveTokens('FABRICACION DE BUJE GUIA Y MAQUINADO PARA REPARACION DE TROQUEL TOOL CRIB PART NUMBER');
     expect(result).not.toContain('TOOL');
     expect(result).not.toContain('CRIB');
     expect(result).not.toContain('PART');
     expect(result).not.toContain('NUMBER');
-    expect(result).toContain('HEX');
-    expect(result).toContain('BLOCK');
+    expect(result).not.toContain('FABRICACION');
+    expect(result).not.toContain('MAQUINADO');
+    expect(result).not.toContain('REPARACION');
+    expect(result).not.toContain('PARA');
+    expect(result).toContain('BUJE');
+    expect(result).toContain('GUIA');
+    expect(result).toContain('TROQUEL');
   });
 
   it('filters out tokens with 3+ consecutive digits', () => {
@@ -153,22 +158,37 @@ describe('scorePieceMatch', () => {
     expect(score).toBe(95);
   });
 
-  it('applies penalty when both have IDs that DON\'T match but descriptors are shared', () => {
+  it('vetoes with score 0 (hard veto) when both have IDs that DO NOT match even if descriptors match', () => {
     const order = { identifiers: ['9010125'], descriptors: ['HEX', 'BLOCK'] };
     const candidate = { identifiers: ['9010126'], descriptors: ['HEX', 'BLOCK'] };
     const score = scorePieceMatch(order, candidate);
-    // ID mismatch applies -10 penalty, but shared HEX BLOCK descriptors score 85
-    // Result: 85 - 10 = 75, but actual behavior is 80 (2 shared tokens, ratio >= 0.4)
-    expect(score).toBe(80);
+    // Hard veto: dos piezas con números de parte distintos nunca se deben emparejar
+    expect(score).toBe(0);
   });
 
-  it('scores when strong token match with >= 0.5 overlap ratio', () => {
-    const order = { identifiers: [], descriptors: ['HEXAGON', 'BLOCK', 'STEEL'] };
-    const candidate = { identifiers: [], descriptors: ['HEXAGON', 'STEEL', 'ITEM'] };
-    // Shared: HEXAGON (strong token), STEEL (descriptor)
-    // 2 / min(3, 3) = 2/3 ≈ 0.67, has strong token => score 85
+  it('scores when strong token match with >= 0.6 overlap ratio', () => {
+    const order = { identifiers: [], descriptors: ['WCD001', 'BLOCK', 'STEEL'] };
+    const candidate = { identifiers: [], descriptors: ['WCD001', 'STEEL', 'ITEM'] };
+    // Shared: WCD001 (strong token alfanumérico), STEEL (descriptor)
+    // 2 / min(3, 3) = 2/3 ≈ 0.67 >= 0.6 => score 85
     const score = scorePieceMatch(order, candidate);
     expect(score).toBeGreaterThanOrEqual(80);
+  });
+
+  it('does NOT match two different manufacturing jobs sharing common workshop verbs', () => {
+    const order1 = extractOrderSignals('FABRICACION DE BUJE GUIA');
+    const order2 = extractOrderSignals('FABRICACION DE PLACA DE BASE');
+    const score = scorePieceMatch(order1, order2);
+    // "FABRICACION", "DE" son stop words. "BUJE GUIA" vs "PLACA BASE" no comparten descriptores.
+    expect(score).toBe(0);
+  });
+
+  it('does NOT match manufacturing jobs with only 1 generic token and low overlap', () => {
+    const order = extractOrderSignals('FABRICACION DE GUIA LATERAL DERECHA');
+    const blueprint = extractOrderSignals('FABRICACION DE GUIA FRONTAL SUPERIOR');
+    const score = scorePieceMatch(order, blueprint);
+    // Solo comparten "GUIA" (1 token normal, overlap 1/3 = 0.33), no debe calificar
+    expect(score).toBeLessThan(MIN_BLUEPRINT_MATCH_SCORE);
   });
 
   it('returns 0 for completely different descriptions', () => {
@@ -344,6 +364,19 @@ describe('selectBestBlueprintMatch', () => {
 
     expect(resultISO.score).toBeGreaterThan(resultRegular.score);
     expect(resultISO.score).toBeLessThanOrEqual(100);
+  });
+
+  it('does NOT boost .iso score when the file has no matching signals (score < 80)', () => {
+    const specs: BlueprintSpec[] = [
+      { pieza_detectada: 'PUNZON DE CORTE', isometricBoundingBox: [0, 0, 100, 100] },
+    ];
+    const result = selectBestBlueprintMatch('FABRICACION DE BUJE GUIA', {
+      fileLabel: 'punzon_corte.iso.pdf',
+      specs,
+    });
+    // No debe calificar ni inflarse por ser .iso
+    expect(result.spec).toBeNull();
+    expect(result.score).toBe(0);
   });
 
   it('accepts numeroParte as additional identifier source', () => {

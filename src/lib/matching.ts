@@ -24,8 +24,18 @@ import type { BlueprintSpec, ToolcribActiveDrawingView } from '../types';
 export const MIN_BLUEPRINT_MATCH_SCORE = 80;
 
 const COMMON_STOP_WORDS = new Set([
+  // Términos documentales y metadatos
   'PART', 'NUMBER', 'DRAWING', 'REV', 'REVISION', 'SUPRAJIT', 'TOOL', 'CRIB', 'PIEZA', 'CODIGO',
-  'DETALLE', 'ENSAMBLE', 'ASSEMBLY', 'DETAIL', 'SCALE', 'ESCALA', 'SHEET', 'HOJA', 'CLIENTE', 'CUSTOMER'
+  'DETALLE', 'ENSAMBLE', 'ASSEMBLY', 'DETAIL', 'SCALE', 'ESCALA', 'SHEET', 'HOJA', 'CLIENTE', 'CUSTOMER',
+  // Verbos y operaciones de taller / maquinado
+  'FABRICACION', 'FABRICAR', 'MAQUINADO', 'MAQUINAR', 'MAQUILA', 'MAQUILADO', 'MODIFICACION', 'MODIFICAR',
+  'REPARACION', 'REPARAR', 'RETRABAJO', 'AJUSTE', 'MANTENIMIENTO', 'SERVICIO', 'TRABAJO', 'ELABORACION',
+  'PRODUCCION', 'DESARROLLO', 'RECTIFICADO', 'AFILADO', 'CORTE', 'TRATAMIENTO', 'TEMPLE', 'PULIDO',
+  // Preposiciones, artículos y conjunciones comunes
+  'PARA', 'CON', 'POR', 'SIN', 'DEL', 'LOS', 'LAS', 'UNA', 'UNO', 'UNOS', 'UNAS', 'SOBRE', 'ENTRE', 'TIPO',
+  'FOR', 'WITH', 'WITHOUT', 'FROM', 'THE', 'AND',
+  // Términos genéricos de taller / compras
+  'TALLER', 'SHOP', 'GENERAL', 'PIEZAS', 'ITEM', 'ITEMS', 'REF', 'LINEA', 'ORDEN', 'PEDIDO', 'SOLICITUD', 'SMV'
 ]);
 
 export interface PieceMatchSignals {
@@ -58,7 +68,9 @@ function isStrongToken(token: string): boolean {
   const hasLetter = /[A-Z]/.test(token);
   const hasDigit = /\d/.test(token);
   const hasLongDigitChain = /\d{4,}/.test(token);
-  return hasLongDigitChain || (hasLetter && hasDigit && token.length >= 4) || token.length >= 7;
+  // Un token fuerte es un código alfanumérico identificador (ej. WCD001, P05, H72, M12)
+  // o una secuencia de dígitos larga (\d{4,}).
+  return hasLongDigitChain || (hasLetter && hasDigit && token.length >= 3);
 }
 
 function compactPartIdentifier(value: string): string {
@@ -200,14 +212,9 @@ export function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignal
     if (hasStrongIdentifierMatch(orderIds, candidateIds)) {
       return 95;
     }
-  }
-
-  let penalty = 0;
-  // RULE 2: If we have IDs in both but they DON'T match, apply a penalty.
-  // This prevents "90-1012-05" from easily matching "90-1012-06", but still
-  // allows a match if the descriptive overlap is excellent.
-  if (orderIds.length > 0 && candidateIds.length > 0) {
-    penalty = 10;
+    // RULE 2: Hard veto if both sides have part identifiers and they DO NOT match.
+    // Prevents "90-1012-05" from matching "90-1012-06" even if descriptive words match.
+    return 0;
   }
 
   // RULE 3: Descriptive matching (Fuzzy)
@@ -224,11 +231,11 @@ export function scorePieceMatch(orderSignals: PieceMatchSignals, candidateSignal
 
   let score = 0;
   if (overlapRatio === 1.0 && sharedTokens.length >= 2) score = 90;
-  else if (hasStrongSharedToken && overlapRatio >= 0.5) score = 85;
-  else if (sharedTokens.length >= 2 && overlapRatio >= 0.4) score = 82;
-  else if (sharedTokens.length >= 1 && hasStrongSharedToken) score = 80;
+  else if (hasStrongSharedToken && overlapRatio >= 0.6) score = 85;
+  else if (sharedTokens.length >= 2 && overlapRatio >= 0.5) score = 82;
+  else if (sharedTokens.length >= 1 && hasStrongSharedToken && overlapRatio >= 0.75) score = 80;
 
-  return Math.max(0, score - penalty);
+  return score;
 }
 
 /** True si la entrada de catálogo es un plano ISO (por nombre de parte o path). */
@@ -352,11 +359,14 @@ export function selectBestBlueprintMatch(
 
   const orderSignals = extractOrderSignals(orderPiece, numeroParte);
   const fileSignals = extractBlueprintSignals(candidate.fileLabel, candidate.specs);
-  let fileScore = scorePieceMatch(orderSignals, fileSignals);
+  const rawFileScore = scorePieceMatch(orderSignals, fileSignals);
   
-  if (candidate.fileLabel.toLowerCase().includes('.iso')) {
-    fileScore += 15;
-  }
+  // El bono de ISO (+15) solo se concede si el archivo ya califica como match válido (>= 80).
+  // Nunca debe convertir un archivo irrelevante o falso positivo (< 80) en un match aprobado.
+  const isIso = candidate.fileLabel.toLowerCase().includes('.iso');
+  const fileScore = (isIso && rawFileScore >= MIN_BLUEPRINT_MATCH_SCORE)
+    ? Math.min(100, rawFileScore + 15)
+    : rawFileScore;
 
   let bestSpec: BlueprintSpec | null = null;
   let bestSpecScore = 0;
@@ -396,9 +406,6 @@ export function selectBestBlueprintMatch(
 
   return {
     spec: matchedSpec,
-    // El bono de ISO (+15) puede empujar fileScore pasado 100 — se clampea
-    // solo aquí (para mostrar/exportar), no antes, para no tocar los
-    // umbrales de comparación de arriba.
     score: Math.min(100, Math.max(fileScore, bestSpecScore)),
   };
 }

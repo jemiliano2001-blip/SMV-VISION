@@ -7,6 +7,7 @@ import {
   Cpu,
   ShoppingBag,
   RotateCcw,
+  Bolt,
 } from 'lucide-react';
 import { SpeedsFeedsCalculatorTab } from './SpeedsFeedsCalculatorTab';
 import { BlueprintAdvisorTab } from './BlueprintAdvisorTab';
@@ -15,6 +16,7 @@ import { InsertDecoderTab } from './InsertDecoderTab';
 import { EndmillAdvisorTab } from './EndmillAdvisorTab';
 import { GradesAndHaasTab } from './GradesAndHaasTab';
 import { SupplierDirectoryTab } from './SupplierDirectoryTab';
+import { ThreadingAdvisorTab } from './ThreadingAdvisorTab';
 
 type ToolingHubTab =
   | 'calculadora'
@@ -22,6 +24,7 @@ type ToolingHubTab =
   | 'boveda'
   | 'endmills'
   | 'decodificador'
+  | 'roscado'
   | 'grados_haas'
   | 'proveedores';
 
@@ -38,8 +41,9 @@ const TABS: TabItemDef[] = [
   { id: 'boveda', label: '3. Mi Bóveda de Herramental', shortLabel: 'Bóveda Compras', icon: Boxes },
   { id: 'endmills', label: '4. Asesor de Endmills / Fresas', shortLabel: 'Endmills', icon: Layers },
   { id: 'decodificador', label: '5. Decodificador ISO + Escáner IA', shortLabel: 'Decodificador ISO', icon: RotateCcw },
-  { id: 'grados_haas', label: '6. Grados Multimarca & Haas CNC', shortLabel: 'Grados & Haas', icon: Cpu },
-  { id: 'proveedores', label: '7. Directorio de Proveedores', shortLabel: 'Proveedores', icon: ShoppingBag },
+  { id: 'roscado', label: '6. Roscado & Machuelos', shortLabel: 'Roscado', icon: Bolt },
+  { id: 'grados_haas', label: '7. Grados Multimarca & Haas CNC', shortLabel: 'Grados & Haas', icon: Cpu },
+  { id: 'proveedores', label: '8. Directorio de Proveedores', shortLabel: 'Proveedores', icon: ShoppingBag },
 ];
 
 export function ToolingHubView(): ReactElement {
@@ -96,6 +100,7 @@ export function ToolingHubView(): ReactElement {
         {activeTab === 'boveda' && <ToolingVaultTab />}
         {activeTab === 'endmills' && <EndmillAdvisorTab />}
         {activeTab === 'decodificador' && <InsertDecoderTab />}
+        {activeTab === 'roscado' && <ThreadingAdvisorTab />}
         {activeTab === 'grados_haas' && <GradesAndHaasTab />}
         {activeTab === 'proveedores' && <SupplierDirectoryTab />}
       </div>

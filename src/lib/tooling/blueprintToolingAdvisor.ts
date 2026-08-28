@@ -3,12 +3,17 @@ import { getSupplierSearchUrl } from './toolingSuppliers';
 import { calculateTurningSpeedsFeeds, calculateMillingSpeedsFeeds } from './speedsFeedsCalculator';
 import { callGeminiProxy } from '../geminiProxy';
 import { callWithRetry, prepareImagePart } from '../gemini';
+import { GEMINI_BLUEPRINT_MODEL } from '../visionPipeline/types';
+import { log } from '../log';
 import type {
   BlueprintToolingPackage,
   RecommendedTool,
   ToolingPurchaseItem,
   IsoMaterialGroup,
 } from './types';
+
+export type ToolingAiFailureReason = 'network' | 'parse-failed';
+export type ToolingAiResult<T> = { ok: true; value: T } | { ok: false; reason: ToolingAiFailureReason };
 
 interface BlueprintMetadataInput {
   blueprintName: string;
@@ -68,7 +73,7 @@ export function generateToolingPackageFromMetadata(input: BlueprintMetadataInput
   const desbasteSpeeds = calculateTurningSpeedsFeeds({
     diameterMm: 38,
     cuttingSpeedMMin: matchedMat.vcTurningMMin[0] + 30,
-    feedPerRevMm: matchedMat.recommendedFeedTurningMm[0],
+    feedPerRevMm: matchedMat.recommendedFeedTurningMm.desbaste,
     depthOfCutMm: 2.0,
     noseRadiusMm: 0.8,
     materialId: matchedMat.id,
@@ -89,7 +94,7 @@ export function generateToolingPackageFromMetadata(input: BlueprintMetadataInput
     speedsFeedsSuggestion: {
       rpm: desbasteSpeeds.rpm,
       cuttingSpeed: `${desbasteSpeeds.surfaceSpeedMMin} m/min`,
-      feed: `${matchedMat.recommendedFeedTurningMm[0]} mm/rev (${desbasteSpeeds.feedRateMmMin} mm/min)`,
+      feed: `${matchedMat.recommendedFeedTurningMm.desbaste} mm/rev (${desbasteSpeeds.feedRateMmMin} mm/min)`,
       depthOfCut: '2.0 mm',
     },
     inVaultMatch: desbasteVaultMatch || null,
@@ -101,7 +106,7 @@ export function generateToolingPackageFromMetadata(input: BlueprintMetadataInput
   const acabadoSpeeds = calculateTurningSpeedsFeeds({
     diameterMm: 38,
     cuttingSpeedMMin: matchedMat.vcTurningMMin[1],
-    feedPerRevMm: matchedMat.recommendedFeedTurningMm[1],
+    feedPerRevMm: matchedMat.recommendedFeedTurningMm.acabado,
     depthOfCutMm: 0.5,
     noseRadiusMm: 0.4,
     materialId: matchedMat.id,
@@ -122,7 +127,7 @@ export function generateToolingPackageFromMetadata(input: BlueprintMetadataInput
     speedsFeedsSuggestion: {
       rpm: acabadoSpeeds.rpm,
       cuttingSpeed: `${acabadoSpeeds.surfaceSpeedMMin} m/min`,
-      feed: `${matchedMat.recommendedFeedTurningMm[1]} mm/rev (${acabadoSpeeds.feedRateMmMin} mm/min)`,
+      feed: `${matchedMat.recommendedFeedTurningMm.acabado} mm/rev (${acabadoSpeeds.feedRateMmMin} mm/min)`,
       depthOfCut: '0.5 mm',
     },
     inVaultMatch: acabadoVaultMatch || null,
@@ -268,8 +273,11 @@ export function generateToolingPackageFromMetadata(input: BlueprintMetadataInput
 
 /**
  * Analiza una imagen de plano usando Gemini Vision para extraer material, dureza y operaciones.
+ * Devuelve un result type — antes, si Gemini respondía con un JSON inválido o vacío, la función
+ * regresaba datos inventados ("Acero 4140, 28-32 HRC") indistinguibles de una lectura real,
+ * y el usuario no tenía forma de saber que la IA no leyó nada del plano.
  */
-export async function analyzeBlueprintWithAI(dataUrl: string): Promise<BlueprintMetadataInput> {
+export async function analyzeBlueprintWithAI(dataUrl: string): Promise<ToolingAiResult<BlueprintMetadataInput>> {
   const imagePart = prepareImagePart(dataUrl);
 
   const prompt = `Analiza este plano de ingeniería mecánica (blueprint / dibujo técnico).
@@ -289,20 +297,26 @@ Devuelve ÚNICAMENTE un objeto JSON válido con este formato:
   "description": "Breve resumen de operaciones mecánicas identificadas"
 }`;
 
-  const response = await callWithRetry(async () => {
-    return await callGeminiProxy({
-      model: 'gemini-2.5-flash',
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }, imagePart],
+  let response: { text: string };
+  try {
+    response = await callWithRetry(async () => {
+      return await callGeminiProxy({
+        model: GEMINI_BLUEPRINT_MODEL,
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }, imagePart],
+          },
+        ],
+        config: {
+          responseMimeType: 'application/json',
         },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-      },
+      });
     });
-  });
+  } catch (error) {
+    log.warn('[smv-vision][tooling] analyzeBlueprintWithAI: llamada a Gemini falló', error);
+    return { ok: false, reason: 'network' };
+  }
 
   try {
     const parsed = JSON.parse(response.text) as {
@@ -313,35 +327,43 @@ Devuelve ÚNICAMENTE un objeto JSON válido con este formato:
       description?: string;
     };
 
+    if (!parsed.blueprintName && !parsed.material && !parsed.description) {
+      // JSON técnicamente válido pero vacío — Gemini no encontró nada útil en la imagen.
+      return { ok: false, reason: 'parse-failed' };
+    }
+
     return {
-      blueprintName: parsed.blueprintName || 'Plano Analizado',
-      material: parsed.material || 'Acero 4140',
-      dureza: parsed.dureza || 'Tratado estándar',
-      acabado: parsed.acabado || 'Ra 1.6 µm',
-      description: parsed.description || 'Pieza para maquinado en torno y fresa CNC',
+      ok: true,
+      value: {
+        blueprintName: parsed.blueprintName || 'Plano Analizado',
+        material: parsed.material,
+        dureza: parsed.dureza,
+        acabado: parsed.acabado,
+        description: parsed.description,
+      },
     };
-  } catch {
-    return {
-      blueprintName: 'Plano Analizado por IA',
-      material: 'Acero 4140',
-      dureza: '28-32 HRC',
-      acabado: 'Ra 1.6 µm',
-      description: 'Pieza de ingeniería mecánica',
-    };
+  } catch (error) {
+    log.warn('[smv-vision][tooling] analyzeBlueprintWithAI: JSON inválido en la respuesta de Gemini', error);
+    return { ok: false, reason: 'parse-failed' };
   }
 }
 
-/**
- * Analiza la foto de una caja o etiqueta de insertos con Gemini Vision.
- */
-export async function analyzeInsertBoxPhotoWithAI(dataUrl: string): Promise<{
+export interface DetectedInsertBoxInfo {
   codigoISO: string;
   marca: string;
   grado: string;
   rompevirutas: string;
   materialISO: IsoMaterialGroup;
   descripcion: string;
-}> {
+}
+
+/**
+ * Analiza la foto de una caja o etiqueta de insertos con Gemini Vision.
+ * Devuelve un result type — antes, si Gemini fallaba o respondía JSON vacío, la función
+ * regresaba un inserto inventado ("WNMG 080408 / Korloy / NC3030") indistinguible de una
+ * lectura real, así que el usuario terminaba comprando en base a una foto que nunca se leyó.
+ */
+export async function analyzeInsertBoxPhotoWithAI(dataUrl: string): Promise<ToolingAiResult<DetectedInsertBoxInfo>> {
   const imagePart = prepareImagePart(dataUrl);
 
   const prompt = `Analiza esta fotografía de una caja de insertos de corte para maquinado CNC.
@@ -362,20 +384,26 @@ Devuelve ÚNICAMENTE un objeto JSON válido con este formato:
   "descripcion": "Inserto para torneado desbaste en aceros"
 }`;
 
-  const response = await callWithRetry(async () => {
-    return await callGeminiProxy({
-      model: 'gemini-2.5-flash',
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }, imagePart],
+  let response: { text: string };
+  try {
+    response = await callWithRetry(async () => {
+      return await callGeminiProxy({
+        model: GEMINI_BLUEPRINT_MODEL,
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }, imagePart],
+          },
+        ],
+        config: {
+          responseMimeType: 'application/json',
         },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-      },
+      });
     });
-  });
+  } catch (error) {
+    log.warn('[smv-vision][tooling] analyzeInsertBoxPhotoWithAI: llamada a Gemini falló', error);
+    return { ok: false, reason: 'network' };
+  }
 
   try {
     const parsed = JSON.parse(response.text) as {
@@ -387,22 +415,24 @@ Devuelve ÚNICAMENTE un objeto JSON válido con este formato:
       descripcion?: string;
     };
 
+    if (!parsed.codigoISO) {
+      // JSON técnicamente válido pero sin código detectado — no hay nada útil que mostrar.
+      return { ok: false, reason: 'parse-failed' };
+    }
+
     return {
-      codigoISO: parsed.codigoISO || 'CNMG 120408',
-      marca: parsed.marca || 'Genérico',
-      grado: parsed.grado || 'P25',
-      rompevirutas: parsed.rompevirutas || 'General',
-      materialISO: parsed.materialISO || 'P',
-      descripcion: parsed.descripcion || 'Inserto de corte para CNC',
+      ok: true,
+      value: {
+        codigoISO: parsed.codigoISO,
+        marca: parsed.marca || 'Genérico',
+        grado: parsed.grado || 'Sin especificar',
+        rompevirutas: parsed.rompevirutas || 'Sin especificar',
+        materialISO: parsed.materialISO || 'P',
+        descripcion: parsed.descripcion || 'Inserto de corte para CNC',
+      },
     };
-  } catch {
-    return {
-      codigoISO: 'WNMG 080408',
-      marca: 'Korloy',
-      grado: 'NC3030',
-      rompevirutas: 'PC',
-      materialISO: 'P',
-      descripcion: 'Inserto detectado de imagen',
-    };
+  } catch (error) {
+    log.warn('[smv-vision][tooling] analyzeInsertBoxPhotoWithAI: JSON inválido en la respuesta de Gemini', error);
+    return { ok: false, reason: 'parse-failed' };
   }
 }

@@ -123,22 +123,49 @@ function generateSvgPoints(shape: InsertShapeCode): { x: number; y: number }[] {
 }
 
 /**
+ * Convierte un valor en mm a la fracción de pulgada estándar de taller más cercana (base 64).
+ * Se usa para que el texto en pulgadas SIEMPRE sea consistente con el valor en mm mostrado
+ * (evita el bug de mostrar "3.97mm (3/16\")" cuando 3/16" en realidad son 4.76mm).
+ */
+function mmToShopFraction(mm: number): string {
+  const inches = mm / 25.4;
+  const denominator = 64;
+  const numerator = Math.max(1, Math.round(inches * denominator));
+  const divisor = gcd(numerator, denominator);
+  const n = numerator / divisor;
+  const d = denominator / divisor;
+  return `${n}/${d}" (${inches.toFixed(3)}")`;
+}
+
+function gcd(a: number, b: number): number {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+/**
  * Decodifica un código ISO 1832 o ANSI de inserto (ej. CNMG 120408, WNMG 432, APKT 1604, CCMT 09T304).
+ * Devuelve null si alguna posición del código no corresponde a una letra válida de la norma —
+ * antes esta función "adivinaba" un valor por defecto (ej. cualquier letra de forma no reconocida
+ * se mostraba como Rombo 80°), lo cual generaba datos técnicos inventados con apariencia de reales.
  */
 export function decodeInsertCode(rawInput: string): DecodedInsert | null {
   if (!rawInput) return null;
   const clean = rawInput.trim().toUpperCase().replace(/[\s\-_]+/g, '');
   if (clean.length < 4) return null;
 
-  const shapeChar = (clean[0] || 'C') as InsertShapeCode;
-  const clearanceChar = (clean[1] || 'N') as InsertClearanceCode;
-  const toleranceChar = (clean[2] || 'M') as InsertToleranceCode;
-  const fixingChar = (clean[3] || 'G') as InsertFixingCode;
+  const shapeChar = clean[0] as InsertShapeCode;
+  const clearanceChar = clean[1] as InsertClearanceCode;
+  const toleranceChar = clean[2] as InsertToleranceCode;
+  const fixingChar = clean[3] as InsertFixingCode;
 
-  const shapeInfo = SHAPE_MAP[shapeChar] || SHAPE_MAP.C;
-  const clearanceInfo = CLEARANCE_MAP[clearanceChar] || CLEARANCE_MAP.N;
-  const toleranceInfo = TOLERANCE_MAP[toleranceChar] || TOLERANCE_MAP.M;
-  const fixingInfo = FIXING_MAP[fixingChar] || FIXING_MAP.G;
+  const shapeInfo = SHAPE_MAP[shapeChar];
+  const clearanceInfo = CLEARANCE_MAP[clearanceChar];
+  const toleranceInfo = TOLERANCE_MAP[toleranceChar];
+  const fixingInfo = FIXING_MAP[fixingChar];
+
+  // Si alguna de las 4 primeras posiciones no es una letra válida de ISO 1832,
+  // esto no es un código de inserto de torneado/fresado (podría ser un inserto de
+  // roscado, ranurado, o simplemente texto sin sentido) — no hay que inventar datos.
+  if (!shapeInfo || !clearanceInfo || !toleranceInfo || !fixingInfo) return null;
 
   // Extraer números posteriores
   const numericPart = clean.slice(4);
@@ -147,15 +174,41 @@ export function decodeInsertCode(rawInput: string): DecodedInsert | null {
   let radiusCode = '08';
   let chipbreaker: string | undefined = undefined;
 
-  // Detección ANSI vs ISO (ej. 432 -> Size 4 = 1/2", Thick 3 = 3/16", Radius 2 = 1/32")
+  // true solo para el formato ANSI heredado de 3 dígitos, donde cada dígito es una
+  // fracción exacta y verificable por fórmula (no un valor de catálogo memorizado):
+  // dígito1 = IC en octavos de pulgada, dígito2 = espesor en dieciseisavos, dígito3 = radio en 64avos.
+  let dimensionsExact = false;
+  let thicknessMm = 4.76;
+  let radiusMm = 0.8;
+
   if (numericPart.length === 3 && /^\d{3}$/.test(numericPart)) {
-    // ANSI: 432
-    const s = numericPart[0];
-    const t = numericPart[1];
-    const r = numericPart[2];
-    sizeCode = s === '4' ? '12' : s === '3' ? '09' : s === '2' ? '06' : '12';
-    thickCode = t === '3' ? '04' : t === '2' ? '03' : '04';
-    radiusCode = r === '2' ? '08' : r === '1' ? '04' : r === '4' ? '16' : '08';
+    // ANSI heredado, ej. "432": IC=4/8"=1/2", espesor=3/16"=3/16", radio=2/64"=1/32"
+    const s = Number.parseInt(numericPart[0], 10);
+    const t = Number.parseInt(numericPart[1], 10);
+    const r = Number.parseInt(numericPart[2], 10);
+    dimensionsExact = true;
+    const icInchExact = s / 8;
+    // Se redondea al nominal métrico estándar de catálogo (ej. 1/32" se vende como "0.8mm",
+    // aunque 1/32" = 0.79375mm exactos) — así el valor coincide con lo impreso en la caja.
+    thicknessMm = Math.round((t / 16) * 25.4 * 100) / 100;
+    radiusMm = Math.round((r / 64) * 25.4 * 10) / 10;
+    // sizeCode queda expresado en la misma escala "mm redondeados" que el resto de la función
+    // solo para fines de trazabilidad del código normalizado, no se usa para el cálculo de IC.
+    sizeCode = String(Math.floor(icInchExact * 25.4)).padStart(2, '0');
+    thickCode = numericPart[1];
+    radiusCode = numericPart[2];
+
+    return buildDecodedInsert({
+      rawInput, shapeChar, clearanceChar, toleranceChar, fixingChar,
+      shapeInfo, clearanceInfo, toleranceInfo, fixingInfo,
+      sizeCode, thickCode, radiusCode, chipbreaker,
+      icMm: icInchExact * 25.4,
+      thicknessMm,
+      radiusMm,
+      sizeIsEstimate: true, // el IC en este formato heredado también es aproximado (redondeo a octavos)
+      thicknessIsEstimate: !dimensionsExact,
+      radiusIsEstimate: !dimensionsExact,
+    });
   } else if (numericPart.length >= 6) {
     sizeCode = numericPart.slice(0, 2);
     thickCode = numericPart.slice(2, 4);
@@ -170,16 +223,60 @@ export function decodeInsertCode(rawInput: string): DecodedInsert | null {
     radiusCode = '08';
   }
 
-  // Dimensiones métricas e imperiales aproximadas
+  // Heurística por rango — no hay una tabla de catálogo verificada por forma/fabricante,
+  // así que estos valores se marcan como estimados (ver isEstimate en el resultado).
   const edgeLengthMm = Number.parseInt(sizeCode, 10) || 12;
-  const icInch = edgeLengthMm >= 15 ? '5/8"' : edgeLengthMm >= 11 ? '1/2"' : edgeLengthMm >= 8 ? '3/8"' : '1/4"';
   const icMm = edgeLengthMm >= 15 ? 15.875 : edgeLengthMm >= 11 ? 12.7 : edgeLengthMm >= 8 ? 9.525 : 6.35;
 
-  const thicknessMm = thickCode === '04' ? 4.76 : thickCode === '03' || thickCode === 'T3' ? 3.97 : thickCode === '02' ? 2.38 : 4.76;
-  const thicknessInch = thickCode === '04' ? '3/16"' : thickCode === '03' ? '5/32"' : thickCode === '02' ? '3/32"' : '3/16"';
+  thicknessMm = thickCode === '04' ? 4.76 : thickCode === '03' || thickCode === 'T3' ? 3.97 : thickCode === '02' ? 2.38 : 4.76;
+  radiusMm = radiusCode === '08' ? 0.8 : radiusCode === '04' ? 0.4 : radiusCode === '12' ? 1.2 : radiusCode === '02' ? 0.2 : radiusCode === '16' ? 1.6 : 0.8;
 
-  const radiusMm = radiusCode === '08' ? 0.8 : radiusCode === '04' ? 0.4 : radiusCode === '12' ? 1.2 : radiusCode === '02' ? 0.2 : radiusCode === '16' ? 1.6 : 0.8;
-  const radiusInch = radiusCode === '08' ? '1/32" (0.031")' : radiusCode === '04' ? '1/64" (0.015")' : radiusCode === '12' ? '3/64" (0.047")' : '1/32"';
+  return buildDecodedInsert({
+    rawInput, shapeChar, clearanceChar, toleranceChar, fixingChar,
+    shapeInfo, clearanceInfo, toleranceInfo, fixingInfo,
+    sizeCode, thickCode, radiusCode, chipbreaker,
+    icMm, thicknessMm, radiusMm,
+    sizeIsEstimate: true,
+    thicknessIsEstimate: true,
+    radiusIsEstimate: true,
+  });
+}
+
+interface BuildDecodedInsertInput {
+  rawInput: string;
+  shapeChar: InsertShapeCode;
+  clearanceChar: InsertClearanceCode;
+  toleranceChar: InsertToleranceCode;
+  fixingChar: InsertFixingCode;
+  shapeInfo: { name: string; angle: number; desc: string; edges: number };
+  clearanceInfo: { angle: number; type: 'negative' | 'positive'; desc: string };
+  toleranceInfo: string;
+  fixingInfo: { desc: string; hole: boolean; angle?: string };
+  sizeCode: string;
+  thickCode: string;
+  radiusCode: string;
+  chipbreaker?: string;
+  icMm: number;
+  thicknessMm: number;
+  radiusMm: number;
+  sizeIsEstimate: boolean;
+  thicknessIsEstimate: boolean;
+  radiusIsEstimate: boolean;
+}
+
+function buildDecodedInsert(input: BuildDecodedInsertInput): DecodedInsert {
+  const {
+    rawInput, shapeChar, clearanceChar, toleranceChar, fixingChar,
+    shapeInfo, clearanceInfo, toleranceInfo, fixingInfo,
+    sizeCode, thickCode, radiusCode, chipbreaker,
+    icMm, thicknessMm, radiusMm,
+    sizeIsEstimate, thicknessIsEstimate, radiusIsEstimate,
+  } = input;
+
+  const icInch = mmToShopFraction(icMm);
+  const thicknessInch = mmToShopFraction(thicknessMm);
+  const radiusInch = mmToShopFraction(radiusMm);
+  const edgeLengthMm = Number.parseInt(sizeCode, 10) || Math.round(icMm);
 
   const idealFinish = radiusMm >= 0.8
     ? 'Desbaste medio a pesado (alta resistencia de punta y soporte para avance alto).'
@@ -243,17 +340,20 @@ export function decodeInsertCode(rawInput: string): DecodedInsert | null {
       cuttingEdgeLengthMm: edgeLengthMm,
       inscribedCircleMm: icMm,
       inscribedCircleInch: icInch,
+      isEstimate: sizeIsEstimate,
     },
     thickness: {
       code: thickCode,
       thicknessMm,
       thicknessInch,
+      isEstimate: thicknessIsEstimate,
     },
     noseRadius: {
       code: radiusCode,
       radiusMm,
       radiusInch,
       idealFinish,
+      isEstimate: radiusIsEstimate,
     },
     chipbreaker,
     recommendedOperations,

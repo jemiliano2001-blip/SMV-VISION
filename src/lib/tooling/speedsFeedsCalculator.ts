@@ -153,7 +153,10 @@ export function calculateMillingSpeedsFeeds(input: SpeedsFeedsMillingInput): Spe
   const tableFeedIpm = Number((rpm * safeFz * safeZ).toFixed(1));
   const tableFeedMmMin = Number((tableFeedIpm * 25.4).toFixed(1));
 
-  const effectiveChipLoadInch = safeFz;
+  // El chip load programado (fz) es el avance por diente que se captura en el CNC, pero con
+  // engagement radial < 50% del diámetro la viruta REAL que arranca el filo es más delgada que
+  // eso — por eso existe el chip thinning factor: efectivo = programado / RCTF.
+  const effectiveChipLoadInch = Number((safeFz / radialChipThinningFactor).toFixed(5));
   const adjustedFeedIpm = Number((tableFeedIpm * radialChipThinningFactor).toFixed(1));
   const adjustedFeedMmMin = Number((adjustedFeedIpm * 25.4).toFixed(1));
 

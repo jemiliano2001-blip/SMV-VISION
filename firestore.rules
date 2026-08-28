@@ -75,6 +75,11 @@ service cloud.firestore {
       allow read, create, update, delete: if isSignedIn();
     }
 
+    // ── Bóveda de herramental (CRUD desde Herramental → Mi Bóveda) ─────
+    match /toolingPurchases/{itemId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
     // ── Memoria de alias de piezas (puente orden-plano) ───────────────────
     match /partAliases/{aliasId} {
       allow read, create, update, delete: if isSignedIn();

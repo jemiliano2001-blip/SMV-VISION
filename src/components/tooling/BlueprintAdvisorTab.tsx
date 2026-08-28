@@ -12,6 +12,7 @@ import {
   Layers,
   ChevronRight,
   ShoppingCart,
+  AlertTriangle,
 } from 'lucide-react';
 import type { ToolcribActiveDrawingView } from '../../types';
 import type { ToolingPurchaseItem, BlueprintToolingPackage } from '../../lib/tooling/types';
@@ -22,6 +23,7 @@ import {
   analyzeBlueprintWithAI,
 } from '../../lib/tooling/blueprintToolingAdvisor';
 import { Input } from '../ui/input';
+import { log } from '../../lib/log';
 
 export function BlueprintAdvisorTab(): ReactElement {
   const [drawings, setDrawings] = useState<ToolcribActiveDrawingView[]>([]);
@@ -30,6 +32,7 @@ export function BlueprintAdvisorTab(): ReactElement {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDrawing, setSelectedDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [analyzingAi, setAnalyzingAi] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [toolingPackage, setToolingPackage] = useState<BlueprintToolingPackage | null>(null);
 
   // Cargar catálogo de planos y bóveda de compras
@@ -78,12 +81,22 @@ export function BlueprintAdvisorTab(): ReactElement {
     const file = e.target.files?.[0];
     if (!file) return;
     setAnalyzingAi(true);
+    setAiError(null);
 
     const reader = new FileReader();
     reader.onload = async () => {
       const dataUrl = reader.result as string;
       try {
-        const aiMetadata = await analyzeBlueprintWithAI(dataUrl);
+        const result = await analyzeBlueprintWithAI(dataUrl);
+        if (result.ok === false) {
+          setAiError(
+            result.reason === 'network'
+              ? 'No se pudo contactar a Gemini para analizar el plano. Revisa tu conexión e intenta de nuevo.'
+              : 'No se pudo extraer información legible del plano. Intenta con una imagen más clara o captura los datos a mano.'
+          );
+          return;
+        }
+        const aiMetadata = result.value;
         const pkg = generateToolingPackageFromMetadata({
           ...aiMetadata,
           existingVaultItems: vaultItems,
@@ -103,10 +116,15 @@ export function BlueprintAdvisorTab(): ReactElement {
         });
         setToolingPackage(pkg);
       } catch (err) {
-        console.error('Error al analizar plano con IA:', err);
+        log.error('[smv-vision][tooling] Error al analizar plano con IA', err);
+        setAiError('Ocurrió un error inesperado al analizar el plano.');
       } finally {
         setAnalyzingAi(false);
       }
+    };
+    reader.onerror = () => {
+      setAnalyzingAi(false);
+      setAiError('No se pudo leer el archivo de imagen.');
     };
     reader.readAsDataURL(file);
   };
@@ -202,6 +220,12 @@ export function BlueprintAdvisorTab(): ReactElement {
               <p className="text-xs font-mono text-ink-dim mt-1">
                 Extrayendo especificación de material, dureza, roscas y tolerancias geométricas.
               </p>
+            </div>
+          ) : aiError ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center gap-2">
+              <AlertTriangle size={28} className="text-danger" />
+              <h4 className="font-display font-black text-base uppercase text-danger">No se pudo analizar el plano</h4>
+              <p className="text-xs font-mono text-ink-dim max-w-md">{aiError}</p>
             </div>
           ) : toolingPackage ? (
             <div className="space-y-5">

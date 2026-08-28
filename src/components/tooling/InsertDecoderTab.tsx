@@ -7,12 +7,14 @@ import {
   Wrench,
   Search,
   ExternalLink,
+  AlertTriangle,
 } from 'lucide-react';
 import { decodeInsertCode } from '../../lib/tooling/isoInsertDecoder';
 import { analyzeInsertBoxPhotoWithAI } from '../../lib/tooling/blueprintToolingAdvisor';
 import { getSupplierSearchUrl } from '../../lib/tooling/toolingSuppliers';
 import { InsertGeometrySvg } from './InsertGeometrySvg';
 import { Input } from '../ui/input';
+import { log } from '../../lib/log';
 
 const PRESET_CODES = [
   'WNMG 080408',
@@ -22,13 +24,13 @@ const PRESET_CODES = [
   'DCMT 11T304',
   'APKT 160408',
   'SEKT 1204',
-  'MGMN 300-M',
 ];
 
 export function InsertDecoderTab(): ReactElement {
   const [inputCode, setInputCode] = useState('WNMG 080408');
   const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
   const [photoDetectionResult, setPhotoDetectionResult] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   const decoded = decodeInsertCode(inputCode);
 
@@ -37,21 +39,36 @@ export function InsertDecoderTab(): ReactElement {
     if (!file) return;
     setAnalyzingPhoto(true);
     setPhotoDetectionResult(null);
+    setPhotoError(null);
 
     const reader = new FileReader();
     reader.onload = async () => {
       const dataUrl = reader.result as string;
       try {
-        const detected = await analyzeInsertBoxPhotoWithAI(dataUrl);
+        const result = await analyzeInsertBoxPhotoWithAI(dataUrl);
+        if (result.ok === false) {
+          setPhotoError(
+            result.reason === 'network'
+              ? 'No se pudo contactar a Gemini para leer la etiqueta. Revisa tu conexión e intenta de nuevo.'
+              : 'No se detectó ningún código legible en la foto. Intenta con otra foto o captura el código a mano.'
+          );
+          return;
+        }
+        const detected = result.value;
         setInputCode(detected.codigoISO);
         setPhotoDetectionResult(
           `¡Etiqueta Detectada!: Marca: ${detected.marca} · Grado: ${detected.grado} · Rompevirutas: ${detected.rompevirutas} · Grupo ISO: ${detected.materialISO}`
         );
       } catch (err) {
-        console.error('Error al analizar foto con IA:', err);
+        log.error('[smv-vision][tooling] Error al analizar foto de inserto con IA', err);
+        setPhotoError('No se pudo leer la etiqueta de la caja. Intenta con otra foto o captura el código a mano.');
       } finally {
         setAnalyzingPhoto(false);
       }
+    };
+    reader.onerror = () => {
+      setAnalyzingPhoto(false);
+      setPhotoError('No se pudo leer el archivo de imagen.');
     };
     reader.readAsDataURL(file);
   };
@@ -102,6 +119,13 @@ export function InsertDecoderTab(): ReactElement {
             <span>{photoDetectionResult}</span>
           </div>
         )}
+
+        {photoError && (
+          <div className="flex items-center gap-2 border border-danger/50 bg-danger/10 p-2.5 text-xs font-mono text-ink">
+            <AlertTriangle size={14} className="text-danger shrink-0" />
+            <span>{photoError}</span>
+          </div>
+        )}
       </div>
 
       {analyzingPhoto && (
@@ -142,13 +166,20 @@ export function InsertDecoderTab(): ReactElement {
               </div>
               <div className="flex justify-between border-b border-line/40 pb-1">
                 <span className="text-ink-dim">Círculo Inscrito (I.C.):</span>
-                <strong className="text-ink">{decoded.size.inscribedCircleMm} mm ({decoded.size.inscribedCircleInch})</strong>
+                <strong className="text-ink">{decoded.size.inscribedCircleMm.toFixed(2)} mm ({decoded.size.inscribedCircleInch})</strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-ink-dim">Espesor (S):</span>
                 <strong className="text-ink">{decoded.thickness.thicknessMm} mm ({decoded.thickness.thicknessInch})</strong>
               </div>
             </div>
+
+            {(decoded.size.isEstimate || decoded.thickness.isEstimate) && (
+              <div className="flex items-start gap-1.5 border border-warn/50 bg-warn/10 p-2 text-[10px] font-mono text-ink-dim text-left w-full">
+                <AlertTriangle size={12} className="text-warn shrink-0 mt-0.5" />
+                <span>Dimensiones estimadas por rango de código, no de un catálogo específico. Confirma IC, espesor y radio exactos en la ficha del proveedor antes de comprar.</span>
+              </div>
+            )}
           </div>
 
           {/* LADO DERECHO: DESGLOSE PASO A PASO ISO 1832 */}
@@ -232,8 +263,13 @@ export function InsertDecoderTab(): ReactElement {
           </div>
         </div>
       ) : (
-        <div className="border-2 border-line bg-surface p-12 text-center text-xs font-mono text-ink-dim">
-          Ingresa un código de inserto válido (ej. CNMG 120408, WNMG 432, CCMT 09T304).
+        <div className="border-2 border-line bg-surface p-12 text-center text-xs font-mono text-ink-dim space-y-2">
+          <p>Código no reconocido como inserto ISO 1832 de torneado o fresado.</p>
+          <p>Ingresa un código válido (ej. CNMG 120408, WNMG 432, CCMT 09T304).</p>
+          <p className="text-ink-dim/70">
+            ¿Es un inserto de roscar (16ER, 16IR) o de ranurar (MGMN, GTN)? Esos usan otra norma —
+            revisa la pestaña <strong className="text-accent">Roscado & Machuelos</strong>.
+          </p>
         </div>
       )}
     </div>

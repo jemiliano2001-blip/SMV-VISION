@@ -25,6 +25,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 const CATEGORIES: { value: ToolingCategory; label: string }[] = [
   { value: 'inserto_torneado', label: 'Inserto Torneado' },
   { value: 'inserto_fresado', label: 'Inserto Fresado' },
+  { value: 'inserto_roscado', label: 'Inserto Roscado' },
+  { value: 'inserto_ranurado', label: 'Inserto Ranurado' },
   { value: 'endmill', label: 'Endmill / Fresa' },
   { value: 'porta_torno', label: 'Porta Torno' },
   { value: 'cono_fresadora', label: 'Cono CAT40 / Fresa' },

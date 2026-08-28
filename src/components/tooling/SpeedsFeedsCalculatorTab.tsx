@@ -45,7 +45,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
     if (!mat) return;
     // Auto-ajustar velocidades recomendadas
     setTurningVc(mat.vcTurningMMin[0] + 20);
-    setTurningFeed(mat.recommendedFeedTurningMm[0]);
+    setTurningFeed(mat.recommendedFeedTurningMm.desbaste);
     setMillingSfm(mat.sfmMilling[0] + 50);
     setMillingChipLoad(mat.recommendedChipLoadInch[0]);
     if (mat.group === 'N') {
@@ -422,6 +422,11 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                     ? `Avance Ajust: ${millingResult.adjustedFeedIpm} IPM`
                     : 'Sin compensación'}
               </span>
+              {operationMode === 'milling' && (
+                <span className="font-mono text-[9px] text-ink-dim/70 block mt-0.5">
+                  Viruta real por diente: {millingResult.effectiveChipLoadInch}" (programada: {millingChipLoad}")
+                </span>
+              )}
             </div>
 
             <div className="border-2 border-line bg-surface p-4 shadow-hard text-center">

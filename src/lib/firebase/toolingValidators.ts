@@ -41,6 +41,8 @@ function ts(v: unknown): string | null {
 const VALID_CATEGORIES: ToolingCategory[] = [
   'inserto_torneado',
   'inserto_fresado',
+  'inserto_roscado',
+  'inserto_ranurado',
   'endmill',
   'porta_torno',
   'cono_fresadora',

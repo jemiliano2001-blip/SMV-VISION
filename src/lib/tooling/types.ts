@@ -18,8 +18,8 @@ export interface MaterialSpec {
   kc: number;
   /** Chip load recomendado para endmill de 1/2" en fresado (pulgadas / diente) [min, max] */
   recommendedChipLoadInch: [number, number];
-  /** Avance recomendado en torneado (mm/rev) [desbaste, acabado] */
-  recommendedFeedTurningMm: [number, number];
+  /** Avance recomendado en torneado (mm/rev) */
+  recommendedFeedTurningMm: { desbaste: number; acabado: number };
   hardnessTypical: string;
   chipCharacteristics: string;
 }
@@ -129,17 +129,21 @@ export interface DecodedInsert {
     cuttingEdgeLengthMm: number;
     inscribedCircleMm: number;
     inscribedCircleInch: string;
+    /** true: derivado de la fórmula ANSI de 3 dígitos (exacto). false: heurística por rango — confirmar con el proveedor. */
+    isEstimate: boolean;
   };
   thickness: {
     code: string;
     thicknessMm: number;
     thicknessInch: string;
+    isEstimate: boolean;
   };
   noseRadius: {
     code: string;
     radiusMm: number;
     radiusInch: string;
     idealFinish: string;
+    isEstimate: boolean;
   };
   chipbreaker?: string;
   recommendedOperations: string[];
@@ -187,6 +191,8 @@ export interface CarbideGradeEntry {
 export type ToolingCategory =
   | 'inserto_torneado'
   | 'inserto_fresado'
+  | 'inserto_roscado'
+  | 'inserto_ranurado'
   | 'endmill'
   | 'porta_torno'
   | 'cono_fresadora'
@@ -247,4 +253,80 @@ export interface BlueprintToolingPackage {
   latheTools: RecommendedTool[];
   millTools: RecommendedTool[];
   haasSetupAdvice: string[];
+}
+
+// ─── Roscado: Insertos de Rosca, Cálculo y Machuelos ────────────────────────
+
+export type ThreadSide = 'external' | 'internal';
+export type ThreadHand = 'right' | 'left';
+export type ThreadUnitSystem = 'metric' | 'inch';
+
+export type ThreadProfileFamily =
+  | 'ISO_METRIC_60'
+  | 'UN_60'
+  | 'WHITWORTH_55'
+  | 'NPT_60'
+  | 'ACME_29'
+  | 'TRAPEZOIDAL_30';
+
+export interface DecodedThreadInsert {
+  rawCode: string;
+  sizeCode: string;
+  sizeLabel: string;
+  minBarOrHoleMm: number;
+  side: ThreadSide;
+  hand: ThreadHand;
+  profileFamily: ThreadProfileFamily;
+  profileLabel: string;
+  isFullProfile: boolean;
+  unitSystem: ThreadUnitSystem;
+  pitchMm?: number;
+  tpi?: number;
+  fullProfileNote: string;
+  holderSuggestion: string;
+}
+
+export interface ThreadDepthResult {
+  unitSystem: ThreadUnitSystem;
+  pitchMm: number;
+  majorDiameterMm?: number;
+  /** Altura de filete a cortar (radio) para rosca exterior, en mm. */
+  depthExternalMm: number;
+  /** Altura de filete a cortar (radio) para rosca interior, en mm. */
+  depthInternalMm: number;
+  pitchDiameterOffsetMm: number;
+  minorDiameterOffsetMm: number;
+  leadAngleDegrees: number;
+  suggestedPasses: number;
+  infeedSchedulePercent: number[];
+  infeedScheduleMm: number[];
+  infeedMethod: 'radial' | 'flanco_modificado_29_30' | 'alternado';
+  warnings: string[];
+  tips: string[];
+}
+
+export interface HaasG76Params {
+  isExternal: boolean;
+  majorDiameterMm: number;
+  pitchMm: number;
+  depthMm: number;
+  finishingPasses: number;
+  chamferCode: number;
+  tipAngleDegrees: number;
+  minDepthPerPassMm: number;
+  finishAllowanceMm: number;
+  firstPassDepthMm: number;
+  startZMm: number;
+  endZMm: number;
+}
+
+export interface TapDrillEntry {
+  designation: string;
+  unitSystem: ThreadUnitSystem;
+  majorDiameterMm: number;
+  pitchMm: number;
+  cutTapDrillMm: number;
+  cutTapDrillLabel: string;
+  rollTapDrillMm: number;
+  rollTapDrillLabel: string;
 }

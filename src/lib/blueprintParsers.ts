@@ -28,13 +28,44 @@ export function parseBoundingBox(value: unknown): BoundingBox | null {
   return [nums[0], nums[1], nums[2], nums[3]];
 }
 
-export function sanitizeMetaString(value: unknown, maxLength = 60): string | null {
+/**
+ * Límite a partir del cual un valor de cajetín deja de parecer un dato y empieza a
+ * parecer razonamiento del modelo. Un tratamiento térmico real cabe de sobra:
+ * "TEMPLE Y REVENIDO 58-60 HRC, NITRURADO SUPERFICIAL 0.2MM" son 57 caracteres.
+ */
+const META_MAX_LENGTH = 120;
+
+/** Valores que el modelo usa para decir "no hay dato" en vez de omitir el campo. */
+const META_EMPTY_RE = /^(null|nulo|n\/?a|ninguno|ninguna|none|no especificado|sin especificar|no aplica|-{1,3})$/i;
+
+/**
+ * Fuga de prompt: frases que solo aparecen cuando el modelo escupe sus propias
+ * instrucciones en lugar del valor. Van con límites de palabra para no cazar
+ * subcadenas dentro de términos legítimos de taller.
+ */
+const META_PROMPT_LEAK_RE =
+  /\b(regla|reglas|par[aá]metro|par[aá]metros|inventar|opcional|recomendado|recomendable|no especificado en|seg[uú]n el prompt|instrucci[oó]n)\b/i;
+
+/**
+ * Normaliza un valor de cajetín (material, dureza, tratamiento, acabado) devuelto
+ * por Gemini Vision, o `null` si no es un dato utilizable.
+ *
+ * Los valores largos se **truncan**, no se descartan: perder "TEMPLE Y REVENIDO..."
+ * entero por pasarse de largo es peor que mostrarlo recortado.
+ */
+export function sanitizeMetaString(value: unknown, maxLength = META_MAX_LENGTH): string | null {
   const str = asString(value);
   if (!str) return null;
-  if (str.length > maxLength) return null;
-  if (/^(null|n\/a|ninguno|ninguna|none|no especificado)$/i.test(str)) return null;
-  if (/(regla|par[aá]metro|inventar|descripci[oó]n|opcional|recomendado)/i.test(str)) return null;
-  return str;
+
+  const trimmed = str.trim();
+  if (trimmed.length === 0) return null;
+  if (META_EMPTY_RE.test(trimmed)) return null;
+  if (META_PROMPT_LEAK_RE.test(trimmed)) return null;
+
+  if (trimmed.length > maxLength) {
+    return `${trimmed.slice(0, maxLength - 1).trimEnd()}…`;
+  }
+  return trimmed;
 }
 
 export function parseBlueprintResponse(text: string): BlueprintSpec[] {

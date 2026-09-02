@@ -10,6 +10,7 @@ import {
   getReportDrawingSnapshot,
   makeOrderDrawingLinkKey,
   resolveOrderDrawingLink,
+  selectAliasDrawingId,
   type ResolveOrderDrawingInput,
   viewFromSnapshot,
 } from '../lib/orderDrawingBridge';
@@ -91,7 +92,7 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
       const pattern = (base.numeroParte || base.pieza || '').trim();
       if (pattern) {
         const canonical = canonicalPartNumber(view.partNumber);
-        const drawingIdToSave = next.cadDrawing?.drawingId ?? view.drawingId;
+        const drawingIdToSave = selectAliasDrawingId(next, view);
         void savePartAlias({
           pattern,
           partNumber: canonical,

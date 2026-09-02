@@ -699,51 +699,46 @@ export function ReporteView({
   const [tableViewMode, setTableViewMode] = useState<'dashboard' | 'print'>('dashboard');
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'ready' | 'missing' | 'mismatch'>('all');
 
+  // Base común de KPIs y pestañas: el buscador y el toggle "solo faltantes" ya
+  // recortaron `filteredResults`. Contar los KPIs sobre `results` (todo) haría que
+  // la tarjeta dijera "8 sin plano" mientras la pestaña muestra 3 — en un tablero
+  // de auditoría, números que no cuadran queman la confianza en el reporte entero.
+  const auditBase = useMemo(
+    () => vision.filteredResults ?? vision.results ?? [],
+    [vision.filteredResults, vision.results],
+  );
+
+  const hasDrawing = useCallback(
+    (o: Order): boolean => Boolean(o.sourcePdfName || o.matchedDrawingId || o.isometricView),
+    [],
+  );
+
+  const hasRevMismatch = useCallback((o: Order): boolean => {
+    if (!o.matchedDrawingRevision) return false;
+    return Boolean(
+      checkRevisionDiscrepancy(
+        `${o.pieza} ${o.numero_parte ?? ''}`,
+        o.matchedDrawingRevision,
+      )?.hasMismatch,
+    );
+  }, []);
+
   const kpis = useMemo(() => {
-    if (!vision.results) {
-      return { total: 0, withDrawing: 0, missingDrawing: 0, coveragePct: 0, revMismatches: 0 };
-    }
-    const total = vision.results.length;
-    const withDrawing = vision.results.filter(
-      (o) => Boolean(o.sourcePdfName || o.matchedDrawingId || o.isometricView),
-    ).length;
+    const total = auditBase.length;
+    const withDrawing = auditBase.filter(hasDrawing).length;
     const missingDrawing = total - withDrawing;
     const coveragePct = total > 0 ? Math.round((withDrawing / total) * 100) : 0;
-    const revMismatches = vision.results.filter((o) => {
-      if (!o.matchedDrawingRevision) return false;
-      return Boolean(
-        checkRevisionDiscrepancy(
-          `${o.pieza} ${o.numero_parte ?? ''}`,
-          o.matchedDrawingRevision,
-        )?.hasMismatch,
-      );
-    }).length;
+    const revMismatches = auditBase.filter(hasRevMismatch).length;
 
     return { total, withDrawing, missingDrawing, coveragePct, revMismatches };
-  }, [vision.results]);
+  }, [auditBase, hasDrawing, hasRevMismatch]);
 
   const displayedOrders = useMemo(() => {
-    const base = vision.filteredResults ?? vision.results ?? [];
-    if (activeFilterTab === 'all') return base;
-    if (activeFilterTab === 'ready') {
-      return base.filter((o) => Boolean(o.sourcePdfName || o.matchedDrawingId || o.isometricView));
-    }
-    if (activeFilterTab === 'missing') {
-      return base.filter((o) => !o.sourcePdfName && !o.matchedDrawingId && !o.isometricView);
-    }
-    if (activeFilterTab === 'mismatch') {
-      return base.filter((o) => {
-        if (!o.matchedDrawingRevision) return false;
-        return Boolean(
-          checkRevisionDiscrepancy(
-            `${o.pieza} ${o.numero_parte ?? ''}`,
-            o.matchedDrawingRevision,
-          )?.hasMismatch,
-        );
-      });
-    }
-    return base;
-  }, [vision.filteredResults, vision.results, activeFilterTab]);
+    if (activeFilterTab === 'ready') return auditBase.filter(hasDrawing);
+    if (activeFilterTab === 'missing') return auditBase.filter((o) => !hasDrawing(o));
+    if (activeFilterTab === 'mismatch') return auditBase.filter(hasRevMismatch);
+    return auditBase;
+  }, [auditBase, activeFilterTab, hasDrawing, hasRevMismatch]);
 
   const resolveDrawingView = useCallback(
     (order: Order): ToolcribActiveDrawingView | null => {

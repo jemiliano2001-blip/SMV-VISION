@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseBlueprintResponse } from '../blueprintParsers';
+import { parseBlueprintResponse, sanitizeMetaString } from '../blueprintParsers';
 import { generateOrdersCsv } from '../excelExport';
 import type { Order } from '../../types';
 
@@ -88,5 +88,43 @@ describe('generateOrdersCsv', () => {
     }]);
 
     expect(csv).toContain(`"'=HYPERLINK(""https://malicious.example"", ""abrir"")"`);
+  });
+});
+
+describe('sanitizeMetaString', () => {
+  it('conserva un tratamiento térmico real largo en vez de anularlo', () => {
+    // 57 caracteres: con el límite viejo de 60 pasaba raspando; uno un poco más
+    // específico se perdía entero.
+    const real = 'TEMPLE Y REVENIDO 58-60 HRC, NITRURADO SUPERFICIAL 0.2MM Y PULIDO ESPEJO';
+    expect(sanitizeMetaString(real)).toBe(real);
+  });
+
+  it('trunca en vez de descartar cuando el valor se pasa del límite', () => {
+    const largo = 'A'.repeat(200);
+    const out = sanitizeMetaString(largo);
+    expect(out).not.toBeNull();
+    expect(out).toHaveLength(120);
+    expect(out?.endsWith('…')).toBe(true);
+  });
+
+  it('anula los marcadores de "sin dato" del modelo', () => {
+    for (const empty of ['null', 'N/A', 'ninguno', 'none', 'no especificado', '--', '  ']) {
+      expect(sanitizeMetaString(empty)).toBeNull();
+    }
+  });
+
+  it('anula la fuga de prompt aunque venga disfrazada de valor', () => {
+    expect(
+      sanitizeMetaString('PARAMETRO DETECTADO POR COLORACIÓN (POR REGLA 10: NULL EN CASO DE DUDA)'),
+    ).toBeNull();
+  });
+
+  it('no confunde palabras legítimas que contienen un término prohibido', () => {
+    // "REGLAJE" contiene "regla"; sin límites de palabra se perdía el dato.
+    expect(sanitizeMetaString('REGLAJE FINO')).toBe('REGLAJE FINO');
+  });
+
+  it('recorta espacios sobrantes', () => {
+    expect(sanitizeMetaString('  4150  ')).toBe('4150');
   });
 });

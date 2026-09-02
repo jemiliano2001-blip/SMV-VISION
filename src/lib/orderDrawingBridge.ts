@@ -14,7 +14,7 @@ import {
   type PieceMatchSignals,
 } from './matching';
 import { normalizeAliasKey } from './aliasKey';
-import { canonicalPartNumber } from './toolcribCatalog';
+import { canonicalPartNumber, pickPreferredDrawing } from './toolcribCatalog';
 import type {
   OrderDrawingLink,
   OrderDrawingSnapshot,
@@ -69,6 +69,38 @@ export interface ResolveOrderDrawingInput {
 }
 
 /**
+ * Localiza en el catálogo el dibujo al que apunta un alias, por prioridad estricta:
+ *
+ * 1. `drawingId` exacto — el alias nombra un dibujo concreto, gana sobre todo.
+ * 2. Número de parte exacto.
+ * 3. Número de parte canónico (ignorando el sufijo `.ISO`).
+ *
+ * La prioridad importa: si los tres criterios se evalúan dentro de un mismo
+ * `find`, gana el que aparezca primero en el array del catálogo, no el más
+ * específico — un CAD hermano listado antes le robaba el lugar al ISO que el
+ * alias nombraba por id. Dentro de cada nivel se usa `pickPreferredDrawing`
+ * para que con varias revisiones activas gane la misma que elige la Biblioteca.
+ */
+export function findAliasDrawingView(
+  library: readonly ToolcribActiveDrawingView[],
+  alias: { partNumber: string; drawingId: string },
+): ToolcribActiveDrawingView | null {
+  if (alias.drawingId) {
+    const byId = library.find((v) => v.drawingId === alias.drawingId);
+    if (byId) return byId;
+  }
+
+  const exact = alias.partNumber.toUpperCase();
+  const byPartNumber = library.filter((v) => v.partNumber.toUpperCase() === exact);
+  if (byPartNumber.length > 0) return pickPreferredDrawing(byPartNumber);
+
+  const canonical = canonicalPartNumber(alias.partNumber).toUpperCase();
+  return pickPreferredDrawing(
+    library.filter((v) => canonicalPartNumber(v.partNumber).toUpperCase() === canonical),
+  );
+}
+
+/**
  * Resuelve CAD (print) + reportDrawing (ISO-first) contra el catálogo.
  * Soporta memoria persistente de alias aprendidos (`aliases`).
  * No muta estado — el caller decide si upsert al Map de sesión.
@@ -95,23 +127,23 @@ export function resolveOrderDrawingLink(
     const matchedAlias = aliases.find((a) => aliasCandidates.has(normalizeAliasKey(a.pattern)));
 
     if (matchedAlias) {
-      const canonicalAlias = canonicalPartNumber(matchedAlias.partNumber).toUpperCase();
-      const aliasView = library.find(
-        (v) =>
-          (matchedAlias.drawingId && v.drawingId === matchedAlias.drawingId) ||
-          v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase() ||
-          canonicalPartNumber(v.partNumber).toUpperCase() === canonicalAlias,
-      );
+      const aliasView = findAliasDrawingView(library, matchedAlias);
 
       if (aliasView) {
         const canonical = canonicalPartNumber(aliasView.partNumber).toUpperCase();
         // Separar CAD e ISO: cadDrawing NUNCA debe ser un ISO (el ISO no se imprime como OT).
+        // Al buscar el complemento se usa `pickPreferredDrawing` —no el primero que
+        // aparezca— para que con varias revisiones activas gane la misma que elige
+        // la Biblioteca, y no una revisión vieja por accidente de orden.
+        const siblings = library.filter(
+          (v) => canonicalPartNumber(v.partNumber).toUpperCase() === canonical,
+        );
         const cadView = !isIsoDrawingView(aliasView)
           ? aliasView
-          : (library.find((v) => !isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical) ?? null);
+          : pickPreferredDrawing(siblings.filter((v) => !isIsoDrawingView(v)));
         const isoView = isIsoDrawingView(aliasView)
           ? aliasView
-          : (library.find((v) => isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical) ?? null);
+          : pickPreferredDrawing(siblings.filter((v) => isIsoDrawingView(v)));
 
         const cadSnap = cadView ? snapshotFromView(cadView) : null;
         const reportSnap = isoView ? snapshotFromView(isoView) : cadSnap;
@@ -198,6 +230,29 @@ export function applyManualDrawingToLink(
     matchedAt,
     status: 'manual',
   };
+}
+
+/**
+ * Decide qué `drawingId` debe recordar un alias tras un override manual.
+ *
+ * Se prefiere el CAD (es el que se imprime como OT), pero SOLO si pertenece a la
+ * misma pieza que el operador acaba de elegir. Cuando el usuario adjunta un ISO
+ * para corregir un auto-match equivocado, `link.cadDrawing` sigue siendo el CAD
+ * viejo —de otra pieza—, y guardarlo dejaría el error congelado: al reproducir el
+ * alias, `resolveOrderDrawingLink` busca por `drawingId` antes que por número de
+ * parte, así que el plano equivocado ganaría para siempre.
+ */
+export function selectAliasDrawingId(
+  link: OrderDrawingLink,
+  chosen: ToolcribActiveDrawingView,
+): string {
+  const cadSnap = link.cadDrawing;
+  if (!cadSnap) return chosen.drawingId;
+
+  const chosenCanonical = canonicalPartNumber(chosen.partNumber).toUpperCase();
+  const cadCanonical = canonicalPartNumber(cadSnap.partNumber).toUpperCase();
+
+  return cadCanonical === chosenCanonical ? cadSnap.drawingId : chosen.drawingId;
 }
 
 /** Plano a adjuntar al workspace de reporte (ISO preferido, CAD como fallback). */

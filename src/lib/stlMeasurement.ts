@@ -15,6 +15,12 @@ export interface StlScaleInfo {
   scaleMultiplier: number;
   detectedUnit: StlUnitType;
   label: string;
+  /**
+   * `true` cuando mm y pulgadas son igual de plausibles para esta malla y la
+   * detección tuvo que asumir mm. El visor debe advertirlo: una cota tomada
+   * bajo la suposición equivocada se va por 25.4x.
+   */
+  isAmbiguous: boolean;
 }
 
 export interface DimensionValue {
@@ -33,13 +39,41 @@ export interface StlMeasurementResult {
   deltaZ: DimensionValue;
 }
 
+/** Cota máxima (en unidades crudas) bajo la cual la malla viene en metros (SI). */
+const METERS_MAX_DIM = 0.8;
+
+/**
+ * Cota máxima bajo la cual leer la malla como milímetros da una pieza que no
+ * existe en un taller (menos de 3 mm de largo total), y por tanto es pulgadas.
+ * 0.8"–3" = 20–76 mm, el rango más común de una pieza de Tool Crib.
+ */
+const INCHES_MAX_DIM = 3;
+
+/**
+ * Cota máxima por debajo de la cual mm y pulgadas son AMBAS plausibles y la
+ * heurística no puede decidir: 10 unidades pueden ser una pieza chica de 10 mm
+ * o una de 10" (254 mm). Se asume mm, pero se marca como ambigua para que el
+ * visor pida verificación antes de que alguien tome una cota de ahí.
+ */
+const AMBIGUOUS_MAX_DIM = 25;
+
 /**
  * Detecta la escala geométrica de una malla STL basándose en sus dimensiones máximas.
- * 
+ *
  * En eDrawings / SolidWorks COM, las mallas se exportan frecuentemente en metros (SI):
  * e.g. Una pieza de 38.1 mm mide 0.0381 unidades en Three.js.
  * En maquinado CNC y convencional, las piezas casi siempre miden entre 2 mm y 2000 mm.
- * Si la dimensión máxima es menor a 0.8 unidades, con certeza viene en metros y requiere escala x1000.
+ *
+ * Rangos sobre la dimensión máxima en unidades crudas:
+ * - `< 0.8`  → metros (x1000). Una pieza de 0.8 mm de largo no existe.
+ * - `< 3`    → pulgadas (x25.4). Un plano en sistema inglés de 2" da maxDim = 2;
+ *              leerlo como mm daría 2 mm — error silencioso de 25.4x en la cota.
+ * - `< 25`   → milímetros, pero AMBIGUO: 10 unidades son 10 mm o 10" (254 mm) y
+ *              no hay forma de saberlo desde la geometría.
+ * - `>= 25`  → milímetros (1:1), sin ambigüedad práctica.
+ *
+ * Un STL no declara sus unidades, así que esto es heurístico por naturaleza: por eso
+ * el visor expone además un selector manual de escala que sobrescribe este resultado.
  */
 export function detectStlUnitScale(size: { x: number; y: number; z: number }): StlScaleInfo {
   const maxDim = Math.max(Math.abs(size.x), Math.abs(size.y), Math.abs(size.z));
@@ -49,15 +83,25 @@ export function detectStlUnitScale(size: { x: number; y: number; z: number }): S
       scaleMultiplier: 1,
       detectedUnit: 'millimeters',
       label: '1:1 (mm)',
+      isAmbiguous: false,
     };
   }
 
-  // Si la dimensión máxima es menor a 0.8 unidades, es una exportación en metros (x1000 a mm)
-  if (maxDim < 0.8) {
+  if (maxDim < METERS_MAX_DIM) {
     return {
       scaleMultiplier: 1000,
       detectedUnit: 'meters',
       label: 'Auto (Metros x1000)',
+      isAmbiguous: false,
+    };
+  }
+
+  if (maxDim < INCHES_MAX_DIM) {
+    return {
+      scaleMultiplier: 25.4,
+      detectedUnit: 'inches',
+      label: 'Auto (Pulgadas x25.4)',
+      isAmbiguous: false,
     };
   }
 
@@ -65,6 +109,7 @@ export function detectStlUnitScale(size: { x: number; y: number; z: number }): S
     scaleMultiplier: 1,
     detectedUnit: 'millimeters',
     label: '1:1 (mm)',
+    isAmbiguous: maxDim < AMBIGUOUS_MAX_DIM,
   };
 }
 

@@ -6,6 +6,7 @@ import {
   makeOrderDrawingLinkKey,
   parseOdooLineLabels,
   resolveOrderDrawingLink,
+  selectAliasDrawingId,
   snapshotFromView,
 } from '../orderDrawingBridge';
 import type { ToolcribActiveDrawingView } from '../../types';
@@ -269,5 +270,102 @@ describe('snapshotFromView', () => {
   it('round-trips drawingId', () => {
     const view = makeView({ drawingId: 'd1', partNumber: 'P1' });
     expect(snapshotFromView(view).drawingId).toBe('d1');
+  });
+});
+
+describe('selectAliasDrawingId', () => {
+  const baseLink = (cadPartNumber: string | null) => ({
+    key: 'o1:0',
+    orderId: 'o1',
+    lineIndex: 0,
+    soNumber: 'SO',
+    poNumber: '',
+    pieza: 'PIEZA',
+    numeroParte: '',
+    qtyPending: 1,
+    cadDrawing: cadPartNumber
+      ? snapshotFromView(makeView({ drawingId: 'cad-viejo', partNumber: cadPartNumber }))
+      : null,
+    reportDrawing: null,
+    matchScore: 80,
+    matchedAt: '2026-01-01T00:00:00.000Z',
+    status: 'linked' as const,
+  });
+
+  it('prefiere el CAD cuando pertenece a la misma pieza elegida', () => {
+    const chosen = makeView({ drawingId: 'iso-1', partNumber: '90-1012-05.iso' });
+    expect(selectAliasDrawingId(baseLink('90-1012-05'), chosen)).toBe('cad-viejo');
+  });
+
+  it('ignora un CAD de OTRA pieza al corregir un auto-match con un ISO', () => {
+    // Escenario real: el auto-match enlazó el CAD equivocado y el operador adjunta
+    // el ISO correcto. Guardar el CAD viejo congelaría el error en el alias.
+    const chosen = makeView({ drawingId: 'iso-correcto', partNumber: '90-1012-06.iso' });
+    expect(selectAliasDrawingId(baseLink('90-1012-05'), chosen)).toBe('iso-correcto');
+  });
+
+  it('usa el dibujo elegido cuando el vínculo aún no tiene CAD', () => {
+    const chosen = makeView({ drawingId: 'iso-1', partNumber: '90-1012-05.iso' });
+    expect(selectAliasDrawingId(baseLink(null), chosen)).toBe('iso-1');
+  });
+});
+
+describe('resolveOrderDrawingLink · revisión preferida en alias', () => {
+  const isoView = makeView({
+    drawingId: 'iso-1',
+    partNumber: '90-1012-05.iso',
+    sourcePath: '90-1012-05.iso.pdf',
+  });
+
+  function resolveWithLibrary(library: readonly ToolcribActiveDrawingView[]) {
+    return resolveOrderDrawingLink(
+      {
+        orderId: 'o1',
+        lineIndex: 0,
+        soNumber: 'SO',
+        poNumber: '',
+        pieza: 'HEX SWAGE BLOCK',
+        numeroParte: '',
+        qtyPending: 1,
+      },
+      library,
+      undefined,
+      undefined,
+      [{ pattern: 'HEX SWAGE BLOCK', partNumber: '90-1012-05.ISO', drawingId: 'iso-1' }],
+    );
+  }
+
+  it('elige el CAD hermano más reciente, no el primero de la lista', () => {
+    // El viejo va primero a propósito: con `library.find` ganaba por orden de array.
+    const cadViejo = makeView({
+      drawingId: 'cad-viejo',
+      partNumber: '90-1012-05',
+      revision: 'A',
+      effectiveFromUTC: '2024-01-01T00:00:00.000Z',
+    });
+    const cadNuevo = makeView({
+      drawingId: 'cad-nuevo',
+      partNumber: '90-1012-05',
+      revision: 'C',
+      effectiveFromUTC: '2026-05-01T00:00:00.000Z',
+    });
+
+    const link = resolveWithLibrary([cadViejo, cadNuevo, isoView]);
+
+    expect(link.reportDrawing?.drawingId).toBe('iso-1');
+    expect(link.cadDrawing?.drawingId).toBe('cad-nuevo');
+  });
+
+  it('descarta un CAD hermano sin PDF frente a uno que sí lo tiene', () => {
+    const cadSinPdf = makeView({
+      drawingId: 'cad-sin-pdf',
+      partNumber: '90-1012-05',
+      pdfUrl: null,
+    });
+    const cadConPdf = makeView({ drawingId: 'cad-con-pdf', partNumber: '90-1012-05' });
+
+    const link = resolveWithLibrary([cadSinPdf, cadConPdf, isoView]);
+
+    expect(link.cadDrawing?.drawingId).toBe('cad-con-pdf');
   });
 });

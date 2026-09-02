@@ -18,11 +18,15 @@ import {
   scorePieceMatch,
   selectLibraryDrawingMatch,
 } from '../matching';
-import { canonicalPartNumber } from '../toolcribCatalog';
+import { canonicalPartNumber, pickPreferredDrawing } from '../toolcribCatalog';
 import { isHotStampCatalogEntry, isHotStampPiece } from '../hotStamp';
 import { fetchPdfAsDataUrl } from '../fetchPdf';
 import { rasterizeAndNormalizePdf } from '../documentAnalysis/pdfWorkerClient';
-import { getReportDrawingSnapshot, viewFromSnapshot } from '../orderDrawingBridge';
+import {
+  findAliasDrawingView,
+  getReportDrawingSnapshot,
+  viewFromSnapshot,
+} from '../orderDrawingBridge';
 import { log } from '../log';
 
 export interface FetchOrdersAndMatchOptions {
@@ -195,20 +199,17 @@ export async function fetchOrdersAndMatch({
           aliasCandidates.has(normalizeAliasKey(a.pattern)),
         );
         if (matchedAlias) {
-          const canonicalAlias = canonicalPartNumber(matchedAlias.partNumber).toUpperCase();
-          const aliasView = library.find(
-            (v) =>
-              (matchedAlias.drawingId && v.drawingId === matchedAlias.drawingId) ||
-              v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase() ||
-              canonicalPartNumber(v.partNumber).toUpperCase() === canonicalAlias,
-          );
+          const aliasView = findAliasDrawingView(library, matchedAlias);
           if (aliasView) {
             // Regla ISO-first para reporte: si el alias apuntaba a CAD pero la pieza tiene ISO,
             // preferir el ISO para la inspección visual.
             const canonical = canonicalPartNumber(aliasView.partNumber).toUpperCase();
+            const isoSiblings = library.filter(
+              (v) => isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical,
+            );
             const reportView = isIsoDrawingView(aliasView)
               ? aliasView
-              : (library.find((v) => isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical) ?? aliasView);
+              : (pickPreferredDrawing(isoSiblings) ?? aliasView);
 
             matchByOrder.set(order, {
               drawingId: reportView.drawingId,

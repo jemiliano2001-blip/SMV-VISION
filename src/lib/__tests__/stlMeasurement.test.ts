@@ -25,6 +25,35 @@ describe('stlMeasurement utilities', () => {
       expect(scale.scaleMultiplier).toBe(1);
       expect(scale.detectedUnit).toBe('millimeters');
       expect(scale.label).toBe('1:1 (mm)');
+      expect(scale.isAmbiguous).toBe(false);
+    });
+
+    it('detecta exportaciones en pulgadas (ej. pieza de 2" → maxDim = 2)', () => {
+      // Antes caía en el else y se reportaba como 2 mm: error silencioso de 25.4x.
+      const inchPiece = { x: 1.25, y: 2, z: 0.875 };
+      const scale = detectStlUnitScale(inchPiece);
+
+      expect(scale.scaleMultiplier).toBe(25.4);
+      expect(scale.detectedUnit).toBe('inches');
+      expect(scale.isAmbiguous).toBe(false);
+    });
+
+    it('marca como ambigua la banda donde mm y pulgadas son ambas plausibles', () => {
+      // 10 unidades = 10 mm (pieza chica) o 10" (254 mm). No es decidible.
+      const ambiguous = { x: 6, y: 10, z: 4 };
+      const scale = detectStlUnitScale(ambiguous);
+
+      expect(scale.scaleMultiplier).toBe(1);
+      expect(scale.detectedUnit).toBe('millimeters');
+      expect(scale.isAmbiguous).toBe(true);
+    });
+
+    it('no marca ambigüedad en piezas grandes donde mm es la única lectura sensata', () => {
+      const large = { x: 120, y: 300, z: 45 };
+      const scale = detectStlUnitScale(large);
+
+      expect(scale.scaleMultiplier).toBe(1);
+      expect(scale.isAmbiguous).toBe(false);
     });
 
     it('maneja piezas con medidas vacías o en cero', () => {
@@ -33,6 +62,7 @@ describe('stlMeasurement utilities', () => {
 
       expect(scale.scaleMultiplier).toBe(1);
       expect(scale.detectedUnit).toBe('millimeters');
+      expect(scale.isAmbiguous).toBe(false);
     });
   });
 

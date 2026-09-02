@@ -116,6 +116,12 @@ export function StlViewerModal({
   const rawGeometryRef = useRef<BufferGeometry | null>(null);
   const gridRef = useRef<GridHelper | null>(null);
   const fitDistanceRef = useRef<number>(100);
+  const lightsRef = useRef<{ key: DirectionalLight; fill: DirectionalLight; rim: DirectionalLight } | null>(null);
+
+  // Espejo de `showGrid` para que el re-encuadre no dependa del estado en su
+  // lista de dependencias (se llama desde dentro del loader de Three.js).
+  const showGridRef = useRef(showGrid);
+  showGridRef.current = showGrid;
 
   // Referencias mutables para el ciclo de medición
   const isMeasuringRef = useRef(isMeasuring);
@@ -167,6 +173,122 @@ export function StlViewerModal({
 
     controls.update();
   }, []);
+
+  /**
+   * Factor de escala a milímetros según el modo elegido (o el detectado en `auto`).
+   */
+  const resolveScaleMultiplier = useCallback(
+    (detected: StlScaleInfo | null): number => {
+      if (scaleMode === 'auto') return detected?.scaleMultiplier ?? 1;
+      if (scaleMode === 'meters') return 1000;
+      if (scaleMode === 'inches') return 25.4;
+      return 1;
+    },
+    [scaleMode],
+  );
+
+  /**
+   * Recalcula TODO lo que depende del tamaño real de la malla: cotas mostradas,
+   * rejilla guía, distancia de encuadre, escala de los marcadores del calibrador,
+   * planos near/far, límites de OrbitControls y posición de las luces.
+   *
+   * Debe llamarse tanto al cargar el STL como al cambiar la escala a mano. Si no,
+   * `fitDistanceRef` conserva el valor de la carga y todo lo proporcional se rompe:
+   * el umbral de snap (`fitDistance * 0.045`) deja de enganchar, los marcadores
+   * quedan microscópicos y con un cambio grande (x1000) la pieza se sale del far plane.
+   */
+  const fitSceneToGeometry = useCallback((geometry: BufferGeometry) => {
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!scene || !camera || !controls) return;
+
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+
+    const box = geometry.boundingBox ?? new Box3().setFromObject(new Mesh(geometry));
+    const size = box.getSize(new Vector3());
+    const xMm = size.x;
+    const yMm = size.y;
+    const zMm = size.z;
+
+    setDimensions({
+      xMm,
+      yMm,
+      zMm,
+      xIn: xMm / 25.4,
+      yIn: yMm / 25.4,
+      zIn: zMm / 25.4,
+    });
+
+    // El tamaño de un GridHelper se fija al construirlo, así que para reescalarlo
+    // hay que recrearlo (y liberar el anterior).
+    const prevGrid = gridRef.current;
+    const gridVisible = prevGrid ? prevGrid.visible : showGridRef.current;
+    if (prevGrid) {
+      scene.remove(prevGrid);
+      prevGrid.geometry.dispose();
+      const gridMat = prevGrid.material;
+      if (Array.isArray(gridMat)) {
+        gridMat.forEach((m) => m.dispose());
+      } else {
+        gridMat.dispose();
+      }
+    }
+    const gridDim = Math.max(xMm, zMm, 10) * 2.2;
+    const grid = new GridHelper(gridDim, 20, 0x0284c7, 0x1e293b);
+    grid.position.y = -yMm / 2;
+    grid.visible = gridVisible;
+    scene.add(grid);
+    gridRef.current = grid;
+
+    // Cálculo exacto de distancia de cámara para encuadre completo (Zoom-to-fit)
+    const radius = geometry.boundingSphere
+      ? geometry.boundingSphere.radius
+      : Math.max(xMm, yMm, zMm) / 2;
+    const fovRad = (camera.fov * Math.PI) / 180;
+    const aspect = Math.max(camera.aspect, 0.1);
+    const vDist = radius / Math.sin(fovRad / 2);
+    const hFovRad = 2 * Math.atan(Math.tan(fovRad / 2) * aspect);
+    const hDist = radius / Math.sin(hFovRad / 2);
+    const fitDistance = Math.max(vDist, hDist) * 1.15;
+
+    fitDistanceRef.current = fitDistance;
+
+    // Escalar los marcadores 3D proporcionalmente a la pieza
+    const markerScale = Math.max(fitDistance * 0.007, 0.15);
+    snapCursorMeshRef.current?.scale.setScalar(markerScale);
+    markerAMeshRef.current?.scale.setScalar(markerScale * 1.15);
+    markerBMeshRef.current?.scale.setScalar(markerScale * 1.15);
+
+    camera.near = Math.max(fitDistance * 0.005, 0.05);
+    camera.far = fitDistance * 50;
+    camera.position.set(fitDistance * 0.75, fitDistance * 0.65, fitDistance * 0.75);
+    camera.up.set(0, 1, 0);
+    camera.updateProjectionMatrix();
+
+    controls.target.set(0, 0, 0);
+    controls.minDistance = fitDistance * 0.05;
+    controls.maxDistance = fitDistance * 10;
+    controls.update();
+
+    // Reposicionar luces al tamaño del modelo
+    const lights = lightsRef.current;
+    if (lights) {
+      lights.key.position.set(fitDistance * 1.2, fitDistance * 1.6, fitDistance);
+      lights.fill.position.set(-fitDistance * 1.2, fitDistance * 0.8, -fitDistance);
+      lights.rim.position.set(-fitDistance * 0.8, -fitDistance * 0.8, fitDistance * 1.2);
+    }
+  }, []);
+
+  // El efecto que monta la escena descarga el STL de la red, así que NO puede
+  // depender de `scaleMode` (cambiar la escala volvería a bajar el archivo).
+  // Estos espejos le dan acceso a la versión actual sin ensuciar sus dependencias.
+  const fitSceneToGeometryRef = useRef(fitSceneToGeometry);
+  fitSceneToGeometryRef.current = fitSceneToGeometry;
+
+  const resolveScaleMultiplierRef = useRef(resolveScaleMultiplier);
+  resolveScaleMultiplierRef.current = resolveScaleMultiplier;
 
   // Alternar auto-rotación
   const toggleAutoRotate = () => {
@@ -349,6 +471,8 @@ export function StlViewerModal({
     rimLight.position.set(-80, -100, 150);
     scene.add(rimLight);
 
+    lightsRef.current = { key: keyLight, fill: fillLight, rim: rimLight };
+
     // ── Material Metálico Satinado ──
     const material = new MeshStandardMaterial({
       color: 0x94a3b8,
@@ -359,7 +483,6 @@ export function StlViewerModal({
     materialRef.current = material;
 
     let mesh: Mesh | null = null;
-    let gridHelper: GridHelper | null = null;
     let frameId = 0;
 
     // ── Grupo 3D de Medición y Marcadores ──
@@ -455,13 +578,7 @@ export function StlViewerModal({
         setDetectedScale(detected);
 
         // 4. Aplicar factor de escala para normalizar a milímetros reales
-        const multiplier = scaleMode === 'auto'
-          ? detected.scaleMultiplier
-          : scaleMode === 'meters'
-          ? 1000
-          : scaleMode === 'inches'
-          ? 25.4
-          : 1;
+        const multiplier = resolveScaleMultiplierRef.current(detected);
 
         if (multiplier !== 1) {
           geometry.scale(multiplier, multiplier, multiplier);
@@ -469,67 +586,13 @@ export function StlViewerModal({
           geometry.computeBoundingSphere();
         }
 
-        const box = geometry.boundingBox ?? new Box3().setFromObject(new Mesh(geometry));
-        const size = box.getSize(new Vector3());
-
-        const xMm = size.x;
-        const yMm = size.y;
-        const zMm = size.z;
-
-        setDimensions({
-          xMm,
-          yMm,
-          zMm,
-          xIn: xMm / 25.4,
-          yIn: yMm / 25.4,
-          zIn: zMm / 25.4,
-        });
-
         // 5. Malla
         mesh = new Mesh(geometry, material);
         meshRef.current = mesh;
         scene.add(mesh);
 
-        // 6. Plano de cuadrícula guía (GridHelper)
-        const maxPlaneDim = Math.max(xMm, zMm, 10);
-        const gridDim = maxPlaneDim * 2.2;
-        gridHelper = new GridHelper(gridDim, 20, 0x0284c7, 0x1e293b);
-        gridHelper.position.y = -yMm / 2;
-        gridHelper.visible = showGrid;
-        scene.add(gridHelper);
-        gridRef.current = gridHelper;
-
-        // 7. Cálculo exacto de distancia de cámara para encuadre completo (Zoom-to-fit)
-        const radius = geometry.boundingSphere ? geometry.boundingSphere.radius : Math.max(xMm, yMm, zMm) / 2;
-        const fovRad = (camera.fov * Math.PI) / 180;
-        const aspect = Math.max(camera.aspect, 0.1);
-        const vDist = radius / Math.sin(fovRad / 2);
-        const hFovRad = 2 * Math.atan(Math.tan(fovRad / 2) * aspect);
-        const hDist = radius / Math.sin(hFovRad / 2);
-        const fitDistance = Math.max(vDist, hDist) * 1.15;
-
-        fitDistanceRef.current = fitDistance;
-
-        // Escalar los marcadores 3D proporcionalmente a la pieza
-        const markerScale = Math.max(fitDistance * 0.007, 0.15);
-        snapCursor.scale.setScalar(markerScale);
-        markerA.scale.setScalar(markerScale * 1.15);
-        markerB.scale.setScalar(markerScale * 1.15);
-
-        camera.near = Math.max(fitDistance * 0.005, 0.05);
-        camera.far = fitDistance * 50;
-        camera.position.set(fitDistance * 0.75, fitDistance * 0.65, fitDistance * 0.75);
-        camera.updateProjectionMatrix();
-
-        controls.target.set(0, 0, 0);
-        controls.minDistance = fitDistance * 0.05;
-        controls.maxDistance = fitDistance * 10;
-        controls.update();
-
-        // Reposicionar luces al tamaño del modelo
-        keyLight.position.set(fitDistance * 1.2, fitDistance * 1.6, fitDistance);
-        fillLight.position.set(-fitDistance * 1.2, fitDistance * 0.8, -fitDistance);
-        rimLight.position.set(-fitDistance * 0.8, -fitDistance * 0.8, fitDistance * 1.2);
+        // 6. Cotas, rejilla, encuadre, marcadores y luces (todo lo proporcional al tamaño)
+        fitSceneToGeometryRef.current(geometry);
 
         setStatus('ready');
       },
@@ -668,9 +731,19 @@ export function StlViewerModal({
         mesh.geometry.dispose();
         scene.remove(mesh);
       }
-      if (gridHelper) {
-        gridHelper.geometry.dispose();
-        scene.remove(gridHelper);
+      // `fitSceneToGeometry` recrea la rejilla en cada cambio de escala, así que
+      // hay que liberar la que esté viva en el ref, no una copia local obsoleta.
+      const liveGrid = gridRef.current;
+      if (liveGrid) {
+        liveGrid.geometry.dispose();
+        const gridMat = liveGrid.material;
+        if (Array.isArray(gridMat)) {
+          gridMat.forEach((m) => m.dispose());
+        } else {
+          gridMat.dispose();
+        }
+        scene.remove(liveGrid);
+        gridRef.current = null;
       }
       if (rawGeometryRef.current) {
         rawGeometryRef.current.dispose();
@@ -695,47 +768,27 @@ export function StlViewerModal({
 
   // ── Cambio Instantáneo de Escala sin recargar de la red ──
   useEffect(() => {
-    if (!meshRef.current || !rawGeometryRef.current || !gridRef.current || !cameraRef.current) return;
+    if (!meshRef.current || !rawGeometryRef.current || !cameraRef.current) return;
 
     const raw = rawGeometryRef.current.clone();
-    const multiplier = scaleMode === 'auto'
-      ? (detectedScale?.scaleMultiplier ?? 1)
-      : scaleMode === 'meters'
-      ? 1000
-      : scaleMode === 'inches'
-      ? 25.4
-      : 1;
+    const multiplier = resolveScaleMultiplier(detectedScale);
 
     if (multiplier !== 1) {
       raw.scale(multiplier, multiplier, multiplier);
-      raw.computeBoundingBox();
-      raw.computeBoundingSphere();
     }
+    raw.computeBoundingBox();
+    raw.computeBoundingSphere();
 
     meshRef.current.geometry.dispose();
     meshRef.current.geometry = raw;
 
-    const box = raw.boundingBox!;
-    const size = box.getSize(new Vector3());
-    const xMm = size.x;
-    const yMm = size.y;
-    const zMm = size.z;
-
-    setDimensions({
-      xMm,
-      yMm,
-      zMm,
-      xIn: xMm / 25.4,
-      yIn: yMm / 25.4,
-      zIn: zMm / 25.4,
-    });
-
-    // Ajustar posición del Grid
-    gridRef.current.position.y = -yMm / 2;
+    // Reencuadrar: cotas, rejilla, distancia de encuadre, umbral de snap,
+    // near/far y luces dependen todos del tamaño, que acaba de cambiar.
+    fitSceneToGeometry(raw);
 
     // Limpiar medición activa ya que cambió la escala
     clearMeasurement3D();
-  }, [scaleMode, detectedScale, clearMeasurement3D]);
+  }, [scaleMode, detectedScale, clearMeasurement3D, fitSceneToGeometry, resolveScaleMultiplier]);
 
   // ── Atajos de Teclado ──
   useEffect(() => {
@@ -1133,6 +1186,14 @@ export function StlViewerModal({
                   <option value="mm">1:1 Directo (mm)</option>
                   <option value="inches">1:1 Pulgadas (x25.4)</option>
                 </select>
+                {detectedScale.isAmbiguous && scaleMode === 'auto' && (
+                  <span
+                    className="text-[10px] font-bold uppercase tracking-wider text-warn bg-warn/10 border border-warn/40 px-1.5 py-0.5"
+                    title="La malla mide entre 3 y 25 unidades: puede venir en mm o en pulgadas y no hay forma de saberlo desde la geometría. Se asumió mm. Verifica contra el plano CAD antes de tomar una cota."
+                  >
+                    Escala sin confirmar
+                  </span>
+                )}
               </div>
             )}
           </div>

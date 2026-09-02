@@ -99,7 +99,25 @@ export function OdooOrdersPanel({
     onError: lineActions.setLineActionError,
   });
 
-  const filters = useOdooOrdersFilters({ orders });
+  const isOrderMissingDrawing = useCallback(
+    (order: OdooOrderView) => {
+      const lines = order.order_lines ?? [];
+      for (let idx = 0; idx < lines.length; idx++) {
+        const line = lines[idx];
+        const pending = line.qty_pending_from_pickings ?? line.qty_pending;
+        if (pending > 0) {
+          const link = lineActions.resolveLineLink(order, line, idx, catalog.views);
+          if (!link.cadDrawing && !link.reportDrawing) {
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+    [lineActions, catalog.views],
+  );
+
+  const filters = useOdooOrdersFilters({ orders, isOrderMissingDrawing });
 
   const fetchOrders = useCallback(async (partnerKey: string) => {
     setLoading(true);
@@ -221,6 +239,7 @@ export function OdooOrdersPanel({
       onToggleSelectAllInOrder={batchPrint.toggleSelectAllInOrder}
       onPrintLine={lineActions.handlePrintLinePlano}
       onSendLineToReport={lineActions.handleSendLineToReport}
+      onSendOrderToReport={lineActions.handleSendOrderToReport}
       onQuickPurchase={onQuickPurchase}
       onOpenBiblioteca={(ord, line, idx) => lineActions.handleOpenBibliotecaForLine(ord, line, idx)}
       onExportDeliverySlip={(ord) => {
@@ -476,6 +495,91 @@ export function OdooOrdersPanel({
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Píldoras de Filtro por Urgencia & Planos */}
+          <div className="flex items-center gap-1.5 flex-wrap border-t border-line/60 pt-2 w-full mt-2">
+            <span className="text-[10px] font-mono font-bold uppercase text-ink-dim mr-1">
+              Urgencia:
+            </span>
+            <button
+              type="button"
+              onClick={() => filters.setUrgencyFilter('ALL')}
+              className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
+                filters.urgencyFilter === 'ALL'
+                  ? 'bg-ink text-bg border-ink shadow-sm'
+                  : 'bg-surface text-ink-dim border-line hover:text-ink hover:border-accent'
+              }`}
+            >
+              Todas ({filters.urgencyCounts.all})
+            </button>
+            {filters.urgencyCounts.overdue > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  filters.setUrgencyFilter(filters.urgencyFilter === 'OVERDUE' ? 'ALL' : 'OVERDUE')
+                }
+                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1 ${
+                  filters.urgencyFilter === 'OVERDUE'
+                    ? 'bg-danger text-white border-danger shadow-sm'
+                    : 'bg-danger/10 text-danger border-danger/40 hover:bg-danger/20'
+                }`}
+                title="Órdenes con más de 14 días desde su emisión"
+              >
+                <AlertTriangle size={11} />
+                Vencidas (+14d) ({filters.urgencyCounts.overdue})
+              </button>
+            )}
+            {filters.urgencyCounts.critical > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  filters.setUrgencyFilter(filters.urgencyFilter === 'CRITICAL' ? 'ALL' : 'CRITICAL')
+                }
+                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1 ${
+                  filters.urgencyFilter === 'CRITICAL'
+                    ? 'bg-warn text-bg border-warn shadow-sm'
+                    : 'bg-warn/10 text-warn border-warn/40 hover:bg-warn/20'
+                }`}
+                title="Órdenes entre 8 y 14 días desde su emisión"
+              >
+                Críticas (8-14d) ({filters.urgencyCounts.critical})
+              </button>
+            )}
+            {filters.urgencyCounts.normal > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  filters.setUrgencyFilter(filters.urgencyFilter === 'NORMAL' ? 'ALL' : 'NORMAL')
+                }
+                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
+                  filters.urgencyFilter === 'NORMAL'
+                    ? 'bg-ok text-bg border-ok shadow-sm'
+                    : 'bg-ok/10 text-ok border-ok/40 hover:bg-ok/20'
+                }`}
+                title="Órdenes con menos de 8 días de emisión"
+              >
+                Recientes ({filters.urgencyCounts.normal})
+              </button>
+            )}
+            {filters.urgencyCounts.missingDrawing > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  filters.setUrgencyFilter(
+                    filters.urgencyFilter === 'MISSING_DRAWING' ? 'ALL' : 'MISSING_DRAWING',
+                  )
+                }
+                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1 ${
+                  filters.urgencyFilter === 'MISSING_DRAWING'
+                    ? 'bg-accent text-bg border-accent shadow-sm'
+                    : 'bg-accent/10 text-accent border-accent/40 hover:bg-accent/20'
+                }`}
+                title="Órdenes con líneas activas sin plano vinculado"
+              >
+                Sin Plano ({filters.urgencyCounts.missingDrawing})
+              </button>
+            )}
           </div>
         </section>
       )}

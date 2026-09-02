@@ -7,6 +7,10 @@ import {
   Cpu,
   Layers,
   Ruler,
+  Timer,
+  Code,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { MATERIAL_DATABASE } from '../../lib/tooling/materialDatabase';
 import { HAAS_MACHINE_PROFILES } from '../../lib/tooling/haasProfiles';
@@ -14,6 +18,12 @@ import {
   calculateTurningSpeedsFeeds,
   calculateMillingSpeedsFeeds,
 } from '../../lib/tooling/speedsFeedsCalculator';
+import {
+  calculateTurningCycleTime,
+  calculateMillingCycleTime,
+  generateHaasTurningGcode,
+  generateHaasMillingGcode,
+} from '../../lib/tooling/cycleTimeCalculator';
 import { Input } from '../ui/input';
 
 type UnitSystem = 'imperial' | 'metric';
@@ -23,6 +33,22 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
   const [operationMode, setOperationMode] = useState<'turning' | 'milling'>('turning');
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>('steel_4140');
   const [selectedHaasId, setSelectedHaasId] = useState<string>('haas_st20');
+
+  // ── Inputs Estimador de Tiempos & Costos Haas ──
+  const [turningCutLengthInch, setTurningCutLengthInch] = useState<number>(2.5); // 2.500"
+  const [turningRawDiaInch, setTurningRawDiaInch] = useState<number>(2.0); // 2.000"
+  const [turningFinalDiaInch, setTurningFinalDiaInch] = useState<number>(1.25); // 1.250"
+  const [turningHourlyRate, setTurningHourlyRate] = useState<number>(65); // $65 USD/hr
+  const [turningChuckingSec, setTurningChuckingSec] = useState<number>(20); // 20 seg
+
+  const [millingPocketLengthInch, setMillingPocketLengthInch] = useState<number>(4.0); // 4.0"
+  const [millingPocketWidthInch, setMillingPocketWidthInch] = useState<number>(3.0); // 3.0"
+  const [millingPocketDepthInch, setMillingPocketDepthInch] = useState<number>(0.5); // 0.5"
+  const [millingHourlyRate, setMillingHourlyRate] = useState<number>(75); // $75 USD/hr
+  const [millingFixtureSec, setMillingFixtureSec] = useState<number>(30); // 30 seg
+
+  const [copiedGcode, setCopiedGcode] = useState(false);
+  const [copiedSummary, setCopiedSummary] = useState(false);
 
   // ── Inputs Torneado (Almacenados en Imperial/Métrico según sistema) ──
   const [turningDiameterInch, setTurningDiameterInch] = useState<number>(1.5); // 1.500"
@@ -128,6 +154,103 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
     selectedMaterialId,
     selectedHaasId,
   ]);
+
+  // ── Cálculos de Tiempos de Ciclo & Costos Haas ──
+  const turningCycleTime = useMemo(() => {
+    return calculateTurningCycleTime({
+      cutLength: turningCutLengthInch,
+      rawDiameter: turningRawDiaInch,
+      finalDiameter: turningFinalDiaInch,
+      depthOfCutAp: turningApInch,
+      feedPerRev: turningFeedIpr,
+      rpm: turningResult.rpm,
+      hourlyRate: turningHourlyRate,
+      partHandlingSec: turningChuckingSec,
+      toolChanges: 1,
+    });
+  }, [
+    turningCutLengthInch,
+    turningRawDiaInch,
+    turningFinalDiaInch,
+    turningApInch,
+    turningFeedIpr,
+    turningResult.rpm,
+    turningHourlyRate,
+    turningChuckingSec,
+  ]);
+
+  const millingCycleTime = useMemo(() => {
+    const volumeIn3 = millingPocketLengthInch * millingPocketWidthInch * millingPocketDepthInch;
+    return calculateMillingCycleTime({
+      materialVolumeToRemove: volumeIn3,
+      mrr: millingResult.mrrIn3Min,
+      hourlyRate: millingHourlyRate,
+      partHandlingSec: millingFixtureSec,
+      toolChanges: 1,
+    });
+  }, [
+    millingPocketLengthInch,
+    millingPocketWidthInch,
+    millingPocketDepthInch,
+    millingResult.mrrIn3Min,
+    millingHourlyRate,
+    millingFixtureSec,
+  ]);
+
+  const haasGcode = useMemo(() => {
+    if (operationMode === 'turning') {
+      return generateHaasTurningGcode({
+        programNumber: 1001,
+        partName: selectedMaterial.name.replace(/\s+/g, '_').toUpperCase(),
+        maxRpm: Math.min(turningResult.rpm + 500, 3500),
+        sfm: turningSfm,
+        feedIpr: turningFeedIpr,
+        apInch: turningApInch,
+        rawDiaInch: turningRawDiaInch,
+        finalDiaInch: turningFinalDiaInch,
+        cutLengthInch: turningCutLengthInch,
+      });
+    } else {
+      return generateHaasMillingGcode({
+        programNumber: 2001,
+        partName: selectedMaterial.name.replace(/\s+/g, '_').toUpperCase(),
+        rpm: millingResult.rpm,
+        feedIpm: millingResult.tableFeedIpm,
+        toolNumber: 1,
+        toolDesc: `${millingToolDiaInch}" ${millingFlutes}F ENDMILL`,
+      });
+    }
+  }, [
+    operationMode,
+    selectedMaterial.name,
+    turningResult.rpm,
+    turningSfm,
+    turningFeedIpr,
+    turningApInch,
+    turningRawDiaInch,
+    turningFinalDiaInch,
+    turningCutLengthInch,
+    millingResult.rpm,
+    millingResult.tableFeedIpm,
+    millingToolDiaInch,
+    millingFlutes,
+  ]);
+
+  const handleCopyGcode = () => {
+    void navigator.clipboard.writeText(haasGcode);
+    setCopiedGcode(true);
+    setTimeout(() => setCopiedGcode(false), 2000);
+  };
+
+  const handleCopySummary = () => {
+    const summary =
+      operationMode === 'turning'
+        ? `=== FICHA DE TORNEADO HAAS ST ===\nMaterial: ${selectedMaterial.name}\nRPM: ${turningResult.rpm}\nSFM: ${turningSfm}\nAvance: ${turningFeedIpr}"/rev (${turningResult.feedRateIpm} IPM)\nProfundidad ap: ${turningApInch}"\nPotencia: ${turningResult.motorPowerHpRequired} HP\nRugosidad Ra: ${turningResult.theoreticalSurfaceRoughnessRaUin} µin\nTiempo de Ciclo: ${turningCycleTime.formattedCycleTime}\nPiezas/Turno (8h 85% OEE): ${turningCycleTime.partsPer8hShift}\nCosto Estimado: $${turningCycleTime.machiningCostPerPart} USD/pza`
+        : `=== FICHA DE FRESADO HAAS VF ===\nMaterial: ${selectedMaterial.name}\nHerramienta: ${millingToolDiaInch}" (${millingFlutes}F)\nRPM: ${millingResult.rpm}\nSFM: ${millingSfm}\nChip Load: ${millingChipLoadInch}"/diente\nAvance: ${millingResult.tableFeedIpm} IPM\nMRR: ${millingResult.mrrIn3Min} in³/min\nPotencia: ${millingResult.motorPowerHpRequired} HP\nTiempo de Ciclo: ${millingCycleTime.formattedCycleTime}\nPiezas/Turno (8h 85% OEE): ${millingCycleTime.partsPer8hShift}\nCosto Estimado: $${millingCycleTime.machiningCostPerPart} USD/pza`;
+    void navigator.clipboard.writeText(summary);
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2000);
+  };
 
   return (
     <div className="space-y-6">
@@ -587,14 +710,144 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                     onChange={(e) => setMillingAeInch(Number(e.target.value))}
                     className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
                   />
-                  <span className="text-[9px] font-mono text-ink-dim">
-                    pulgadas ({(millingAeInch * 25.4).toFixed(1)} mm)
-                  </span>
+                    <span className="text-[9px] font-mono text-ink-dim">
+                      pulgadas ({(millingAeInch * 25.4).toFixed(1)} mm)
+                    </span>
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
-        </div>
+              </>
+            )}
+
+            {/* Subsección: Parámetros para Estimación de Ciclo y Costo */}
+            <div className="border-t-2 border-line/60 pt-4 mt-4 space-y-3">
+              <h4 className="font-display font-black text-xs uppercase tracking-wider text-ink flex items-center gap-1.5">
+                <Timer size={14} className="text-accent" />
+                Geometría & Tiempos de Pieza
+              </h4>
+
+              {operationMode === 'turning' ? (
+                <>
+                  <div>
+                    <div className="flex justify-between text-xs font-mono mb-1">
+                      <span className="font-bold">Longitud de Corte (Z)</span>
+                      <span className="text-accent font-bold">{turningCutLengthInch}&quot;</span>
+                    </div>
+                    <Input
+                      type="number"
+                      step="0.25"
+                      value={turningCutLengthInch}
+                      onChange={(e) => setTurningCutLengthInch(Number(e.target.value))}
+                      className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-mono font-bold mb-1">D. Inicial</label>
+                      <Input
+                        type="number"
+                        step="0.125"
+                        value={turningRawDiaInch}
+                        onChange={(e) => setTurningRawDiaInch(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-mono font-bold mb-1">D. Final</label>
+                      <Input
+                        type="number"
+                        step="0.125"
+                        value={turningFinalDiaInch}
+                        onChange={(e) => setTurningFinalDiaInch(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-mono font-bold mb-1">Tarifa ($/hr)</label>
+                      <Input
+                        type="number"
+                        step="5"
+                        value={turningHourlyRate}
+                        onChange={(e) => setTurningHourlyRate(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-mono font-bold mb-1">Chuck (seg)</label>
+                      <Input
+                        type="number"
+                        step="5"
+                        value={turningChuckingSec}
+                        onChange={(e) => setTurningChuckingSec(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold mb-1">Largo (&quot;)</label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        value={millingPocketLengthInch}
+                        onChange={(e) => setMillingPocketLengthInch(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold mb-1">Ancho (&quot;)</label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        value={millingPocketWidthInch}
+                        onChange={(e) => setMillingPocketWidthInch(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold mb-1">Prof (&quot;)</label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={millingPocketDepthInch}
+                        onChange={(e) => setMillingPocketDepthInch(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-mono font-bold mb-1">Tarifa ($/hr)</label>
+                      <Input
+                        type="number"
+                        step="5"
+                        value={millingHourlyRate}
+                        onChange={(e) => setMillingHourlyRate(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-mono font-bold mb-1">Fijación (seg)</label>
+                      <Input
+                        type="number"
+                        step="5"
+                        value={millingFixtureSec}
+                        onChange={(e) => setMillingFixtureSec(Number(e.target.value))}
+                        className="h-8 border-2 border-line bg-surface-2 font-mono text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
 
         {/* COLUMNA DERECHA: RESULTADOS TÉCNICOS & GAUGES */}
         <div className="lg:col-span-7 space-y-4">
@@ -747,6 +1000,145 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
               ))}
             </div>
           )}
+
+          {/* ── SECCIÓN FASE 4: ESTIMADOR DE TIEMPO DE CICLO & COSTO HAAS ── */}
+          <div className="border-2 border-line bg-surface p-4 shadow-hard">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <h4 className="font-display font-black text-sm uppercase tracking-wider text-ink flex items-center gap-2">
+                <Timer size={16} className="text-accent" />
+                Estimador de Ciclo & Costo Haas ({operationMode === 'turning' ? 'Torno ST' : 'Centro VF'})
+              </h4>
+              <button
+                type="button"
+                onClick={handleCopySummary}
+                className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase border-2 border-line bg-surface hover:border-accent flex items-center gap-1.5 shadow-sm"
+                title="Copiar resumen técnico al portapapeles"
+              >
+                {copiedSummary ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
+                {copiedSummary ? 'Ficha Copiada' : 'Copiar Ficha'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center mb-4">
+              <div className="bg-[#0D2B4D] text-white p-3 border border-line">
+                <span className="text-[9px] font-mono uppercase tracking-widest opacity-70 block">
+                  Tiempo Ciclo
+                </span>
+                <span className="font-display font-black text-xl lg:text-2xl text-accent block mt-0.5">
+                  {operationMode === 'turning'
+                    ? turningCycleTime.formattedCycleTime
+                    : millingCycleTime.formattedCycleTime}
+                </span>
+                <span className="text-[9px] font-mono opacity-60">por pieza</span>
+              </div>
+
+              <div className="bg-surface-2 p-3 border border-line">
+                <span className="text-[9px] font-mono uppercase tracking-widest text-ink-dim block">
+                  Piezas / Turno
+                </span>
+                <span className="font-display font-black text-xl lg:text-2xl text-ink block mt-0.5">
+                  {operationMode === 'turning'
+                    ? turningCycleTime.partsPer8hShift
+                    : millingCycleTime.partsPer8hShift}
+                </span>
+                <span className="text-[9px] font-mono text-ink-dim">8h al 85% OEE</span>
+              </div>
+
+              <div className="bg-surface-2 p-3 border border-line">
+                <span className="text-[9px] font-mono uppercase tracking-widest text-ink-dim block">
+                  Rendimiento
+                </span>
+                <span className="font-display font-black text-xl lg:text-2xl text-ink block mt-0.5">
+                  {operationMode === 'turning'
+                    ? turningCycleTime.partsPerHourTheoretical
+                    : millingCycleTime.partsPerHourTheoretical}
+                </span>
+                <span className="text-[9px] font-mono text-ink-dim">piezas / hora</span>
+              </div>
+
+              <div className="bg-surface-2 p-3 border border-line">
+                <span className="text-[9px] font-mono uppercase tracking-widest text-ink-dim block">
+                  Costo Maquinado
+                </span>
+                <span className="font-display font-black text-xl lg:text-2xl text-ok block mt-0.5">
+                  ${operationMode === 'turning'
+                    ? turningCycleTime.machiningCostPerPart
+                    : millingCycleTime.machiningCostPerPart}
+                </span>
+                <span className="text-[9px] font-mono text-ink-dim">USD / pieza</span>
+              </div>
+            </div>
+
+            {/* Desglose de Operaciones */}
+            <div className="bg-surface-2/60 p-3 border border-line text-xs font-mono space-y-1">
+              {operationMode === 'turning' ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Pasadas calculadas de desbaste:</span>
+                    <span className="font-bold text-ink">{turningCycleTime.roughPasses} pasadas a {turningApInch}&quot; c/u</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Tiempo de corte continuo puro:</span>
+                    <span className="font-bold text-ink">{turningCycleTime.pureCutTimeSec}s</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Retrocesos en rápido G00 + Index torreta:</span>
+                    <span className="font-bold text-ink">
+                      {turningCycleTime.rapidRetractSec + turningCycleTime.toolChangeTimeSec}s
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Amarre y desamarre de chuck hidráulico:</span>
+                    <span className="font-bold text-ink">{turningCycleTime.partHandlingSec}s</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Volumen estimado a remover:</span>
+                    <span className="font-bold text-ink">
+                      {(millingPocketLengthInch * millingPocketWidthInch * millingPocketDepthInch).toFixed(2)} in³
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Tiempo de corte puro (MRR {millingResult.mrrIn3Min} in³/min):</span>
+                    <span className="font-bold text-ink">{millingCycleTime.pureCutTimeSec}s</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Movimientos en vacío y ATC Side-Mount:</span>
+                    <span className="font-bold text-ink">
+                      {millingCycleTime.airCutTimeSec + millingCycleTime.toolChangeTimeSec}s
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-dim">Fijación en prensa de precisión:</span>
+                    <span className="font-bold text-ink">{millingCycleTime.partHandlingSec}s</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* ── GENERADOR DE PLANTILLAS G-CODE HAAS ── */}
+          <div className="border-2 border-line bg-surface p-4 shadow-hard">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+              <h4 className="font-display font-black text-xs uppercase tracking-wider text-ink flex items-center gap-1.5">
+                <Code size={14} className="text-accent" />
+                Plantilla G-Code Haas CNC ({operationMode === 'turning' ? 'Torno G71' : 'Fresa Setup'})
+              </h4>
+              <button
+                type="button"
+                onClick={handleCopyGcode}
+                className="px-3 py-1 bg-accent text-bg text-[10px] font-mono font-black uppercase border-2 border-accent hover:bg-accent/80 flex items-center gap-1.5 shadow-sm"
+              >
+                {copiedGcode ? <Check size={12} /> : <Copy size={12} />}
+                {copiedGcode ? 'Copiado al Portapapeles' : 'Copiar G-Code'}
+              </button>
+            </div>
+            <pre className="bg-[#0D2B4D] text-emerald-300 p-3.5 font-mono text-[11px] leading-relaxed border border-line overflow-x-auto max-h-56 select-all">
+              {haasGcode}
+            </pre>
+          </div>
         </div>
       </div>
     </div>

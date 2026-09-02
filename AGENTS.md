@@ -233,6 +233,7 @@ Do NOT read the wiki for general coding questions or things already in this AGEN
 - Prefiere español casual y directo; antes de implementar features no triviales, usar brainstorming/plan y esperar aprobación explícita.
 - En Órdenes Odoo: sincronizar todas las compañías con pendientes de factura; la UI no carga órdenes hasta elegir una compañía (botones); no cargar “Todas” por defecto.
 - Remisión real sigue fuera de alcance por ahora; priorizar capacidades nuevas que conecten Biblioteca ↔ Órdenes ↔ Reporte (puente orden–plano).
+- Al terminar fases de programación o agregar código, ejecutar siempre el protocolo del skill `Auditoría Post-Fase` (null-safety defensivo, prevención de NaNs en inputs, consistencia de índices en arrays filtrados, sincronización de tablas UI/impresión y la Triple Validación: `npm test` + `npm run lint` + `npm run build`).
 
 ## Learned Workspace Facts
 

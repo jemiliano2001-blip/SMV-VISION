@@ -12,6 +12,7 @@ import {
   History,
   Link2,
   MoreHorizontal,
+  Printer,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -32,6 +33,7 @@ export interface ReportRowActionsProps {
   onStl: () => void;
   onHistorial: () => void;
   onVincular: () => void;
+  onTraveler?: () => void;
 }
 
 export function ReportRowActions({
@@ -44,6 +46,7 @@ export function ReportRowActions({
   onStl,
   onHistorial,
   onVincular,
+  onTraveler,
 }: ReportRowActionsProps): ReactElement {
   const showEncuadre = Boolean(order.sourceImageDataUrl);
   const showAi = canGenerateAiIsometric(order);
@@ -83,6 +86,15 @@ export function ReportRowActions({
           <ShoppingCart size={12} className="mr-1.5" />
           Comprar
         </DropdownMenuItem>
+        {onTraveler && (
+          <DropdownMenuItem
+            className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"
+            onClick={onTraveler}
+          >
+            <Printer size={12} className="mr-1.5 text-accent" />
+            Hoja de Maquinado
+          </DropdownMenuItem>
+        )}
         {showAi && (
           <DropdownMenuItem
             className="rounded-none font-mono text-[10px] uppercase tracking-wider cursor-pointer hover:bg-surface-2 hover:text-accent"

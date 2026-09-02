@@ -275,14 +275,20 @@ export type ThreadProfileFamily =
   | 'UN_60'
   | 'WHITWORTH_55'
   | 'NPT_60'
+  | 'NPTF_60'
   | 'ACME_29'
-  | 'TRAPEZOIDAL_30';
+  | 'STUB_ACME_29'
+  | 'TRAPEZOIDAL_30'
+  | 'UNJ_60';
 
 export interface DecodedThreadInsert {
   rawCode: string;
   sizeCode: string;
+  ansiSizeCode?: string;
   sizeLabel: string;
+  inscribedCircleInch?: string;
   minBarOrHoleMm: number;
+  minBarOrHoleInch?: string;
   side: ThreadSide;
   hand: ThreadHand;
   profileFamily: ThreadProfileFamily;
@@ -291,24 +297,39 @@ export interface DecodedThreadInsert {
   unitSystem: ThreadUnitSystem;
   pitchMm?: number;
   tpi?: number;
+  tpiRange?: string;
+  pitchMmRange?: string;
   fullProfileNote: string;
   holderSuggestion: string;
+}
+
+export interface ThreadShimRecommendation {
+  leadAngleDegrees: number;
+  recommendedShimAngle: number;
+  shimCodeCarmexOrVardex: string;
+  reason: string;
 }
 
 export interface ThreadDepthResult {
   unitSystem: ThreadUnitSystem;
   pitchMm: number;
+  tpi?: number;
   majorDiameterMm?: number;
-  /** Altura de filete a cortar (radio) para rosca exterior, en mm. */
+  majorDiameterInch?: number;
+  /** Altura de filete a cortar (radio) para rosca exterior, en mm y pulgadas. */
   depthExternalMm: number;
-  /** Altura de filete a cortar (radio) para rosca interior, en mm. */
+  depthExternalInch: number;
+  /** Altura de filete a cortar (radio) para rosca interior, en mm y pulgadas. */
   depthInternalMm: number;
+  depthInternalInch: number;
   pitchDiameterOffsetMm: number;
   minorDiameterOffsetMm: number;
   leadAngleDegrees: number;
+  shimRecommendation: ThreadShimRecommendation;
   suggestedPasses: number;
   infeedSchedulePercent: number[];
   infeedScheduleMm: number[];
+  infeedScheduleInch: number[];
   infeedMethod: 'radial' | 'flanco_modificado_29_30' | 'alternado';
   warnings: string[];
   tips: string[];
@@ -327,15 +348,54 @@ export interface HaasG76Params {
   firstPassDepthMm: number;
   startZMm: number;
   endZMm: number;
+  format?: 'haas_single' | 'fanuc_two_line';
+  unitSystem?: 'inch' | 'metric';
+  tpi?: number;
+  majorDiameterInch?: number;
+  depthInch?: number;
+  firstPassDepthInch?: number;
+  minDepthPerPassInch?: number;
+  finishAllowanceInch?: number;
+  startZInch?: number;
+  endZInch?: number;
 }
 
 export interface TapDrillEntry {
   designation: string;
   unitSystem: ThreadUnitSystem;
   majorDiameterMm: number;
+  majorDiameterInch?: number;
   pitchMm: number;
+  tpi?: number;
   cutTapDrillMm: number;
   cutTapDrillLabel: string;
+  cutTapDrillInchDecimal?: number;
+  cutTapDrillFraction?: string;
   rollTapDrillMm: number;
   rollTapDrillLabel: string;
+  rollTapDrillInchDecimal?: number;
+  rollTapDrillFraction?: string;
+  taperReamerRequired?: boolean;
+  pipeNotes?: string;
+}
+
+// ─── Insertos de Ranurado y Tronzado ────────────────────────────────────────
+
+export type GrooveStyle = 'parting_grooving' | 'full_radius' | 'polished_aluminum';
+
+export interface DecodedGrooveInsert {
+  rawCode: string;
+  series: 'MGMN' | 'MRMN' | 'MGGN' | 'GTN' | 'GFN' | 'OTHER';
+  widthMm: number;
+  widthInch: number;
+  widthFraction: string;
+  cornerNoseRadiusMm: number;
+  cornerNoseRadiusInch: string;
+  style: GrooveStyle;
+  styleLabel: string;
+  maxDepthCutMm?: number;
+  maxDepthCutInch?: string;
+  recommendedFeedIpr: string;
+  chipbreaker?: string;
+  compatibleHolders: string[];
 }

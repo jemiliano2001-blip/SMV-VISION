@@ -97,6 +97,9 @@ interface ReportTableRowProps {
   isExtracting: boolean;
   isAiGenerating: boolean;
   variant?: 'dashboard' | 'print';
+  isSelected?: boolean;
+  onToggleSelect?: (order: Order) => void;
+  onDownloadTraveler?: (order: Order) => void;
   onEditCantidad: (order: Order, newValue: string) => void;
   onExcludeOrder: (order: Order) => void;
   onDownloadSinglePdf: (order: Order) => void;
@@ -125,6 +128,9 @@ export const ReportTableRow = memo(function ReportTableRow({
   isExtracting,
   isAiGenerating,
   variant = 'dashboard',
+  isSelected = false,
+  onToggleSelect,
+  onDownloadTraveler,
   onEditCantidad,
   onExcludeOrder,
   onDownloadSinglePdf,
@@ -153,6 +159,16 @@ export const ReportTableRow = memo(function ReportTableRow({
   if (variant === 'print') {
     return (
       <tr className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
+        {/* Col 0: Checkbox de Selección (Modo Imprimir) */}
+        <td className="px-2 py-4 border-r-2 border-gray-100 text-center align-middle w-8 print:hidden">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect?.(order)}
+            className="w-3.5 h-3.5 cursor-pointer accent-black"
+            aria-label={`Seleccionar ${order.pieza}`}
+          />
+        </td>
         {/* Col 1: Pieza y especificaciones (Modo Imprimir) */}
         <td className="px-5 py-4 border-r-2 border-gray-100 text-left align-middle">
           <div className="space-y-1">
@@ -374,6 +390,7 @@ export const ReportTableRow = memo(function ReportTableRow({
                     if (drawingView) onViewHistory(drawingView);
                   }}
                   onVincular={() => onVincular(order)}
+                  onTraveler={() => onDownloadTraveler?.(order)}
                 />
               </>
             )}
@@ -385,7 +402,17 @@ export const ReportTableRow = memo(function ReportTableRow({
 
   // Dashboard Dark Pro Variant (Default)
   return (
-    <tr className="border-b border-line hover:bg-surface-2/70 transition-colors group">
+    <tr className={`border-b border-line hover:bg-surface-2/70 transition-colors group ${isSelected ? 'bg-accent/10' : ''}`}>
+      {/* Col 0: Checkbox de Selección */}
+      <td className="px-3 py-4 border-r border-line text-center align-middle w-10">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={() => onToggleSelect?.(order)}
+          className="w-4 h-4 cursor-pointer accent-accent"
+          aria-label={`Seleccionar ${order.pieza}`}
+        />
+      </td>
       {/* Col 1: Pieza & Especificaciones */}
       <td className="px-5 py-4 border-r border-line text-left align-middle">
         <div className="space-y-1.5">
@@ -640,6 +667,7 @@ export const ReportTableRow = memo(function ReportTableRow({
                   if (drawingView) onViewHistory(drawingView);
                 }}
                 onVincular={() => onVincular(order)}
+                onTraveler={() => onDownloadTraveler?.(order)}
               />
             </>
           )}
@@ -698,6 +726,7 @@ export function ReporteView({
 }: ReporteViewProps): ReactElement {
   const [tableViewMode, setTableViewMode] = useState<'dashboard' | 'print'>('dashboard');
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'ready' | 'missing' | 'mismatch'>('all');
+  const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(new Set());
 
   // Base común de KPIs y pestañas: el buscador y el toggle "solo faltantes" ya
   // recortaron `filteredResults`. Contar los KPIs sobre `results` (todo) haría que
@@ -739,6 +768,50 @@ export function ReporteView({
     if (activeFilterTab === 'mismatch') return auditBase.filter(hasRevMismatch);
     return auditBase;
   }, [auditBase, activeFilterTab, hasDrawing, hasRevMismatch]);
+
+  const toggleOrderSelection = useCallback((order: Order) => {
+    const key = purchaseRowKey(order);
+    setSelectedOrderKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const selectedOrders = useMemo(() => {
+    if (!vision.results) return [];
+    return vision.results.filter((o) => selectedOrderKeys.has(purchaseRowKey(o)));
+  }, [vision.results, selectedOrderKeys]);
+
+  const allVisibleSelected = useMemo(() => {
+    if (displayedOrders.length === 0) return false;
+    return displayedOrders.every((o) => selectedOrderKeys.has(purchaseRowKey(o)));
+  }, [displayedOrders, selectedOrderKeys]);
+
+  const toggleSelectAllVisible = useCallback(() => {
+    if (allVisibleSelected) {
+      setSelectedOrderKeys((prev) => {
+        const next = new Set(prev);
+        displayedOrders.forEach((o) => next.delete(purchaseRowKey(o)));
+        return next;
+      });
+    } else {
+      setSelectedOrderKeys((prev) => {
+        const next = new Set(prev);
+        displayedOrders.forEach((o) => next.add(purchaseRowKey(o)));
+        return next;
+      });
+    }
+  }, [allVisibleSelected, displayedOrders]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedOrderKeys(new Set());
+  }, []);
+
+  useEffect(() => {
+    setSelectedOrderKeys(new Set());
+  }, [vision.results]);
 
   const resolveDrawingView = useCallback(
     (order: Order): ToolcribActiveDrawingView | null => {
@@ -995,24 +1068,46 @@ export function ReporteView({
                   {vision.copying ? 'Copiado' : 'Copiar JSON'}
                 </button>
                 <button
-                  onClick={vision.downloadCsv}
+                  onClick={() => vision.downloadCsv(selectedOrders.length > 0 ? selectedOrders : (displayedOrders.length < (vision.results?.length ?? 0) ? displayedOrders : undefined))}
                   disabled={vision.isExtracting}
                   className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                  title="Descargar dataset completo como CSV (ignora filtros de vista)"
-                >
-                  CSV
-                </button>
-                <button
-                  onClick={vision.downloadPdf}
-                  disabled={vision.isExtracting}
-                  className="bg-accent text-bg px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none disabled:shadow-none"
                   title={
-                    vision.isExtracting
-                      ? 'Espera a que termine la auditoría para exportar'
-                      : 'Exportar PDF del dataset completo (ignora filtros de vista)'
+                    selectedOrders.length > 0
+                      ? `Descargar CSV de las ${selectedOrders.length} órdenes seleccionadas`
+                      : displayedOrders.length < (vision.results?.length ?? 0)
+                      ? `Descargar CSV de las ${displayedOrders.length} órdenes en vista`
+                      : 'Descargar CSV del dataset completo'
                   }
                 >
-                  Exportar Reporte (PDF)
+                  CSV {selectedOrders.length > 0 ? `(${selectedOrders.length})` : ''}
+                </button>
+                <button
+                  onClick={() => vision.downloadTravelersPdf(selectedOrders.length > 0 ? selectedOrders : displayedOrders)}
+                  disabled={vision.isExtracting}
+                  className="bg-surface border-2 border-line text-ink px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-colors disabled:opacity-40 disabled:pointer-events-none flex items-center gap-1.5"
+                  title="Generar 1 Hoja de Maquinado / Setup Sheet por pieza para taller"
+                >
+                  <Printer size={13} className="text-accent" />
+                  Travelers {selectedOrders.length > 0 ? `(${selectedOrders.length})` : `(${displayedOrders.length})`}
+                </button>
+                <button
+                  onClick={() => vision.downloadPdf(selectedOrders.length > 0 ? selectedOrders : (displayedOrders.length < (vision.results?.length ?? 0) ? displayedOrders : undefined))}
+                  disabled={vision.isExtracting}
+                  className="bg-accent text-bg px-5 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none disabled:shadow-none flex items-center gap-1.5"
+                  title={
+                    selectedOrders.length > 0
+                      ? `Exportar PDF con las ${selectedOrders.length} órdenes seleccionadas`
+                      : displayedOrders.length < (vision.results?.length ?? 0)
+                      ? `Exportar PDF con las ${displayedOrders.length} órdenes en vista`
+                      : 'Exportar PDF de todas las órdenes del reporte'
+                  }
+                >
+                  <FileText size={13} />
+                  {selectedOrders.length > 0
+                    ? `Exportar Selección (${selectedOrders.length} PDF)`
+                    : displayedOrders.length < (vision.results?.length ?? 0)
+                    ? `Exportar en Vista (${displayedOrders.length} PDF)`
+                    : 'Exportar Reporte (PDF)'}
                 </button>
               </div>
             )}
@@ -1456,6 +1551,22 @@ export function ReporteView({
                         }
                       >
                         <th
+                          className={`px-3 py-3 ${
+                            tableViewMode === 'print'
+                              ? 'border-r border-white/10 print:hidden'
+                              : 'border-r border-line'
+                          } text-center w-10`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allVisibleSelected}
+                            onChange={toggleSelectAllVisible}
+                            className="w-4 h-4 cursor-pointer accent-accent"
+                            title={allVisibleSelected ? 'Deseleccionar todas' : 'Seleccionar todas las visibles'}
+                            aria-label="Seleccionar todas las órdenes visibles"
+                          />
+                        </th>
+                        <th
                           className={`px-5 py-3 ${
                             tableViewMode === 'print'
                               ? 'border-r border-white/10'
@@ -1504,31 +1615,103 @@ export function ReporteView({
                       </tr>
                     </thead>
                     <tbody>
-                      {displayedOrders.map((order) => (
-                        <ReportTableRow
-                          key={purchaseRowKey(order)}
-                          order={order}
-                          isPurchased={purchasedKeys.has(purchaseRowKey(order))}
-                          editMode={vision.editMode}
-                          isExtracting={vision.isExtracting}
-                          isAiGenerating={vision.isAiIsoGenerating(order)}
-                          variant={tableViewMode}
-                          onEditCantidad={vision.handleEditCantidad}
-                          onExcludeOrder={vision.handleExcludeOrder}
-                          onDownloadSinglePdf={vision.downloadSingleOrderPdf}
-                          onPreviewOrder={vision.setPreviewOrder}
-                          onEncuadre={onEncuadre}
-                          onQuickPurchase={onQuickPurchase}
-                          onAiIso={(ord) => void vision.generateAiIsometricForOrder(ord)}
-                          onViewStl={onViewStl}
-                          onViewHistory={onViewHistory}
-                          onVincular={onVincular}
-                          resolveDrawingView={resolveDrawingView}
-                        />
-                      ))}
+                      {displayedOrders.map((order) => {
+                        const rowKey = purchaseRowKey(order);
+                        return (
+                          <ReportTableRow
+                            key={rowKey}
+                            order={order}
+                            isPurchased={purchasedKeys.has(rowKey)}
+                            editMode={vision.editMode}
+                            isExtracting={vision.isExtracting}
+                            isAiGenerating={vision.isAiIsoGenerating(order)}
+                            variant={tableViewMode}
+                            isSelected={selectedOrderKeys.has(rowKey)}
+                            onToggleSelect={toggleOrderSelection}
+                            onDownloadTraveler={(ord) => vision.downloadTravelersPdf([ord])}
+                            onEditCantidad={vision.handleEditCantidad}
+                            onExcludeOrder={vision.handleExcludeOrder}
+                            onDownloadSinglePdf={vision.downloadSingleOrderPdf}
+                            onPreviewOrder={vision.setPreviewOrder}
+                            onEncuadre={onEncuadre}
+                            onQuickPurchase={onQuickPurchase}
+                            onAiIso={(ord) => void vision.generateAiIsometricForOrder(ord)}
+                            onViewStl={onViewStl}
+                            onViewHistory={onViewHistory}
+                            onVincular={onVincular}
+                            resolveDrawingView={resolveDrawingView}
+                          />
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
+
+                {/* Barra Flotante de Acciones en Lote (cuando hay órdenes seleccionadas) */}
+                {selectedOrderKeys.size > 0 && (
+                  <div className="sticky bottom-4 z-30 mt-3 bg-[#0D2B4D] text-white border-2 border-accent p-3 shadow-hard-accent flex items-center justify-between gap-3 flex-wrap animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex items-center gap-2">
+                      <span className="bg-accent text-bg px-2.5 py-1 text-xs font-mono font-black uppercase shadow-hard">
+                        {selectedOrders.length} Seleccionada{selectedOrders.length === 1 ? '' : 's'}
+                      </span>
+                      <span className="text-xs font-mono text-white/80 hidden sm:inline">
+                        Acciones en lote para taller y administración:
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => vision.downloadTravelersPdf(selectedOrders)}
+                        className="px-3 py-1.5 bg-accent text-bg text-[10px] font-mono font-black uppercase border-2 border-accent hover:bg-accent/80 transition-all shadow-hard flex items-center gap-1.5"
+                        title="Generar 1 Hoja de Maquinado por pieza para maquinistas"
+                      >
+                        <Printer size={13} /> Hojas de Maquinado ({selectedOrders.length})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => vision.downloadPdf(selectedOrders)}
+                        className="px-3 py-1.5 bg-surface text-ink text-[10px] font-mono font-black uppercase border-2 border-line hover:border-accent hover:text-accent transition-all flex items-center gap-1.5"
+                        title="Exportar PDF del reporte con estas piezas"
+                      >
+                        <FileText size={13} /> Reporte PDF ({selectedOrders.length})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => vision.downloadCsv(selectedOrders)}
+                        className="px-2.5 py-1.5 bg-surface text-ink text-[10px] font-mono font-black uppercase border-2 border-line hover:border-accent hover:text-accent transition-all"
+                        title="Exportar CSV con estas piezas"
+                      >
+                        CSV
+                      </button>
+
+                      {vision.editMode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            selectedOrders.forEach((o) => vision.handleExcludeOrder(o));
+                            clearSelection();
+                          }}
+                          className="px-2.5 py-1.5 bg-danger/20 text-white text-[10px] font-mono font-bold uppercase border-2 border-danger/60 hover:bg-danger transition-all flex items-center gap-1"
+                          title="Excluir las piezas seleccionadas de este reporte"
+                        >
+                          <Trash2 size={12} /> Excluir
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={clearSelection}
+                        className="px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase text-white/70 hover:text-white transition-colors"
+                        title="Deseleccionar todas"
+                      >
+                        Limpiar selección
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Órdenes excluidas del reporte (soft-delete reversible) */}
                 {vision.excludedOrders.length > 0 && (

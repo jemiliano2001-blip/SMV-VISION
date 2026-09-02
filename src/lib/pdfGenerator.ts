@@ -422,3 +422,302 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
     log.warn('No fue posible abrir el preview del PDF', e);
   }
 }
+
+export interface JobTravelerOptions {
+  shopName?: string;
+  customer?: string;
+  filename?: string;
+}
+
+/**
+ * Genera un PDF compilado de Hojas de Maquinado / Job Travelers (Setup Sheets) para piso de taller.
+ * Cada página corresponde a una pieza/orden de maquinado con:
+ * - Vista isométrica 3D o plano en tamaño grande
+ * - Datos técnicos de cajetín (material, dureza, tolerancias, acabado)
+ * - Checklist de calidad para el operador
+ * - Firmas de liberación
+ */
+export async function generateJobTravelersPdf(
+  orders: Order[],
+  options?: JobTravelerOptions
+): Promise<void> {
+  if (!orders || orders.length === 0) return;
+
+  const { default: jsPDF } = await import('jspdf');
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const generatedAt = new Date();
+  const pageW = doc.internal.pageSize.getWidth(); // 595.28 pt
+  const pageH = doc.internal.pageSize.getHeight(); // 841.89 pt
+  const customer = options?.customer ?? 'SUPRAJIT';
+
+  orders.forEach((order, index) => {
+    if (index > 0) {
+      doc.addPage();
+    }
+
+    // ── Header Bar brutalist / industrial ──
+    doc.setFillColor(13, 43, 77); // #0D2B4D
+    doc.rect(0, 0, pageW, 52, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(255, 255, 255);
+    doc.text('SMV MAQUINADOS // HOJA DE RUTA & SETUP CNC', 36, 24);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(200, 215, 235);
+    doc.text(`CLIENTE: ${customer}   |   TRAVELER DE PRODUCCIÓN PISO`, 36, 38);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      `HOJA ${index + 1} DE ${orders.length}   |   ${generatedAt.toLocaleDateString()}`,
+      pageW - 36,
+      30,
+      { align: 'right' }
+    );
+
+    // ── Datos de la Pieza (Caja de Identificación) ──
+    let y = 68;
+
+    // Caja de título de pieza
+    doc.setFillColor(245, 247, 250);
+    doc.rect(36, y, pageW - 72, 48, 'F');
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(1.5);
+    doc.rect(36, y, pageW - 72, 48);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(0, 0, 0);
+    const pieceName = (order.pieza || 'PIEZA SIN NOMBRE').toUpperCase();
+    const pieceLines = doc.splitTextToSize(pieceName, pageW - 190) as string[];
+    doc.text(pieceLines.slice(0, 2), 48, y + 20);
+
+    // Cantidad requerida en grande
+    doc.setFillColor(0, 0, 0);
+    doc.rect(pageW - 136, y, 100, 48, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(255, 255, 255);
+    doc.text('CANT. TOTAL', pageW - 86, y + 16, { align: 'center' });
+    doc.setFontSize(18);
+    const cantidadStr = String(order.cantidad || '1').split('\n')[0] || '1';
+    doc.text(cantidadStr, pageW - 86, y + 38, { align: 'center' });
+
+    y += 56;
+
+    // ── Sub-tarjetas de Metadatos (SO, Parte, Entrega, Material) ──
+    const colW = (pageW - 72) / 4;
+    const ordenStr = String(order.orden || '—').split('\n')[0] || '—';
+    const metaCards = [
+      { label: 'ORDEN (SO / OT)', value: ordenStr },
+      { label: 'N° DE PARTE', value: order.numero_parte || 'VER PLANO' },
+      { label: 'P.O. / REQ', value: order.poNumber || 'S/N' },
+      { label: 'REVISIÓN PLANO', value: order.matchedDrawingRevision ? `REV ${order.matchedDrawingRevision}` : 'ORIGINAL' },
+    ];
+
+    metaCards.forEach((card, i) => {
+      const cardX = 36 + i * colW;
+      doc.setFillColor(255, 255, 255);
+      doc.rect(cardX, y, colW, 32, 'F');
+      doc.setDrawColor(180, 180, 180);
+      doc.setLineWidth(1);
+      doc.rect(cardX, y, colW, 32);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(100, 100, 100);
+      doc.text(card.label, cardX + 6, y + 11);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(0, 0, 0);
+      doc.text(doc.splitTextToSize(card.value, colW - 12)[0] || '', cardX + 6, y + 24);
+    });
+
+    y += 40;
+
+    // ── Imagen Isométrica 3D / Plano y Caja de Material ──
+    const imgSize = 250;
+    const imgX = 36;
+    const detailX = imgX + imgSize + 16;
+    const detailW = pageW - detailX - 36;
+
+    if (order.isometricView) {
+      try {
+        doc.addImage(
+          order.isometricView,
+          jsPdfImageFormat(order.isometricView),
+          imgX,
+          y,
+          imgSize,
+          imgSize
+        );
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(2);
+        doc.rect(imgX, y, imgSize, imgSize);
+
+        // Badge de fuente
+        doc.setFillColor(0, 0, 0);
+        doc.rect(imgX + 4, y + 4, 75, 14, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(255, 255, 255);
+        doc.text(order.isometricSource === 'ai-generated' ? 'VISTA IA 3D' : 'VISTA ISOMÉTRICA', imgX + 8, y + 14);
+      } catch (err) {
+        log.warn('Error al incrustar imagen en traveler', err);
+      }
+    } else {
+      // Placeholder si no tiene plano
+      doc.setFillColor(245, 245, 245);
+      doc.rect(imgX, y, imgSize, imgSize, 'F');
+      doc.setDrawColor(200, 200, 200);
+      doc.setLineWidth(1);
+      doc.rect(imgX, y, imgSize, imgSize);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(120, 120, 120);
+      doc.text('SIN VISTA ISOMÉTRICA', imgX + imgSize / 2, y + imgSize / 2, { align: 'center' });
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.text('CONSULTAR CARPETA DE TALLER', imgX + imgSize / 2, y + imgSize / 2 + 16, { align: 'center' });
+    }
+
+    // ── Panel lateral derecho: Material y Datos de Cajetín ──
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(1.5);
+    doc.setFillColor(255, 255, 255);
+    doc.rect(detailX, y, detailW, imgSize);
+
+    // Encabezado del panel
+    doc.setFillColor(235, 240, 245);
+    doc.rect(detailX, y, detailW, 24, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text('ESPECIFICACIONES TÉCNICAS', detailX + 8, y + 16);
+
+    let specY = y + 36;
+    const specItems = [
+      { k: 'Material:', v: order.material || 'ACERO 1018 / 4140 (CONFIRMAR)' },
+      { k: 'Dureza / Trat:', v: order.dureza || order.tratamiento || 'NATURAL DE MAQUINADO' },
+      { k: 'Acabado Superficial:', v: order.acabado || 'N6 / 63 Ra estándar' },
+      { k: 'Tolerancia General:', v: '± 0.005" / ± 0.13 mm' },
+      { k: 'Archivo CAD/PDF:', v: order.sourcePdfName || 'No adjunto' },
+    ];
+
+    specItems.forEach((item) => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(90, 90, 90);
+      doc.text(item.k, detailX + 8, specY);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(0, 0, 0);
+      const valLines = doc.splitTextToSize(item.v, detailW - 16) as string[];
+      doc.text(valLines[0] || '—', detailX + 8, specY + 11);
+      specY += 24;
+    });
+
+    // Cuadro de notas del maquinista en el panel
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(1);
+    doc.setFillColor(250, 250, 250);
+    doc.rect(detailX + 8, specY + 4, detailW - 16, imgSize - (specY - y) - 12, 'F');
+    doc.rect(detailX + 8, specY + 4, detailW - 16, imgSize - (specY - y) - 12);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(120, 120, 120);
+    doc.text('NOTAS / HERRAMIENTAS ASIGNADAS:', detailX + 12, specY + 16);
+
+    y += imgSize + 16;
+
+    // ── Checklist de Calidad y Liberación de Maquinado ──
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(1.5);
+    doc.rect(36, y, pageW - 72, 130);
+
+    doc.setFillColor(0, 0, 0);
+    doc.rect(36, y, pageW - 72, 20, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(255, 255, 255);
+    doc.text('CONTROL DE CALIDAD EN PISO & LIBERACIÓN DE MAQUINADO', 44, y + 14);
+
+    const checklistItems = [
+      '1. Material en bruto, dimensiones iniciales y aleación verificados contra plano.',
+      '2. Montaje y fijación en mordazas / prensa rígida, cero de pieza (G54) comprobado.',
+      '3. Herramental CNC calibrado (correctores de altura y radio de inserto).',
+      '4. Inspección de primera pieza (First Article Inspection) con vernier / micrómetro.',
+      '5. Rebabado, chaflanes, limpieza y conteo de piezas terminadas al 100%.',
+    ];
+
+    let checkY = y + 36;
+    checklistItems.forEach((text) => {
+      doc.setDrawColor(0, 0, 0);
+      doc.setLineWidth(1.5);
+      doc.rect(48, checkY - 8, 10, 10);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(0, 0, 0);
+      doc.text(text, 66, checkY);
+      checkY += 18;
+    });
+
+    y += 142;
+
+    // ── Firmas de Operador e Inspector ──
+    const signBoxW = (pageW - 72 - 24) / 3;
+    const signBoxes = ['OPERADOR MAQUINISTA', 'INSPECCIÓN CALIDAD', 'FECHA DE LIBERACIÓN'];
+    signBoxes.forEach((label, i) => {
+      const boxX = 36 + i * (signBoxW + 12);
+      doc.setDrawColor(150, 150, 150);
+      doc.setLineWidth(1);
+      doc.line(boxX, y + 24, boxX + signBoxW, y + 24);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(100, 100, 100);
+      doc.text(label, boxX + signBoxW / 2, y + 34, { align: 'center' });
+    });
+
+    // Footer de página
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(140, 140, 140);
+    doc.text(
+      `DOCUMENTO INTERNO DE PRODUCCIÓN — SMV VISION // GENERADO: ${generatedAt.toLocaleString()}`,
+      36,
+      pageH - 20
+    );
+    doc.text(`PÁG. ${index + 1} / ${orders.length}`, pageW - 36, pageH - 20, { align: 'right' });
+  });
+
+  const cleanPieza = (orders[0]?.pieza || 'pieza')
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, '_')
+    .toLowerCase();
+
+  const filename =
+    options?.filename ??
+    (orders.length === 1
+      ? `traveler_${cleanPieza}.pdf`
+      : `travelers_maquinado_${generatedAt.toISOString().split('T')[0]}.pdf`);
+
+  doc.save(filename);
+
+  try {
+    if (typeof window !== 'undefined' && typeof window.open === 'function') {
+      const blobUrl = doc.output('bloburl');
+      window.open(blobUrl, '_blank');
+    }
+  } catch (e) {
+    log.warn('No fue posible abrir el preview del Traveler PDF', e);
+  }
+}

@@ -138,6 +138,48 @@ export function useOdooLineActions({
     [ensureCatalogViews, resolveLineLink, bridge, onSendToReport],
   );
 
+  const handleSendOrderToReport = useCallback(
+    async (order: OdooOrderView) => {
+      setSendingKey(order.id);
+      setLineActionError(null);
+
+      const library = await ensureCatalogViews();
+      if (!library) {
+        setSendingKey(null);
+        return;
+      }
+
+      let sentCount = 0;
+      let skippedCount = 0;
+
+      for (let idx = 0; idx < order.order_lines.length; idx++) {
+        const line = order.order_lines[idx];
+        const pending = line.qty_pending_from_pickings ?? line.qty_pending;
+        if (pending <= 0) continue;
+
+        const link = resolveLineLink(order, line, idx, library);
+        const reportSnap = bridge.getReportSnapshot(link);
+        if (!reportSnap || !reportSnap.pdfUrl) {
+          skippedCount++;
+          continue;
+        }
+
+        try {
+          await onSendToReport(link);
+          sentCount++;
+        } catch {
+          // continue with other lines
+        }
+      }
+
+      if (sentCount === 0 && skippedCount > 0) {
+        setLineActionError('Ninguna línea de esta orden tiene plano con PDF descargable asociado.');
+      }
+      setSendingKey(null);
+    },
+    [ensureCatalogViews, resolveLineLink, bridge, onSendToReport]
+  );
+
   const handleOpenBibliotecaForLine = useCallback(
     (order: OdooOrderView, line: OdooOrderLineView, lineIdx: number) => {
       const library = catalog.views;
@@ -166,6 +208,7 @@ export function useOdooLineActions({
     resolveLineLink,
     handlePrintLinePlano,
     handleSendLineToReport,
+    handleSendOrderToReport,
     handleOpenBibliotecaForLine,
   };
 }

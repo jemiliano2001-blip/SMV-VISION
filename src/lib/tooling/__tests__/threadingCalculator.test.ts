@@ -5,6 +5,7 @@ import {
   metricThreadHeight,
   suggestedPassCountForPitch,
   threadLeadAngleDegrees,
+  calculateThreadingShim,
   generateHaasG76Block,
 } from '../threadingCalculator';
 
@@ -21,10 +22,11 @@ describe('Threading depth calculations (ISO 68-1 / ASME B1.1 formulas)', () => {
     expect(minorDiameter).toBeCloseTo(10.106, 2);
   });
 
-  it('computes external and internal thread depth from pitch alone', () => {
+  it('computes external and internal thread depth from pitch in mm and inches', () => {
     const result = calculateThreadDepths({ pitchMm: 1.5 });
     expect(result.depthExternalMm).toBeCloseTo(0.6134 * 1.5, 4);
     expect(result.depthInternalMm).toBeCloseTo(0.5413 * 1.5, 4);
+    expect(result.depthExternalInch).toBeCloseTo((0.6134 * 1.5) / 25.4, 4);
   });
 
   it('computes the fundamental triangle height H = (sqrt(3)/2) * P', () => {
@@ -46,6 +48,20 @@ describe('Threading depth calculations (ISO 68-1 / ASME B1.1 formulas)', () => {
     expect(calculateThreadDepths({ pitchMm: 0.5 }).infeedMethod).toBe('radial');
     expect(calculateThreadDepths({ pitchMm: 2.0 }).infeedMethod).toBe('flanco_modificado_29_30');
     expect(calculateThreadDepths({ pitchMm: 4.0 }).infeedMethod).toBe('alternado');
+  });
+
+  it('provides a shim recommendation based on lead angle', () => {
+    const normalShim = calculateThreadingShim(1.4);
+    expect(normalShim.recommendedShimAngle).toBe(1.5);
+    expect(normalShim.shimCodeCarmexOrVardex).toContain('1.5');
+
+    const highLeadShim = calculateThreadingShim(2.8);
+    expect(highLeadShim.recommendedShimAngle).toBe(2.5);
+    expect(highLeadShim.shimCodeCarmexOrVardex).toContain('2.5');
+
+    const leftHandShim = calculateThreadingShim(1.4, true, false);
+    expect(leftHandShim.recommendedShimAngle).toBe(-1.5);
+    expect(leftHandShim.shimCodeCarmexOrVardex).toContain('1.5N');
   });
 });
 
@@ -75,7 +91,7 @@ describe('suggestedPassCountForPitch', () => {
 });
 
 describe('generateHaasG76Block', () => {
-  it('computes the correct final diameter for an external thread', () => {
+  it('computes the correct final diameter for an external thread in metric mode', () => {
     const block = generateHaasG76Block({
       isExternal: true,
       majorDiameterMm: 20,
@@ -89,6 +105,8 @@ describe('generateHaasG76Block', () => {
       firstPassDepthMm: 0.3,
       startZMm: 2,
       endZMm: -20,
+      format: 'fanuc_two_line',
+      unitSystem: 'metric',
     });
     // Diámetro final rosca exterior = mayor - 2*profundidad = 20 - 1.84 = 18.16
     expect(block).toContain('X18.160');
@@ -110,8 +128,39 @@ describe('generateHaasG76Block', () => {
       firstPassDepthMm: 0.25,
       startZMm: 2,
       endZMm: -15,
+      format: 'fanuc_two_line',
+      unitSystem: 'metric',
     });
     // Rosca interior: diámetro final = menor + 2*profundidad = 10.5 + 1.62 = 12.12
     expect(block).toContain('X12.120');
+  });
+
+  it('generates Haas Single-Line G76 in inches G20 for 3/4-10 UNC', () => {
+    const block = generateHaasG76Block({
+      isExternal: true,
+      majorDiameterMm: 19.05,
+      pitchMm: 2.54,
+      depthMm: 1.374,
+      finishingPasses: 2,
+      chamferCode: 0,
+      tipAngleDegrees: 60,
+      minDepthPerPassMm: 0.025,
+      finishAllowanceMm: 0.025,
+      firstPassDepthMm: 0.3,
+      startZMm: 3.81,
+      endZMm: -28.575,
+      format: 'haas_single',
+      unitSystem: 'inch',
+      majorDiameterInch: 0.750,
+      tpi: 10,
+      depthInch: 0.0541,
+      firstPassDepthInch: 0.0120,
+      startZInch: 0.150,
+      endZInch: -1.125,
+    });
+
+    expect(block).toContain('G20 (MODO PULGADAS)');
+    expect(block).toContain('G76 X0.6418 Z-1.1250 K0.0541 D0.0120 F0.1000 A60');
+    expect(block).toContain('G97 S650 M03');
   });
 });

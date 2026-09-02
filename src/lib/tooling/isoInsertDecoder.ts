@@ -129,6 +129,13 @@ function generateSvgPoints(shape: InsertShapeCode): { x: number; y: number }[] {
  */
 function mmToShopFraction(mm: number): string {
   const inches = mm / 25.4;
+  // Casos comunes de radio de punta en pulgadas
+  if (Math.abs(mm - 0.4) < 0.05) return '1/64" (0.0156")';
+  if (Math.abs(mm - 0.8) < 0.05) return '1/32" (0.0312")';
+  if (Math.abs(mm - 1.2) < 0.05) return '3/64" (0.0469")';
+  if (Math.abs(mm - 1.6) < 0.05) return '1/16" (0.0625")';
+  if (Math.abs(mm - 0.2) < 0.05) return '0.008"';
+
   const denominator = 64;
   const numerator = Math.max(1, Math.round(inches * denominator));
   const divisor = gcd(numerator, denominator);
@@ -298,6 +305,16 @@ function buildDecodedInsert(input: BuildDecodedInsertInput): DecodedInsert {
     compatibleHolders.push('Barra de Mandrinar S20S-SDUCR 11', 'Porta Exterior SDJCR 2020 K11');
   } else if (shapeChar === 'A' && clearanceChar === 'P') {
     compatibleHolders.push('Cabezal de Fresado BAP 300R (Dia 1" a 2")', 'Fresa de Escuadra 90° APKT 1604');
+  } else if (shapeChar === 'S' && clearanceChar === 'E') {
+    compatibleHolders.push('Cabezal Planeador 45° (Haas CAT40 Dia 2" a 4")', 'Fresa Frontal SEKT / SEHT 1204');
+  } else if (shapeChar === 'R' && clearanceChar === 'P') {
+    compatibleHolders.push('Cabezal Toroidal de Copiado (Dia 1" a 2")', 'Fresa de Botón RPMT 1003 / 1204');
+  } else if (shapeChar === 'S' && clearanceChar === 'N') {
+    compatibleHolders.push('MSSNR / MSSNL 2525 M12 (Zanco 1")', 'MSKNR 16-4D (Haas ST)', 'PSSNR 2525 M12');
+  } else if (shapeChar === 'T') {
+    compatibleHolders.push('MTJNR / MTJNL 2525 M16 (Zanco 1")', 'Barra de Mandrinar STFCR 2020', 'PTGNR 16-3D (Haas ST)');
+  } else if (shapeChar === 'V') {
+    compatibleHolders.push('SVJCR / SVJCL 2020 K16 (Zanco 3/4")', 'SVVCN 2525 M16 (Zanco 1")', 'Barra Interior SVUCR 16Q');
   }
 
   const recommendedOperations: string[] = [];

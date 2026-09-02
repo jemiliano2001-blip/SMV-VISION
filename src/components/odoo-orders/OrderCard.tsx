@@ -55,6 +55,7 @@ export interface OrderCardProps {
   }) => void;
   onOpenBiblioteca: (order: OdooOrderView, line: OdooOrderLineView, idx: number) => void;
   onExportDeliverySlip: (order: OdooOrderView) => void;
+  onSendOrderToReport?: (order: OdooOrderView) => void | Promise<void>;
 }
 
 export function OrderCard({
@@ -68,6 +69,7 @@ export function OrderCard({
   onToggleSelectAllInOrder,
   onPrintLine,
   onSendLineToReport,
+  onSendOrderToReport,
   onQuickPurchase,
   onOpenBiblioteca,
   onExportDeliverySlip,
@@ -115,7 +117,24 @@ export function OrderCard({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3 sm:gap-4 ml-auto sm:ml-0">
+        <div className="flex items-center gap-2 sm:gap-3 ml-auto sm:ml-0 flex-wrap">
+          {/* Badge de Urgencia / Envejecimiento */}
+          {ageDays !== null && (
+            <span
+              className={`px-2 py-1 text-[9px] sm:text-[10px] font-black uppercase tracking-widest font-mono flex items-center gap-1 ${
+                ageDays > 14
+                  ? 'bg-danger text-white border border-danger/40'
+                  : ageDays >= 8
+                  ? 'bg-warn text-bg border border-warn/40'
+                  : 'bg-ok/20 text-ok border border-ok/40'
+              }`}
+              title={`Antigüedad de la orden: ${ageDays} días`}
+            >
+              {ageDays > 14 ? <AlertTriangle size={11} /> : null}
+              {ageDays > 14 ? `Vencida (+${ageDays}d)` : ageDays >= 8 ? `Crítica (${ageDays}d)` : `En tiempo (${ageDays}d)`}
+            </span>
+          )}
+
           <span className={`px-2 py-1 text-[9px] sm:text-[10px] font-black uppercase tracking-widest font-mono ${badge.cls}`}>
             {badge.label}
           </span>
@@ -134,6 +153,29 @@ export function OrderCard({
             <Truck size={13} />
             <span className="text-[9px] sm:text-[10px] font-black tracking-widest uppercase">Remisión</span>
           </Button>
+
+          {onSendOrderToReport && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={
+                sendingKey === order.id ||
+                !order.order_lines.some((l) => (l.qty_pending_from_pickings ?? l.qty_pending) > 0)
+              }
+              onClick={() => onSendOrderToReport(order)}
+              className="flex items-center gap-1.5 bg-accent text-bg hover:bg-accent/80 border-accent h-8 px-2.5 shadow-hard transition-all active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-40"
+              title="Enviar todas las líneas activas de esta orden al Reporte de auditoría"
+            >
+              {sendingKey === order.id ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Send size={12} />
+              )}
+              <span className="text-[9px] sm:text-[10px] font-black tracking-widest uppercase">
+                {sendingKey === order.id ? 'Enviando…' : 'A Reporte'}
+              </span>
+            </Button>
+          )}
         </div>
       </div>
 

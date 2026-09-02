@@ -24,7 +24,7 @@ import {
 import { recordAnalysisRunFireAndForget } from '../lib/firebase/analysisRuns';
 import { log } from '../lib/log';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
-import { generateReportPdf, generateSingleOrderPdf } from '../lib/pdfGenerator';
+import { generateReportPdf, generateSingleOrderPdf, generateJobTravelersPdf } from '../lib/pdfGenerator';
 import type { ToolcribAttachment } from '../components/ToolcribLibraryPanel';
 import { getReportDrawingSnapshot } from '../lib/orderDrawingBridge';
 import { downloadOrdersCsv } from '../lib/excelExport';
@@ -124,8 +124,9 @@ export interface VisionAnalysisHook {
   aiIsoGeneratingKey: string | null;
   isAiIsoGenerating: (order: Order) => boolean;
   // Export actions
-  downloadPdf: () => void;
-  downloadCsv: () => void;
+  downloadPdf: (customOrders?: Order[]) => void;
+  downloadCsv: (customOrders?: Order[]) => void;
+  downloadTravelersPdf: (targetOrders?: Order[]) => void;
   downloadSingleOrderPdf: (order: Order) => void;
   copyResults: () => Promise<void>;
   // Edit handlers
@@ -468,18 +469,29 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     }
   }, [results]);
 
-  const downloadCsv = useCallback(() => {
-    if (!results) return;
-    downloadOrdersCsv(results);
+  const downloadCsv = useCallback((customOrders?: Order[]) => {
+    const ordersToExport = customOrders ?? results;
+    if (!ordersToExport || ordersToExport.length === 0) return;
+    downloadOrdersCsv(ordersToExport);
   }, [results]);
 
-  const downloadPdf = useCallback(() => {
-    if (!results) return;
-    generateReportPdf(results, {
+  const downloadPdf = useCallback((customOrders?: Order[]) => {
+    const ordersToExport = customOrders ?? results;
+    if (!ordersToExport || ordersToExport.length === 0) return;
+    generateReportPdf(ordersToExport, {
       hotStampRefImage: hotStampRefImageRef.current,
     }).catch((e) => {
       log.error('[smv-vision] generateReportPdf falló', e);
       setError('No fue posible generar el PDF del reporte.');
+    });
+  }, [results]);
+
+  const downloadTravelersPdf = useCallback((targetOrders?: Order[]) => {
+    const ordersToExport = targetOrders ?? results;
+    if (!ordersToExport || ordersToExport.length === 0) return;
+    generateJobTravelersPdf(ordersToExport).catch((e) => {
+      log.error('[smv-vision] generateJobTravelersPdf falló', e);
+      setError('No fue posible generar las hojas de maquinado.');
     });
   }, [results]);
 
@@ -778,6 +790,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     buildDropHandlers,
     downloadPdf,
     downloadCsv,
+    downloadTravelersPdf,
     downloadSingleOrderPdf,
     copyResults,
     snapshotOriginalOnce: editable.snapshotOriginalOnce,

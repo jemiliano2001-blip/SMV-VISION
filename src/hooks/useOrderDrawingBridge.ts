@@ -14,6 +14,7 @@ import {
   viewFromSnapshot,
 } from '../lib/orderDrawingBridge';
 import type { PieceMatchSignals } from '../lib/matching';
+import { canonicalPartNumber } from '../lib/toolcribCatalog';
 import { listPartAliases, savePartAlias, type PartAliasDoc } from '../lib/firebase/aliases';
 import type { OrderDrawingLink, ToolcribActiveDrawingView } from '../types';
 
@@ -89,10 +90,12 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
       // guardamos la descripción completa, nunca una coincidencia parcial.
       const pattern = (base.numeroParte || base.pieza || '').trim();
       if (pattern) {
+        const canonical = canonicalPartNumber(view.partNumber);
+        const drawingIdToSave = next.cadDrawing?.drawingId ?? view.drawingId;
         void savePartAlias({
           pattern,
-          partNumber: view.partNumber,
-          drawingId: view.drawingId,
+          partNumber: canonical,
+          drawingId: drawingIdToSave,
         }).then((res) => {
           if (res.ok) {
             setAliases((cur) => [
@@ -100,8 +103,8 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
               {
                 id: res.value.id,
                 pattern,
-                partNumber: view.partNumber,
-                drawingId: view.drawingId,
+                partNumber: canonical,
+                drawingId: drawingIdToSave,
                 createdAtUTC: new Date().toISOString(),
                 createdByUid: null,
               },

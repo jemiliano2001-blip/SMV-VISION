@@ -287,7 +287,11 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
         };
       }),
     );
-    setWorkshopPdfs((prev) => [...prev, ...uploads]);
+    setWorkshopPdfs((prev) => {
+      const next = [...prev, ...uploads];
+      workshopPdfsRef.current = next;
+      return next;
+    });
     setError(null);
   }, []);
 
@@ -314,7 +318,11 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
 
   const removeFile = useCallback((type: 'workshop', fileId?: string) => {
     if (type === 'workshop') {
-      setWorkshopPdfs((prev) => prev.filter((pdf) => pdf.id !== fileId));
+      setWorkshopPdfs((prev) => {
+        const next = prev.filter((pdf) => pdf.id !== fileId);
+        workshopPdfsRef.current = next;
+        return next;
+      });
       if (fileId) {
         setWorkshopLoadingStates((prev) => {
           const next = { ...prev };
@@ -327,6 +335,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
           }
           const next = { ...prev };
           delete next[fileId];
+          toolcribPdfToDrawingRef.current = next;
           return next;
         });
       }
@@ -348,29 +357,32 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
       ? attachment.sourcePath
       : attachment.displayName;
 
-    setWorkshopPdfs((prevPdfs) => [
-      ...prevPdfs,
-      {
-        id: pdfId,
-        name: attachment.displayName,
-        relativePath,
-        dataUrl: attachment.dataUrl,
-      },
-    ]);
+    const newUpload: WorkshopPdfUpload = {
+      id: pdfId,
+      name: attachment.displayName,
+      relativePath,
+      dataUrl: attachment.dataUrl,
+    };
 
+    setWorkshopPdfs((prevPdfs) => [...prevPdfs, newUpload]);
     setToolcribPdfToDrawing((prev) => ({ ...prev, [pdfId]: attachment.drawingId }));
+    workshopPdfsRef.current = [...workshopPdfsRef.current, newUpload];
+    toolcribPdfToDrawingRef.current = { ...toolcribPdfToDrawingRef.current, [pdfId]: attachment.drawingId };
     setError(null);
   }, [attachedToolcribDrawingIds]);
 
   const removeSeededBridgeLink = useCallback((key: string) => {
     setSeededBridgeLinks((prev) => prev.filter((l) => l.key !== key));
+    seededBridgeLinksRef.current = seededBridgeLinksRef.current.filter((l) => l.key !== key);
   }, []);
 
   const clearSeedWarning = useCallback(() => setSeedWarning(null), []);
 
   const seedFromBridgeLinks = useCallback(async (links: readonly OrderDrawingLink[]): Promise<{ errors: string[] }> => {
-    const alreadyAttached = new Set(Object.values(toolcribPdfToDrawing));
+    const alreadyAttached = new Set(Object.values(toolcribPdfToDrawingRef.current));
     const errors: string[] = [];
+    const newUploads: WorkshopPdfUpload[] = [];
+    const newDrawingMap: Record<string, string> = {};
 
     for (const link of links) {
       const snap = getReportDrawingSnapshot(link);
@@ -388,16 +400,29 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
           const displayName = `${snap.partNumber.trim()} (Rev ${snap.revision.trim()}).pdf`;
           const pdfId = `toolcrib-${snap.drawingId}-${crypto.randomUUID()}`;
           const relativePath = snap.sourcePath.length > 0 ? snap.sourcePath : displayName;
-          setWorkshopPdfs((prev) => [
-            ...prev,
-            { id: pdfId, name: displayName, relativePath, dataUrl },
-          ]);
-          setToolcribPdfToDrawing((prev) => ({ ...prev, [pdfId]: snap.drawingId }));
+          newUploads.push({
+            id: pdfId,
+            name: displayName,
+            relativePath,
+            dataUrl,
+          });
+          newDrawingMap[pdfId] = snap.drawingId;
           alreadyAttached.add(snap.drawingId);
         } catch {
           errors.push(`No se pudo descargar ${snap.partNumber}`);
         }
       }
+    }
+
+    if (newUploads.length > 0) {
+      setWorkshopPdfs((prev) => [...prev, ...newUploads]);
+      setToolcribPdfToDrawing((prev) => ({ ...prev, ...newDrawingMap }));
+      // Sincronización síncrona de refs:
+      // Si el caller llama vision.extractInfo() inmediatamente tras resolver
+      // seedFromBridgeLinks(), las refs deben tener los nuevos PDFs antes de
+      // que React complete el re-render.
+      workshopPdfsRef.current = [...workshopPdfsRef.current, ...newUploads];
+      toolcribPdfToDrawingRef.current = { ...toolcribPdfToDrawingRef.current, ...newDrawingMap };
     }
 
     setSeededBridgeLinks((prev) => {
@@ -407,6 +432,11 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
       }
       return Array.from(byKey.values());
     });
+    const seededMap = new Map(seededBridgeLinksRef.current.map((l) => [l.key, l]));
+    for (const link of links) {
+      seededMap.set(link.key, link);
+    }
+    seededBridgeLinksRef.current = Array.from(seededMap.values());
 
     if (errors.length > 0) {
       setSeedWarning(errors.join(' · '));
@@ -418,7 +448,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     }
 
     return { errors };
-  }, [toolcribPdfToDrawing, results]);
+  }, [results]);
 
   const copyResults = useCallback(async () => {
     if (!results) return;
@@ -499,6 +529,8 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
       if (step1Result.newUploads.length > 0) {
         setWorkshopPdfs((prev) => [...prev, ...step1Result.newUploads]);
         setToolcribPdfToDrawing((prev) => ({ ...prev, ...step1Result.newDrawingMap }));
+        workshopPdfsRef.current = [...workshopPdfsRef.current, ...step1Result.newUploads];
+        toolcribPdfToDrawingRef.current = { ...toolcribPdfToDrawingRef.current, ...step1Result.newDrawingMap };
       }
 
       const ordersList = step1Result.ordersList;

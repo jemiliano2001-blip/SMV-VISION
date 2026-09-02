@@ -7,12 +7,14 @@
 import {
   extractLibrarySignals,
   extractOrderSignals,
+  isIsoDrawingView,
   MIN_BLUEPRINT_MATCH_SCORE,
   selectCadDrawingForPrint,
   selectLibraryDrawingMatch,
   type PieceMatchSignals,
 } from './matching';
 import { normalizeAliasKey } from './aliasKey';
+import { canonicalPartNumber } from './toolcribCatalog';
 import type {
   OrderDrawingLink,
   OrderDrawingSnapshot,
@@ -93,13 +95,27 @@ export function resolveOrderDrawingLink(
     const matchedAlias = aliases.find((a) => aliasCandidates.has(normalizeAliasKey(a.pattern)));
 
     if (matchedAlias) {
+      const canonicalAlias = canonicalPartNumber(matchedAlias.partNumber).toUpperCase();
       const aliasView = library.find(
         (v) =>
           (matchedAlias.drawingId && v.drawingId === matchedAlias.drawingId) ||
-          v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase(),
+          v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase() ||
+          canonicalPartNumber(v.partNumber).toUpperCase() === canonicalAlias,
       );
+
       if (aliasView) {
-        const snap = snapshotFromView(aliasView);
+        const canonical = canonicalPartNumber(aliasView.partNumber).toUpperCase();
+        // Separar CAD e ISO: cadDrawing NUNCA debe ser un ISO (el ISO no se imprime como OT).
+        const cadView = !isIsoDrawingView(aliasView)
+          ? aliasView
+          : (library.find((v) => !isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical) ?? null);
+        const isoView = isIsoDrawingView(aliasView)
+          ? aliasView
+          : (library.find((v) => isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical) ?? null);
+
+        const cadSnap = cadView ? snapshotFromView(cadView) : null;
+        const reportSnap = isoView ? snapshotFromView(isoView) : cadSnap;
+
         return {
           key,
           orderId: input.orderId,
@@ -109,8 +125,8 @@ export function resolveOrderDrawingLink(
           pieza: input.pieza,
           numeroParte: input.numeroParte,
           qtyPending: input.qtyPending,
-          cadDrawing: snap,
-          reportDrawing: snap,
+          cadDrawing: cadSnap,
+          reportDrawing: reportSnap,
           matchScore: 100,
           matchedAt,
           status: 'manual',
@@ -162,9 +178,7 @@ export function applyManualDrawingToLink(
   matchedAt: string = new Date().toISOString(),
 ): OrderDrawingLink {
   const snap = snapshotFromView(view);
-  const isIso =
-    view.partNumber.toLowerCase().includes('.iso') ||
-    (view.sourcePath ?? '').toLowerCase().includes('.iso');
+  const isIso = isIsoDrawingView(view);
 
   if (isIso) {
     return {

@@ -125,6 +125,95 @@ describe('resolveOrderDrawingLink', () => {
     );
     expect(a.key).toBe(b.key);
   });
+
+  it('separates CAD and ISO when alias points to an ISO drawing and CAD exists', () => {
+    const link = resolveOrderDrawingLink(
+      {
+        orderId: 'o1',
+        lineIndex: 0,
+        soNumber: 'SO',
+        poNumber: '',
+        pieza: 'CUSTOM PIECE',
+        numeroParte: '',
+        qtyPending: 1,
+      },
+      [cad, iso],
+      undefined,
+      undefined,
+      [
+        {
+          pattern: 'CUSTOM PIECE',
+          partNumber: '90-1012-05.ISO',
+          drawingId: 'iso-1',
+        },
+      ],
+    );
+
+    expect(link.status).toBe('manual');
+    expect(link.matchScore).toBe(100);
+    expect(link.cadDrawing?.drawingId).toBe('cad-1');
+    expect(link.reportDrawing?.drawingId).toBe('iso-1');
+    expect(getCadDrawingSnapshot(link)?.drawingId).toBe('cad-1');
+    expect(getReportDrawingSnapshot(link)?.drawingId).toBe('iso-1');
+  });
+
+  it('sets cadDrawing to null when alias points to an ISO drawing but no CAD exists', () => {
+    const link = resolveOrderDrawingLink(
+      {
+        orderId: 'o1',
+        lineIndex: 0,
+        soNumber: 'SO',
+        poNumber: '',
+        pieza: 'ISO ONLY PIECE',
+        numeroParte: '',
+        qtyPending: 1,
+      },
+      [iso],
+      undefined,
+      undefined,
+      [
+        {
+          pattern: 'ISO ONLY PIECE',
+          partNumber: '90-1012-05.ISO',
+          drawingId: 'iso-1',
+        },
+      ],
+    );
+
+    expect(link.status).toBe('manual');
+    expect(link.cadDrawing).toBeNull();
+    expect(link.reportDrawing?.drawingId).toBe('iso-1');
+    expect(getCadDrawingSnapshot(link)).toBeNull();
+    expect(getReportDrawingSnapshot(link)?.drawingId).toBe('iso-1');
+  });
+
+  it('adopts ISO for report when alias points to a CAD drawing and ISO exists', () => {
+    const link = resolveOrderDrawingLink(
+      {
+        orderId: 'o1',
+        lineIndex: 0,
+        soNumber: 'SO',
+        poNumber: '',
+        pieza: 'CAD FIRST PIECE',
+        numeroParte: '',
+        qtyPending: 1,
+      },
+      [cad, iso],
+      undefined,
+      undefined,
+      [
+        {
+          pattern: 'CAD FIRST PIECE',
+          partNumber: '90-1012-05',
+          drawingId: 'cad-1',
+        },
+      ],
+    );
+
+    expect(link.status).toBe('manual');
+    expect(link.cadDrawing?.drawingId).toBe('cad-1');
+    expect(link.reportDrawing?.drawingId).toBe('iso-1');
+  });
 });
 
 describe('applyManualDrawingToLink', () => {

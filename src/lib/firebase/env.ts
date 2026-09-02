@@ -135,10 +135,11 @@ export function getAppCheckConfig(): AppCheckClientConfig | null {
   if (!siteKey) {
     return null;
   }
+  const isDev = Boolean(import.meta.env.DEV);
   return {
     recaptchaSiteKey: siteKey,
-    debugToken: readEnvOptional('VITE_APPCHECK_DEBUG_TOKEN'),
-    debugEnabled: parseBooleanEnv(import.meta.env.VITE_APPCHECK_DEBUG),
+    debugToken: isDev ? readEnvOptional('VITE_APPCHECK_DEBUG_TOKEN') : undefined,
+    debugEnabled: isDev && parseBooleanEnv(import.meta.env.VITE_APPCHECK_DEBUG),
   };
 }
 

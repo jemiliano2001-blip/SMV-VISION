@@ -45,7 +45,7 @@ function ensureAppCheckInitialized(app: FirebaseApp): void {
   }
 
   try {
-    if (config.debugEnabled || config.debugToken) {
+    if (import.meta.env.DEV && (config.debugEnabled || config.debugToken)) {
       // Debe fijarse ANTES de initializeAppCheck (lee la global al construirse).
       (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
         config.debugToken ?? true;

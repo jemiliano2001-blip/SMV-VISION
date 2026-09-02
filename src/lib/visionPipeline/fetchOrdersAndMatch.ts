@@ -14,9 +14,11 @@ import {
   extractBlueprintSignals,
   extractLibrarySignals,
   extractOrderSignals,
+  isIsoDrawingView,
   scorePieceMatch,
   selectLibraryDrawingMatch,
 } from '../matching';
+import { canonicalPartNumber } from '../toolcribCatalog';
 import { isHotStampCatalogEntry, isHotStampPiece } from '../hotStamp';
 import { fetchPdfAsDataUrl } from '../fetchPdf';
 import { rasterizeAndNormalizePdf } from '../documentAnalysis/pdfWorkerClient';
@@ -193,21 +195,30 @@ export async function fetchOrdersAndMatch({
           aliasCandidates.has(normalizeAliasKey(a.pattern)),
         );
         if (matchedAlias) {
+          const canonicalAlias = canonicalPartNumber(matchedAlias.partNumber).toUpperCase();
           const aliasView = library.find(
             (v) =>
               (matchedAlias.drawingId && v.drawingId === matchedAlias.drawingId) ||
-              v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase(),
+              v.partNumber.toUpperCase() === matchedAlias.partNumber.toUpperCase() ||
+              canonicalPartNumber(v.partNumber).toUpperCase() === canonicalAlias,
           );
           if (aliasView) {
+            // Regla ISO-first para reporte: si el alias apuntaba a CAD pero la pieza tiene ISO,
+            // preferir el ISO para la inspección visual.
+            const canonical = canonicalPartNumber(aliasView.partNumber).toUpperCase();
+            const reportView = isIsoDrawingView(aliasView)
+              ? aliasView
+              : (library.find((v) => isIsoDrawingView(v) && canonicalPartNumber(v.partNumber).toUpperCase() === canonical) ?? aliasView);
+
             matchByOrder.set(order, {
-              drawingId: aliasView.drawingId,
-              partId: aliasView.partId,
+              drawingId: reportView.drawingId,
+              partId: reportView.partId,
               score: 100,
-              revision: aliasView.revision,
-              stlUrl: aliasView.stlUrl,
+              revision: reportView.revision,
+              stlUrl: reportView.stlUrl,
               matchSource: 'alias',
             });
-            queueFetch(aliasView);
+            queueFetch(reportView);
             continue;
           }
         }

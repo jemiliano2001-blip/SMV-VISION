@@ -28,6 +28,15 @@ export function parseBoundingBox(value: unknown): BoundingBox | null {
   return [nums[0], nums[1], nums[2], nums[3]];
 }
 
+export function sanitizeMetaString(value: unknown, maxLength = 60): string | null {
+  const str = asString(value);
+  if (!str) return null;
+  if (str.length > maxLength) return null;
+  if (/^(null|n\/a|ninguno|ninguna|none|no especificado)$/i.test(str)) return null;
+  if (/(regla|par[aá]metro|inventar|descripci[oó]n|opcional|recomendado)/i.test(str)) return null;
+  return str;
+}
+
 export function parseBlueprintResponse(text: string): BlueprintSpec[] {
   const parsed = JSON.parse(text) as unknown;
   if (!Array.isArray(parsed)) {
@@ -42,10 +51,10 @@ export function parseBlueprintResponse(text: string): BlueprintSpec[] {
     specs.push({
       pieza_detectada: piece,
       isometricBoundingBox: box,
-      material: asString(item.material) || null,
-      dureza: asString(item.dureza) || null,
-      tratamiento: asString(item.tratamiento) || null,
-      acabado: asString(item.acabado) || null,
+      material: sanitizeMetaString(item.material),
+      dureza: sanitizeMetaString(item.dureza),
+      tratamiento: sanitizeMetaString(item.tratamiento),
+      acabado: sanitizeMetaString(item.acabado),
     });
   }
   return specs;

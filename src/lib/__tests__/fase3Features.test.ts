@@ -26,19 +26,25 @@ describe('parseBlueprintResponse with title block metadata', () => {
     expect(specs[0].acabado).toBe('RECTIFICADO');
   });
 
-  it('handles blueprints without optional metadata gracefully', () => {
+  it('sanitizes runaway LLM reasoning or prompt leakage into null', () => {
     const rawJson = JSON.stringify([
       {
-        pieza_detectada: 'PLACA BASE',
-        isometricBoundingBox: [50, 50, 800, 800],
+        pieza_detectada: 'BLADE CUTTER',
+        isometricBoundingBox: [100, 150, 600, 750],
+        material: '4150',
+        dureza: 'null',
+        tratamiento:
+          'PARAMETRO DETECTADO POR COLORACIÓN OSCURA (OPCIONAL O NO ESPECIFICADO EN TEXTO DETALLADO, RECOMENDADO DEJAR NULL SI NO SE ASEGURA CON TEXTO DIRECTO - POR REGLA 10: NULL EN CASO DE DUDA NO INVENTAR DESCRIPCIÓN EXTRAVAGANTE)',
+        acabado: 'none',
       },
     ]);
 
     const specs = parseBlueprintResponse(rawJson);
     expect(specs).toHaveLength(1);
-    expect(specs[0].material).toBeNull();
+    expect(specs[0].material).toBe('4150');
     expect(specs[0].dureza).toBeNull();
     expect(specs[0].tratamiento).toBeNull();
+    expect(specs[0].acabado).toBeNull();
   });
 });
 

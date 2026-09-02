@@ -7,7 +7,7 @@
  * ajustar encuadres/cantidades en vivo y exportar el reporte final (PDF/CSV/JSON).
  */
 
-import { useCallback, useEffect, useState, memo, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, useMemo, memo, type ReactElement } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import {
@@ -27,6 +27,10 @@ import {
   ZoomOut,
   Maximize,
   AlertTriangle,
+  Eye,
+  Box,
+  LayoutGrid,
+  FileQuestion,
 } from 'lucide-react';
 import type { Order, ToolcribActiveDrawingView } from '../types';
 import type { VisionAnalysisHook } from '../hooks/useVisionAnalysis';
@@ -46,9 +50,11 @@ import { formatAgeDays, getOrderAgeDays } from '../lib/age';
 export function EditableCantidad({
   order,
   onCommit,
+  variant = 'dashboard',
 }: {
   order: Order;
   onCommit: (order: Order, value: string) => void;
+  variant?: 'dashboard' | 'print';
 }) {
   const [draft, setDraft] = useState(order.cantidad);
   useEffect(() => {
@@ -75,7 +81,11 @@ export function EditableCantidad({
         }
       }}
       aria-label="Editar cantidad"
-      className="w-20 text-center font-mono font-black text-lg text-black bg-white border-2 border-black px-1 py-1.5 outline-none focus:border-[#FF4E00]"
+      className={
+        variant === 'dashboard'
+          ? 'w-20 text-center font-mono font-black text-lg text-ink bg-surface-2 border-2 border-line px-1 py-1 outline-none focus:border-accent'
+          : 'w-20 text-center font-mono font-black text-lg text-black bg-white border-2 border-black px-1 py-1.5 outline-none focus:border-[#FF4E00]'
+      }
     />
   );
 }
@@ -86,6 +96,7 @@ interface ReportTableRowProps {
   editMode: boolean;
   isExtracting: boolean;
   isAiGenerating: boolean;
+  variant?: 'dashboard' | 'print';
   onEditCantidad: (order: Order, newValue: string) => void;
   onExcludeOrder: (order: Order) => void;
   onDownloadSinglePdf: (order: Order) => void;
@@ -113,6 +124,7 @@ export const ReportTableRow = memo(function ReportTableRow({
   editMode,
   isExtracting,
   isAiGenerating,
+  variant = 'dashboard',
   onEditCantidad,
   onExcludeOrder,
   onDownloadSinglePdf,
@@ -133,207 +145,448 @@ export const ReportTableRow = memo(function ReportTableRow({
         order.matchedDrawingRevision,
       )
     : null;
+  const drawingView = resolveDrawingView(order);
+  const cleanFileName = order.sourcePdfName
+    ? order.sourcePdfName.split(/[\\/]/).pop()
+    : null;
 
+  if (variant === 'print') {
+    return (
+      <tr className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
+        {/* Col 1: Pieza y especificaciones (Modo Imprimir) */}
+        <td className="px-5 py-4 border-r-2 border-gray-100 text-left align-middle">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h4 className="font-display font-black text-lg uppercase tracking-tight text-black">
+                {order.pieza}
+              </h4>
+              {order.numero_parte && (
+                <span className="font-mono text-[10px] font-bold text-black bg-zinc-100 border border-zinc-300 px-1.5 py-0.5">
+                  {order.numero_parte}
+                </span>
+              )}
+              {typeof order.matchScore === 'number' && order.matchScore < 90 && (
+                <span
+                  className="bg-yellow-400 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
+                  title={`Match con score ${order.matchScore}/100 — revisar a mano.`}
+                >
+                  {order.matchScore}% • REVISAR
+                </span>
+              )}
+              {isPurchased && (
+                <span className="bg-accent/15 text-accent px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-accent">
+                  En Compras
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {cleanFileName ? (
+                <span
+                  className="text-[10px] text-gray-600 font-mono inline-flex items-center gap-1 cursor-help"
+                  title={order.sourcePdfName || order.sourcePdfPath || ''}
+                >
+                  <FileText size={10} className="text-gray-400 shrink-0" />
+                  <span className="truncate max-w-[280px]">{cleanFileName}</span>
+                </span>
+              ) : (
+                <span className="text-[10px] text-gray-400 font-mono italic">
+                  Sin plano asociado
+                </span>
+              )}
+
+              {revCheck?.hasMismatch && (
+                <div
+                  className="inline-flex items-center gap-1 bg-amber-50 border border-amber-500 text-amber-900 font-mono text-[9px] font-bold px-1.5 py-0.5"
+                  title={`Odoo pide Rev "${revCheck.orderRev}" pero el plano es Rev "${revCheck.drawingRev}".`}
+                >
+                  <AlertTriangle size={11} className="shrink-0" />
+                  <span>
+                    Rev {revCheck.orderRev} (plano {revCheck.drawingRev})
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Metadatos técnicos extraídos del cajetín */}
+            {(order.material || order.dureza || order.acabado) && (
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap font-mono text-[9px]">
+                {order.material && (
+                  <span
+                    className="bg-zinc-100 text-zinc-800 border border-zinc-300 px-1.5 py-0.5 font-bold"
+                    title="Material especificado"
+                  >
+                    MAT: {order.material}
+                  </span>
+                )}
+                {order.dureza && (
+                  <span
+                    className="bg-amber-50 text-amber-900 border border-amber-300 px-1.5 py-0.5 font-bold"
+                    title="Dureza especificada"
+                  >
+                    DUR: {order.dureza}
+                  </span>
+                )}
+                {order.acabado && (
+                  <span
+                    className="bg-blue-50 text-blue-900 border border-blue-300 px-1.5 py-0.5 font-bold"
+                    title="Acabado superficial"
+                  >
+                    ACAB: {order.acabado}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </td>
+
+        {/* Col 2: Vista 3D / Isométrica (Modo Imprimir) */}
+        <td className="px-4 py-4 border-r-2 border-gray-100 text-center align-middle w-40">
+          {order.isometricView ? (
+            <div className="flex flex-col items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onPreviewOrder(order)}
+                disabled={!order.sourceImageDataUrl}
+                title="Ver plano completo"
+                className="w-20 h-20 border-2 border-black bg-white shadow-[2px_2px_0px_rgba(0,0,0,1)] relative overflow-hidden flex items-center justify-center p-1 cursor-zoom-in"
+              >
+                <img
+                  src={order.isometricView}
+                  alt="Vista"
+                  className="max-w-full max-h-full object-contain mix-blend-multiply pointer-events-none"
+                />
+              </button>
+              <div className="flex items-center gap-1">
+                {viewKind === 'ISO eDrawings' && (
+                  <span className="bg-black text-white px-1.5 py-0.2 text-[8px] font-black uppercase font-mono">
+                    ISO
+                  </span>
+                )}
+                {viewKind === 'Recorte CAD' && (
+                  <span className="bg-zinc-200 text-black px-1.5 py-0.2 text-[8px] font-black uppercase font-mono">
+                    CAD
+                  </span>
+                )}
+                {order.isometricSource === 'ai-generated' && (
+                  <span className="bg-white text-black px-1.5 py-0.2 text-[8px] font-black uppercase border border-black font-mono">
+                    IA
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <span className="text-[10px] text-gray-400 font-mono italic">Sin plano</span>
+          )}
+        </td>
+
+        {/* Col 3: Cantidad */}
+        <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle w-24">
+          {editMode ? (
+            <EditableCantidad order={order} onCommit={onEditCantidad} variant="print" />
+          ) : (
+            <span className="font-black text-2xl text-black italic font-display">
+              {order.cantidad}
+            </span>
+          )}
+        </td>
+
+        {/* Col 4: SO */}
+        <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle w-32">
+          <div className="flex flex-col gap-1 items-center">
+            {order.orden.split('\n').map((o, i) => (
+              <span
+                key={i}
+                className="font-mono text-sm font-black bg-black text-white px-2 py-1 block"
+              >
+                {o}
+              </span>
+            ))}
+            {order.poNumber && (
+              <span className="text-[10px] font-mono text-gray-600">
+                {order.poNumber}
+              </span>
+            )}
+          </div>
+        </td>
+
+        {/* Col 5: Fecha */}
+        <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle w-28">
+          {order.fecha.split('\n').map((f, i) => {
+            const days = getOrderAgeDays(f);
+            return (
+              <div key={i}>
+                <span className="font-black text-xs uppercase text-black font-mono">
+                  {f}
+                </span>
+                {days !== null && (
+                  <span className="block text-[10px] text-gray-400 font-normal font-mono normal-case">
+                    {formatAgeDays(days)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </td>
+
+        {/* Col 6: Acciones */}
+        <td className="px-3 py-4 text-center align-middle w-24">
+          <div className="flex items-center justify-center gap-1">
+            {editMode ? (
+              <button
+                onClick={() => onExcludeOrder(order)}
+                title="Excluir esta orden del reporte"
+                aria-label="Excluir orden del reporte"
+                className="p-2 border-2 border-black bg-white text-black hover:bg-danger hover:text-white hover:border-danger transition-colors"
+              >
+                <Trash2 size={14} />
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => onDownloadSinglePdf(order)}
+                  title="Imprimir esta orden"
+                  className="p-2 border border-black/20 bg-white hover:bg-black hover:text-white hover:border-black transition-colors"
+                >
+                  <Printer size={14} />
+                </button>
+                <ReportRowActions
+                  order={order}
+                  isExtracting={isExtracting}
+                  isAiGenerating={isAiGenerating}
+                  onEncuadre={() => onEncuadre(order)}
+                  onComprar={() => {
+                    onQuickPurchase({
+                      soNumber: order.orden.split('\n')[0],
+                      poNumber: order.poNumber,
+                      pieza: order.pieza,
+                      numeroParte: order.numero_parte,
+                      cantidad: order.cantidad.split('\n')[0],
+                      material: order.material,
+                      rowKey,
+                    });
+                  }}
+                  onAiIso={() => onAiIso(order)}
+                  onStl={() => {
+                    if (drawingView?.stlUrl) onViewStl(drawingView);
+                  }}
+                  onHistorial={() => {
+                    if (drawingView) onViewHistory(drawingView);
+                  }}
+                  onVincular={() => onVincular(order)}
+                />
+              </>
+            )}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  // Dashboard Dark Pro Variant (Default)
   return (
-    <tr className="border-b-2 border-gray-200 hover:bg-gray-50 transition-colors group">
-      <td className="px-5 py-4 border-r-2 border-gray-100 flex items-center justify-between gap-4">
-        <div className="grow">
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <h4 className="font-display font-black text-xl uppercase tracking-tight text-black">
+    <tr className="border-b border-line hover:bg-surface-2/70 transition-colors group">
+      {/* Col 1: Pieza & Especificaciones */}
+      <td className="px-5 py-4 border-r border-line text-left align-middle">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="font-display font-black text-base uppercase tracking-tight text-ink leading-tight">
               {order.pieza}
             </h4>
+            {order.numero_parte && (
+              <span className="font-mono text-[10px] font-bold text-accent bg-accent/10 border border-accent/30 px-1.5 py-0.5">
+                {order.numero_parte}
+              </span>
+            )}
             {typeof order.matchScore === 'number' && order.matchScore < 90 && (
               <span
-                className="bg-yellow-400 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
-                title={`Match con score ${order.matchScore}/100 — revisar a mano para confirmar.`}
+                className="bg-yellow-400/20 text-yellow-300 border border-yellow-400/40 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider font-mono"
+                title={`Match con score ${order.matchScore}/100 — confirmar visualmente.`}
               >
                 {order.matchScore}% • REVISAR
               </span>
             )}
-            {viewKind === 'ISO eDrawings' && (
-              <span
-                className="bg-black text-white px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
-                title="Cara isométrica desde plano ISO (eDrawings / Tool Crib)"
-              >
-                ISO
-              </span>
-            )}
-            {viewKind === 'Recorte CAD' && (
-              <span
-                className="bg-zinc-200 text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
-                title="Recorte del plano CAD 2D"
-              >
-                CAD
-              </span>
-            )}
-            {order.isometricSource === 'ai-generated' && (
-              <span
-                className="bg-white text-black px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-black"
-                title="Vista 3D generada por IA a partir del plano 2D. No usar para cotizar dimensiones ni maquinado."
-              >
-                IA · NO ACOTAR
-              </span>
-            )}
-            {order.matchSource === 'alias' && (
-              <span
-                className="bg-emerald-100 text-emerald-900 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-emerald-700"
-                title="Plano resuelto por alias aprendido"
-              >
-                Alias
-              </span>
-            )}
             {isPurchased && (
               <span
-                className="bg-accent/15 text-accent px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-accent"
+                className="bg-accent/15 text-accent px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider border border-accent font-mono"
                 title="Requisición creada en esta sesión"
               >
                 En Compras
               </span>
             )}
           </div>
-          <p className="text-[10px] text-gray-500 font-mono italic">
-            {order.sourcePdfName || 'Sin plano asociado'}
-          </p>
-          {revCheck?.hasMismatch && (
-            <div
-              className="mt-1.5 inline-flex items-center gap-1.5 bg-amber-50 border border-amber-500 text-amber-900 font-mono text-[9px] font-bold px-2 py-0.5"
-              title={`Odoo pide Rev "${revCheck.orderRev}" pero el plano es Rev "${revCheck.drawingRev}".`}
-            >
-              <AlertTriangle size={11} className="shrink-0" />
-              <span>
-                Rev {revCheck.orderRev} (plano {revCheck.drawingRev})
-              </span>
-            </div>
-          )}
 
-          {/* Metadatos técnicos extraídos del cajetín */}
-          {(order.material ||
-            order.dureza ||
-            order.tratamiento ||
-            order.acabado) && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap font-mono text-[9px]">
+          <div className="flex items-center gap-2 flex-wrap">
+            {cleanFileName ? (
+              <span
+                className="text-[10px] text-ink-dim font-mono inline-flex items-center gap-1 hover:text-ink cursor-help bg-surface-2 px-1.5 py-0.5 border border-line"
+                title={order.sourcePdfName || order.sourcePdfPath || ''}
+              >
+                <FileText size={10} className="shrink-0 text-accent" />
+                <span className="truncate max-w-[280px]">{cleanFileName}</span>
+              </span>
+            ) : (
+              <span className="text-[10px] text-ink-dim/50 font-mono italic">
+                Sin plano asociado
+              </span>
+            )}
+
+            {revCheck?.hasMismatch && (
+              <div
+                className="inline-flex items-center gap-1 bg-warn/15 border border-warn text-warn font-mono text-[9px] font-bold px-1.5 py-0.5"
+                title={`Odoo pide Rev "${revCheck.orderRev}" pero el plano es Rev "${revCheck.drawingRev}".`}
+              >
+                <AlertTriangle size={11} className="shrink-0" />
+                <span>
+                  Rev {revCheck.orderRev} (plano {revCheck.drawingRev})
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Metadatos técnicos del cajetín */}
+          {(order.material || order.dureza || order.acabado) && (
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap font-mono text-[9px]">
               {order.material && (
                 <span
-                  className="bg-zinc-100 text-zinc-800 border border-zinc-300 px-1.5 py-0.5 font-bold"
+                  className="bg-surface-2 text-ink border border-line px-1.5 py-0.5 font-bold"
                   title="Material especificado"
                 >
-                  {order.material}
+                  MAT: {order.material}
                 </span>
               )}
               {order.dureza && (
                 <span
-                  className="bg-amber-50 text-amber-900 border border-amber-300 px-1.5 py-0.5 font-bold"
+                  className="bg-warn/10 text-warn border border-warn/30 px-1.5 py-0.5 font-bold"
                   title="Dureza especificada"
                 >
-                  {order.dureza}
-                </span>
-              )}
-              {order.tratamiento && (
-                <span
-                  className="bg-orange-50 text-orange-900 border border-orange-300 px-1.5 py-0.5 font-bold"
-                  title="Tratamiento térmico"
-                >
-                  {order.tratamiento}
+                  DUR: {order.dureza}
                 </span>
               )}
               {order.acabado && (
                 <span
-                  className="bg-blue-50 text-blue-900 border border-blue-300 px-1.5 py-0.5 font-bold"
+                  className="bg-blue-500/10 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 font-bold"
                   title="Acabado superficial"
                 >
-                  {order.acabado}
+                  ACAB: {order.acabado}
                 </span>
               )}
             </div>
           )}
         </div>
+      </td>
 
-        <div className="flex flex-col items-end gap-2 shrink-0">
-          {order.isometricView && (
-            <button
-              type="button"
-              onClick={() => onPreviewOrder(order)}
-              disabled={!order.sourceImageDataUrl}
-              title={
-                order.sourceImageDataUrl
-                  ? 'Ver plano completo'
-                  : 'Plano completo no disponible'
-              }
-              className="w-28 h-28 border-2 border-black bg-white shadow-[4px_4px_0px_rgba(0,0,0,1)] relative overflow-hidden flex items-center justify-center p-1 hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] disabled:hover:translate-x-0 disabled:hover:translate-y-0 cursor-zoom-in"
-            >
-              <img
-                src={order.isometricView}
-                alt="Vista"
-                className="max-w-full max-h-full object-contain mix-blend-multiply pointer-events-none"
-              />
-            </button>
+      {/* Col 2: Vista 3D / Isométrica dedicada */}
+      <td className="px-4 py-4 border-r border-line text-center align-middle w-44">
+        <div className="flex flex-col items-center justify-center gap-1.5">
+          {order.isometricView ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onPreviewOrder(order)}
+                disabled={!order.sourceImageDataUrl}
+                title={
+                  order.sourceImageDataUrl
+                    ? 'Clic para ver plano completo ampliado'
+                    : 'Plano completo no disponible'
+                }
+                className="w-20 h-20 border-2 border-line bg-surface-2 relative overflow-hidden flex items-center justify-center p-1 hover:border-accent hover:shadow-hard-accent transition-all cursor-zoom-in group/img"
+              >
+                <img
+                  src={order.isometricView}
+                  alt="Vista"
+                  className="max-w-full max-h-full object-contain pointer-events-none group-hover/img:scale-105 transition-transform"
+                />
+                <div className="absolute inset-0 bg-accent/0 group-hover/img:bg-accent/10 transition-colors flex items-center justify-center opacity-0 group-hover/img:opacity-100">
+                  <Eye size={16} className="text-accent" />
+                </div>
+              </button>
+              <div className="flex items-center gap-1 flex-wrap justify-center">
+                {viewKind === 'ISO eDrawings' && (
+                  <span className="bg-ok/20 text-ok border border-ok/40 px-1.5 py-0.2 text-[8px] font-black uppercase tracking-wider font-mono">
+                    ISO 3D
+                  </span>
+                )}
+                {viewKind === 'Recorte CAD' && (
+                  <span className="bg-surface-2 text-ink-dim border border-line px-1.5 py-0.2 text-[8px] font-black uppercase tracking-wider font-mono">
+                    CAD 2D
+                  </span>
+                )}
+                {order.isometricSource === 'ai-generated' && (
+                  <span className="bg-accent/20 text-accent border border-accent/40 px-1.5 py-0.2 text-[8px] font-black uppercase tracking-wider font-mono">
+                    IA 3D
+                  </span>
+                )}
+                {drawingView?.stlUrl && (
+                  <button
+                    type="button"
+                    onClick={() => onViewStl(drawingView)}
+                    className="inline-flex items-center gap-0.5 bg-accent/15 text-accent border border-accent px-1.5 py-0.2 text-[8px] font-black uppercase tracking-wider font-mono hover:bg-accent hover:text-bg transition-colors"
+                    title="Abrir visor 3D interactivo (STL)"
+                  >
+                    <Box size={9} /> STL
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-1.5 py-2">
+              <div className="w-16 h-16 border-2 border-dashed border-line bg-surface flex items-center justify-center text-ink-dim/40">
+                <FileQuestion size={20} />
+              </div>
+              <button
+                type="button"
+                onClick={() => onVincular(order)}
+                className="text-[9px] font-mono font-bold uppercase text-accent hover:underline inline-flex items-center gap-0.5"
+              >
+                + Vincular
+              </button>
+            </div>
           )}
-          <ReportRowActions
-            order={order}
-            isExtracting={isExtracting}
-            isAiGenerating={isAiGenerating}
-            onEncuadre={() => onEncuadre(order)}
-            onComprar={() => {
-              onQuickPurchase({
-                soNumber: order.orden.split('\n')[0],
-                poNumber: order.poNumber,
-                pieza: order.pieza,
-                numeroParte: order.numero_parte,
-                cantidad: order.cantidad.split('\n')[0],
-                material: order.material,
-                rowKey,
-              });
-            }}
-            onAiIso={() => onAiIso(order)}
-            onStl={() => {
-              const view = resolveDrawingView(order);
-              if (view?.stlUrl) onViewStl(view);
-            }}
-            onHistorial={() => {
-              const view = resolveDrawingView(order);
-              if (view) onViewHistory(view);
-            }}
-            onVincular={() => onVincular(order)}
-          />
         </div>
       </td>
 
-      <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+      {/* Col 3: Cantidad */}
+      <td className="px-4 py-4 border-r border-line text-center align-middle w-24">
         {editMode ? (
-          <EditableCantidad
-            order={order}
-            onCommit={onEditCantidad}
-          />
+          <EditableCantidad order={order} onCommit={onEditCantidad} variant="dashboard" />
         ) : (
-          <span className="font-black text-2xl text-black italic">
+          <span className="font-display font-black text-2xl text-ink italic">
             {order.cantidad}
           </span>
         )}
       </td>
 
-      <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+      {/* Col 4: SO (Orden) */}
+      <td className="px-4 py-4 border-r border-line text-center align-middle w-32">
         <div className="flex flex-col gap-1 items-center">
           {order.orden.split('\n').map((o, i) => (
             <span
               key={i}
-              className="font-mono text-sm font-black bg-black text-white px-2 py-1 block"
+              className="font-mono text-xs font-black bg-surface-2 text-ink border border-line px-2 py-0.5 block"
             >
               {o}
             </span>
           ))}
+          {order.poNumber && (
+            <span className="text-[9px] font-mono text-ink-dim tracking-tight">
+              {order.poNumber}
+            </span>
+          )}
         </div>
       </td>
 
-      <td className="px-5 py-4 border-r-2 border-gray-100 text-center align-middle">
+      {/* Col 5: Fecha */}
+      <td className="px-4 py-4 border-r border-line text-center align-middle w-28">
         {order.fecha.split('\n').map((f, i) => {
           const days = getOrderAgeDays(f);
           return (
             <div key={i}>
-              <span className="font-black text-xs uppercase text-black">
+              <span className="font-mono font-bold text-xs uppercase text-ink">
                 {f}
               </span>
               {days !== null && (
-                <span className="block text-[10px] text-gray-400 font-normal normal-case">
+                <span className="block text-[10px] text-ink-dim font-mono normal-case">
                   {formatAgeDays(days)}
                 </span>
               )}
@@ -341,25 +594,56 @@ export const ReportTableRow = memo(function ReportTableRow({
           );
         })}
       </td>
-      <td className="px-3 py-4 text-center align-middle">
-        {editMode ? (
-          <button
-            onClick={() => onExcludeOrder(order)}
-            title="Excluir esta orden del reporte"
-            aria-label="Excluir orden del reporte"
-            className="p-2 border-2 border-black bg-white text-black hover:bg-danger hover:text-white hover:border-danger transition-colors"
-          >
-            <Trash2 size={14} />
-          </button>
-        ) : (
-          <button
-            onClick={() => onDownloadSinglePdf(order)}
-            title="Imprimir esta orden"
-            className="p-2 border border-black/20 bg-white hover:bg-black hover:text-white hover:border-black transition-colors opacity-40 group-hover:opacity-100"
-          >
-            <Printer size={14} />
-          </button>
-        )}
+
+      {/* Col 6: Acciones */}
+      <td className="px-3 py-4 text-center align-middle w-24">
+        <div className="flex items-center justify-center gap-1.5">
+          {editMode ? (
+            <button
+              onClick={() => onExcludeOrder(order)}
+              title="Excluir esta orden del reporte"
+              aria-label="Excluir orden del reporte"
+              className="p-2 border border-danger bg-danger/10 text-danger hover:bg-danger hover:text-white transition-colors"
+            >
+              <Trash2 size={14} />
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => onDownloadSinglePdf(order)}
+                title="Imprimir esta orden"
+                className="p-1.5 border border-line bg-surface text-ink-dim hover:text-ink hover:border-accent transition-colors"
+              >
+                <Printer size={13} />
+              </button>
+              <ReportRowActions
+                order={order}
+                isExtracting={isExtracting}
+                isAiGenerating={isAiGenerating}
+                onEncuadre={() => onEncuadre(order)}
+                onComprar={() => {
+                  onQuickPurchase({
+                    soNumber: order.orden.split('\n')[0],
+                    poNumber: order.poNumber,
+                    pieza: order.pieza,
+                    numeroParte: order.numero_parte,
+                    cantidad: order.cantidad.split('\n')[0],
+                    material: order.material,
+                    rowKey,
+                  });
+                }}
+                onAiIso={() => onAiIso(order)}
+                onStl={() => {
+                  if (drawingView?.stlUrl) onViewStl(drawingView);
+                }}
+                onHistorial={() => {
+                  if (drawingView) onViewHistory(drawingView);
+                }}
+                onVincular={() => onVincular(order)}
+              />
+            </>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -412,6 +696,55 @@ export function ReporteView({
   onViewHistory,
   onVincular,
 }: ReporteViewProps): ReactElement {
+  const [tableViewMode, setTableViewMode] = useState<'dashboard' | 'print'>('dashboard');
+  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'ready' | 'missing' | 'mismatch'>('all');
+
+  const kpis = useMemo(() => {
+    if (!vision.results) {
+      return { total: 0, withDrawing: 0, missingDrawing: 0, coveragePct: 0, revMismatches: 0 };
+    }
+    const total = vision.results.length;
+    const withDrawing = vision.results.filter(
+      (o) => Boolean(o.sourcePdfName || o.matchedDrawingId || o.isometricView),
+    ).length;
+    const missingDrawing = total - withDrawing;
+    const coveragePct = total > 0 ? Math.round((withDrawing / total) * 100) : 0;
+    const revMismatches = vision.results.filter((o) => {
+      if (!o.matchedDrawingRevision) return false;
+      return Boolean(
+        checkRevisionDiscrepancy(
+          `${o.pieza} ${o.numero_parte ?? ''}`,
+          o.matchedDrawingRevision,
+        )?.hasMismatch,
+      );
+    }).length;
+
+    return { total, withDrawing, missingDrawing, coveragePct, revMismatches };
+  }, [vision.results]);
+
+  const displayedOrders = useMemo(() => {
+    const base = vision.filteredResults ?? vision.results ?? [];
+    if (activeFilterTab === 'all') return base;
+    if (activeFilterTab === 'ready') {
+      return base.filter((o) => Boolean(o.sourcePdfName || o.matchedDrawingId || o.isometricView));
+    }
+    if (activeFilterTab === 'missing') {
+      return base.filter((o) => !o.sourcePdfName && !o.matchedDrawingId && !o.isometricView);
+    }
+    if (activeFilterTab === 'mismatch') {
+      return base.filter((o) => {
+        if (!o.matchedDrawingRevision) return false;
+        return Boolean(
+          checkRevisionDiscrepancy(
+            `${o.pieza} ${o.numero_parte ?? ''}`,
+            o.matchedDrawingRevision,
+          )?.hasMismatch,
+        );
+      });
+    }
+    return base;
+  }, [vision.filteredResults, vision.results, activeFilterTab]);
+
   const resolveDrawingView = useCallback(
     (order: Order): ToolcribActiveDrawingView | null => {
       if (!order.matchedDrawingId) return null;
@@ -869,9 +1202,94 @@ export function ReporteView({
                     </button>
                   </div>
                 )}
-                {/* Barra de filtros (dark). Los filtros NO se aplican a las exportaciones (PDF/CSV) */}
+                {/* Radar de Auditoría - KPIs superiores */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+                  <div className="bg-surface border-2 border-line p-3.5 flex items-center justify-between shadow-hard">
+                    <div>
+                      <p className="text-[10px] font-mono text-ink-dim uppercase font-bold tracking-wider">
+                        Órdenes Totales
+                      </p>
+                      <p className="font-display text-2xl font-black text-ink italic">
+                        {kpis.total}
+                      </p>
+                    </div>
+                    <div className="w-9 h-9 border border-line bg-surface-2 grid place-items-center text-ink-dim">
+                      <FileText size={18} />
+                    </div>
+                  </div>
+
+                  <div className="bg-surface border-2 border-line p-3.5 flex items-center justify-between shadow-hard">
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[10px] font-mono text-ink-dim uppercase font-bold tracking-wider">
+                          Planos Vinculados
+                        </p>
+                        <span className="text-[9px] font-mono font-bold text-ok bg-ok/15 border border-ok/30 px-1 py-0.2">
+                          {kpis.coveragePct}%
+                        </span>
+                      </div>
+                      <p className="font-display text-2xl font-black text-ok italic">
+                        {kpis.withDrawing}
+                      </p>
+                    </div>
+                    <div className="w-9 h-9 border border-ok/30 bg-ok/10 grid place-items-center text-ok">
+                      <CheckCircle2 size={18} />
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => setActiveFilterTab(activeFilterTab === 'missing' ? 'all' : 'missing')}
+                    className={`bg-surface border-2 p-3.5 flex items-center justify-between cursor-pointer transition-all shadow-hard ${
+                      activeFilterTab === 'missing'
+                        ? 'border-accent bg-accent/10'
+                        : 'border-line hover:border-accent/60'
+                    }`}
+                    title="Clic para filtrar órdenes sin plano"
+                  >
+                    <div>
+                      <p className="text-[10px] font-mono text-ink-dim uppercase font-bold tracking-wider">
+                        Sin Plano
+                      </p>
+                      <p className={`font-display text-2xl font-black italic ${kpis.missingDrawing > 0 ? 'text-accent' : 'text-ink-dim'}`}>
+                        {kpis.missingDrawing}
+                      </p>
+                    </div>
+                    <div className={`w-9 h-9 border grid place-items-center ${
+                      kpis.missingDrawing > 0 ? 'border-accent/40 bg-accent/15 text-accent' : 'border-line bg-surface-2 text-ink-dim'
+                    }`}>
+                      <FileQuestion size={18} />
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => setActiveFilterTab(activeFilterTab === 'mismatch' ? 'all' : 'mismatch')}
+                    className={`bg-surface border-2 p-3.5 flex items-center justify-between cursor-pointer transition-all shadow-hard ${
+                      activeFilterTab === 'mismatch'
+                        ? 'border-warn bg-warn/10'
+                        : 'border-line hover:border-warn/60'
+                    }`}
+                    title="Clic para filtrar órdenes con discrepancia de revisión"
+                  >
+                    <div>
+                      <p className="text-[10px] font-mono text-ink-dim uppercase font-bold tracking-wider">
+                        Discrepancia Rev
+                      </p>
+                      <p className={`font-display text-2xl font-black italic ${kpis.revMismatches > 0 ? 'text-warn' : 'text-ink-dim'}`}>
+                        {kpis.revMismatches}
+                      </p>
+                    </div>
+                    <div className={`w-9 h-9 border grid place-items-center ${
+                      kpis.revMismatches > 0 ? 'border-warn/40 bg-warn/15 text-warn' : 'border-line bg-surface-2 text-ink-dim'
+                    }`}>
+                      <AlertTriangle size={18} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Barra de controles: Búsqueda, Filtros Rápidos y Selector de Vista */}
                 <div className="border-2 border-line bg-surface px-4 py-3 flex items-center gap-3 flex-wrap">
-                  <div className="grow flex items-center gap-2 border border-line px-2 py-1.5 bg-surface-2 min-w-[180px]">
+                  {/* Buscador de texto */}
+                  <div className="grow flex items-center gap-2 border border-line px-2.5 py-1.5 bg-surface-2 min-w-[200px]">
                     <input
                       type="text"
                       value={vision.resultsFilter}
@@ -889,18 +1307,90 @@ export function ReporteView({
                       </button>
                     )}
                   </div>
-                  <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer select-none text-ink-dim hover:text-ink">
-                    <input
-                      type="checkbox"
-                      checked={vision.filterMissingOnly}
-                      onChange={(e) => vision.setFilterMissingOnly(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    Sin vista 3D
-                  </label>
-                  <span className="text-[10px] font-mono text-ink-dim ml-auto">
-                    {vision.filteredResults?.length ?? 0} / {vision.results.length}
-                    <span className="text-ink-dim/70"> · Vista · PDF/CSV exportan todo</span>
+
+                  {/* Filtros rápidos por píldora */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setActiveFilterTab('all')}
+                      className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
+                        activeFilterTab === 'all'
+                          ? 'bg-ink text-bg border-ink'
+                          : 'bg-surface-2 text-ink-dim border-line hover:text-ink hover:border-accent'
+                      }`}
+                    >
+                      Todos ({kpis.total})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveFilterTab('ready')}
+                      className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
+                        activeFilterTab === 'ready'
+                          ? 'bg-ok text-bg border-ok'
+                          : 'bg-surface-2 text-ink-dim border-line hover:text-ok hover:border-ok'
+                      }`}
+                    >
+                      Con Plano ({kpis.withDrawing})
+                    </button>
+                    {kpis.missingDrawing > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveFilterTab('missing')}
+                        className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
+                          activeFilterTab === 'missing'
+                            ? 'bg-accent text-bg border-accent'
+                            : 'bg-surface-2 text-accent border-accent/40 hover:bg-accent/10'
+                        }`}
+                      >
+                        Sin Plano ({kpis.missingDrawing})
+                      </button>
+                    )}
+                    {kpis.revMismatches > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveFilterTab('mismatch')}
+                        className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
+                          activeFilterTab === 'mismatch'
+                            ? 'bg-warn text-bg border-warn'
+                            : 'bg-surface-2 text-warn border-warn/40 hover:bg-warn/10'
+                        }`}
+                      >
+                        Rev Alert ({kpis.revMismatches})
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Selector de modo de tabla: Dashboard Dark Pro vs Hoja Impresa */}
+                  <div className="inline-flex border border-line bg-surface-2 p-0.5 ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => setTableViewMode('dashboard')}
+                      className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-colors inline-flex items-center gap-1.5 ${
+                        tableViewMode === 'dashboard'
+                          ? 'bg-accent text-bg shadow-sm'
+                          : 'text-ink-dim hover:text-ink'
+                      }`}
+                      title="Vista modo oscuro industrial optimizada para pantalla"
+                    >
+                      <LayoutGrid size={11} /> Dashboard
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTableViewMode('print')}
+                      className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-colors inline-flex items-center gap-1.5 ${
+                        tableViewMode === 'print'
+                          ? 'bg-ink text-bg shadow-sm'
+                          : 'text-ink-dim hover:text-ink'
+                      }`}
+                      title="Vista previa exacta del reporte impreso en papel A4"
+                    >
+                      <Printer size={11} /> Hoja Impresa
+                    </button>
+                  </div>
+
+                  <span className="text-[10px] font-mono text-ink-dim shrink-0">
+                    {displayedOrders.length} / {vision.results.length}
+                    <span className="text-ink-dim/70"> en vista</span>
                   </span>
                 </div>
 
@@ -936,45 +1426,90 @@ export function ReporteView({
                   </div>
                 )}
 
-                {/* Hoja de papel: reporte sobre la mesa oscura */}
-                <div className="overflow-auto border-2 border-line border-t-0 paper shadow-hard">
-                  <div className="bg-[#0D2B4D] text-white p-6 border-b-2 border-black/20 flex items-center justify-between">
-                    <div>
-                      <h2 className="font-display text-3xl font-black uppercase tracking-tighter">
-                        REPORTE DE TRABAJO: SUPRAJIT
-                      </h2>
-                      <p className="text-xs font-mono opacity-60">
-                        AUDITORÍA AUTOMATIZADA // SMV VISION
-                      </p>
+                {/* Contenedor de la Tabla */}
+                <div
+                  className={`overflow-auto border-2 border-line border-t-0 ${
+                    tableViewMode === 'print' ? 'paper shadow-hard' : 'bg-surface shadow-hard'
+                  }`}
+                >
+                  {tableViewMode === 'print' && (
+                    <div className="bg-[#0D2B4D] text-white p-6 border-b-2 border-black/20 flex items-center justify-between">
+                      <div>
+                        <h2 className="font-display text-3xl font-black uppercase tracking-tighter">
+                          REPORTE DE TRABAJO: SUPRAJIT
+                        </h2>
+                        <p className="text-xs font-mono opacity-60">
+                          AUDITORÍA AUTOMATIZADA // SMV VISION
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] font-black uppercase tracking-widest bg-accent text-bg px-2 inline-block mb-1">
+                          PRODUCCIÓN ACTIVA
+                        </p>
+                        <p className="text-xs font-mono">{new Date().toLocaleDateString()}</p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-[10px] font-black uppercase tracking-widest bg-accent text-bg px-2 inline-block mb-1">
-                        PRODUCCIÓN ACTIVA
-                      </p>
-                      <p className="text-xs font-mono">{new Date().toLocaleDateString()}</p>
-                    </div>
-                  </div>
+                  )}
 
-                  <table className="w-full text-left border-collapse min-w-[650px] sm:min-w-full">
+                  <table className="w-full text-left border-collapse min-w-[720px] sm:min-w-full">
                     <thead className="sticky top-0 z-20">
-                      <tr className="bg-[#11161C] text-white">
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 w-[50%]">
-                          PIEZA Y VISTA DE PLANO
+                      <tr
+                        className={
+                          tableViewMode === 'print'
+                            ? 'bg-[#11161C] text-white font-mono text-[10px] font-black uppercase tracking-widest'
+                            : 'bg-surface-2 border-b-2 border-line text-ink font-mono text-[10px] font-black uppercase tracking-widest'
+                        }
+                      >
+                        <th
+                          className={`px-5 py-3 ${
+                            tableViewMode === 'print'
+                              ? 'border-r border-white/10'
+                              : 'border-r border-line'
+                          } text-left`}
+                        >
+                          PIEZA Y ESPECIFICACIÓN
                         </th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">
+                        <th
+                          className={`px-4 py-3 ${
+                            tableViewMode === 'print'
+                              ? 'border-r border-white/10'
+                              : 'border-r border-line'
+                          } text-center w-44`}
+                        >
+                          VISTA 3D / ISO
+                        </th>
+                        <th
+                          className={`px-4 py-3 ${
+                            tableViewMode === 'print'
+                              ? 'border-r border-white/10'
+                              : 'border-r border-line'
+                          } text-center w-24`}
+                        >
                           CANT.
                         </th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">
+                        <th
+                          className={`px-4 py-3 ${
+                            tableViewMode === 'print'
+                              ? 'border-r border-white/10'
+                              : 'border-r border-line'
+                          } text-center w-32`}
+                        >
                           SO (ORDEN)
                         </th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest border-r border-white/10 text-center">
+                        <th
+                          className={`px-4 py-3 ${
+                            tableViewMode === 'print'
+                              ? 'border-r border-white/10'
+                              : 'border-r border-line'
+                          } text-center w-28`}
+                        >
                           FECHA
                         </th>
-                        <th className="px-5 py-3 text-[11px] font-black uppercase tracking-widest text-center w-12" />
+                        <th className="px-3 py-3 text-center w-24">ACCIONES</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(vision.filteredResults ?? vision.results).map((order) => (
+                      {displayedOrders.map((order) => (
                         <ReportTableRow
                           key={purchaseRowKey(order)}
                           order={order}
@@ -982,6 +1517,7 @@ export function ReporteView({
                           editMode={vision.editMode}
                           isExtracting={vision.isExtracting}
                           isAiGenerating={vision.isAiIsoGenerating(order)}
+                          variant={tableViewMode}
                           onEditCantidad={vision.handleEditCantidad}
                           onExcludeOrder={vision.handleExcludeOrder}
                           onDownloadSinglePdf={vision.downloadSingleOrderPdf}

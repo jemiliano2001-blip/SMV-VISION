@@ -7,9 +7,13 @@ import {
   matchesAssetFilter,
   matchesFamily,
   matchesFamilyGroup,
+  pendingPrintViewForGroup,
   pickPreferredDrawing,
   previewDrawingForGroup,
   printDrawingForGroup,
+  sortToolcribGroups,
+  thumbnailPdfUrlForGroup,
+  type GroupPrintMetrics,
 } from '../toolcribCatalog';
 
 function makeView(
@@ -221,5 +225,131 @@ describe('matchesFamilyGroup / matchesAssetFilter', () => {
     expect(matchesAssetFilter(withStl, 'stl')).toBe(true);
     expect(matchesAssetFilter(missingPdf, 'missing-pdf')).toBe(true);
     expect(matchesAssetFilter(cadOnly, 'missing-pdf')).toBe(false);
+  });
+
+  it('filters by missing CAD / missing ISO — huecos del catálogo', () => {
+    const cadOnly = groupDrawingViews([makeView({ drawingId: 'cad', partNumber: 'A' })])[0];
+    const isoOnly = groupDrawingViews([
+      makeView({ drawingId: 'iso', partNumber: 'B.ISO', sourcePath: 'B.ISO.pdf' }),
+    ])[0];
+
+    expect(matchesAssetFilter(cadOnly, 'missing-iso')).toBe(true);
+    expect(matchesAssetFilter(cadOnly, 'missing-cad')).toBe(false);
+    expect(matchesAssetFilter(isoOnly, 'missing-cad')).toBe(true);
+    expect(matchesAssetFilter(isoOnly, 'missing-iso')).toBe(false);
+  });
+});
+
+describe('pendingPrintViewForGroup', () => {
+  it('prefiere el CAD sobre el ISO', () => {
+    const group = groupDrawingViews([
+      makeView({ drawingId: 'cad', partNumber: 'A' }),
+      makeView({ drawingId: 'iso', partNumber: 'A.ISO', sourcePath: 'A.ISO.pdf' }),
+    ])[0];
+    expect(pendingPrintViewForGroup(group)?.drawingId).toBe('cad');
+  });
+
+  it('cae al ISO si no hay CAD', () => {
+    const group = groupDrawingViews([
+      makeView({ drawingId: 'iso', partNumber: 'B.ISO', sourcePath: 'B.ISO.pdf' }),
+    ])[0];
+    expect(pendingPrintViewForGroup(group)?.drawingId).toBe('iso');
+  });
+});
+
+describe('thumbnailPdfUrlForGroup', () => {
+  it('prefiere el ISO (más reconocible a simple vista) sobre el CAD', () => {
+    const group = groupDrawingViews([
+      makeView({ drawingId: 'cad', partNumber: 'A', pdfUrl: 'https://x/cad.pdf' }),
+      makeView({ drawingId: 'iso', partNumber: 'A.ISO', sourcePath: 'A.ISO.pdf', pdfUrl: 'https://x/iso.pdf' }),
+    ])[0];
+    expect(thumbnailPdfUrlForGroup(group)).toBe('https://x/iso.pdf');
+  });
+
+  it('cae al CAD si no hay ISO, y a null si no hay ningún PDF', () => {
+    const withCad = groupDrawingViews([
+      makeView({ drawingId: 'cad', partNumber: 'A', pdfUrl: 'https://x/cad.pdf' }),
+    ])[0];
+    expect(thumbnailPdfUrlForGroup(withCad)).toBe('https://x/cad.pdf');
+
+    const withoutPdf = groupDrawingViews([
+      makeView({ drawingId: 'cad', partNumber: 'B', pdfUrl: null }),
+    ])[0];
+    expect(thumbnailPdfUrlForGroup(withoutPdf)).toBeNull();
+  });
+});
+
+describe('sortToolcribGroups', () => {
+  const groups = groupDrawingViews([
+    makeView({ drawingId: 'b1', partNumber: 'B-001', description: 'Zeta pieza', revision: '3' }),
+    makeView({ drawingId: 'a1', partNumber: 'A-001', description: 'Alfa pieza', revision: '1' }),
+    makeView({ drawingId: 'c1', partNumber: 'C-001', description: 'Media pieza', revision: '2' }),
+  ]);
+
+  it('ordena por número de parte (default), asc y desc', () => {
+    expect(sortToolcribGroups(groups, 'partNumber', 'asc').map((g) => g.partNumber)).toEqual([
+      'A-001',
+      'B-001',
+      'C-001',
+    ]);
+    expect(sortToolcribGroups(groups, 'partNumber', 'desc').map((g) => g.partNumber)).toEqual([
+      'C-001',
+      'B-001',
+      'A-001',
+    ]);
+  });
+
+  it('ordena por descripción', () => {
+    expect(sortToolcribGroups(groups, 'description', 'asc').map((g) => g.partNumber)).toEqual([
+      'A-001',
+      'C-001',
+      'B-001',
+    ]);
+  });
+
+  it('ordena por revisión del CAD', () => {
+    expect(sortToolcribGroups(groups, 'revision', 'asc').map((g) => g.partNumber)).toEqual([
+      'A-001',
+      'C-001',
+      'B-001',
+    ]);
+  });
+
+  it('ordena por impresiones y por última impresión usando las métricas inyectadas', () => {
+    const metricsFor = (group: (typeof groups)[number]): GroupPrintMetrics => {
+      const table: Record<string, GroupPrintMetrics> = {
+        'A-001': { count: 5, lastPrintedAtUTC: '2026-01-01T00:00:00.000Z' },
+        'B-001': { count: 1, lastPrintedAtUTC: '2026-03-01T00:00:00.000Z' },
+        'C-001': { count: 0, lastPrintedAtUTC: null },
+      };
+      return table[group.partNumber];
+    };
+
+    expect(
+      sortToolcribGroups(groups, 'prints', 'desc', metricsFor).map((g) => g.partNumber),
+    ).toEqual(['A-001', 'B-001', 'C-001']);
+
+    expect(
+      sortToolcribGroups(groups, 'lastPrinted', 'desc', metricsFor).map((g) => g.partNumber),
+    ).toEqual(['B-001', 'A-001', 'C-001']);
+  });
+
+  it('desempata siempre por número de parte para que el orden sea estable', () => {
+    const tied = groupDrawingViews([
+      makeView({ drawingId: 'x1', partNumber: 'X-002', description: 'Igual' }),
+      makeView({ drawingId: 'x2', partNumber: 'X-001', description: 'Igual' }),
+    ]);
+    expect(sortToolcribGroups(tied, 'description', 'asc').map((g) => g.partNumber)).toEqual([
+      'X-001',
+      'X-002',
+    ]);
+  });
+
+  it('sin metricsFor (default), ordenar por impresiones no revienta — todo cuenta 0', () => {
+    expect(sortToolcribGroups(groups, 'prints', 'desc').map((g) => g.partNumber)).toEqual([
+      'A-001',
+      'B-001',
+      'C-001',
+    ]);
   });
 });

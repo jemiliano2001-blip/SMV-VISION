@@ -7,7 +7,15 @@ param(
   # iso: fuerza vista isométrica (modelos 3D: .sldprt/.easm/.eprt).
   # flat: conserva la vista del documento tal cual (planos acotados .slddrw) y
   # solo hace zoom-to-fit — forzar isométrica en un dibujo 2D lo deja ilegible.
-  [ValidateSet('iso', 'flat')][string]$Mode = 'iso'
+  [ValidateSet('iso', 'flat')][string]$Mode = 'iso',
+  # El control ActiveX renderiza al tamano de su ventana host. Sin ventana
+  # visible eDrawings usa ~382x366 px, y ese raster minusculo es lo que acaba
+  # dentro del PDF del catalogo: cotas y cajetin ilegibles. ShowFullScreen
+  # promueve el control a una ventana del tamano del monitor (~2878x1798 en
+  # 1080p), que es la unica palanca de resolucion que expone la API: Width y
+  # Height son de solo lectura y Save() no acepta dimensiones.
+  # Escotilla de escape por si una maquina no tolera la ventana full screen.
+  [switch]$NoFullScreen
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +27,7 @@ $resolvedOutDir = $null
 $jpgPromotionPath = $null
 $stlPromotionPath = $null
 $eventSubscription = $null
+$script:FullScreenActive = $false
 
 function Write-ExporterStage {
   param([Parameter(Mandatory = $true)][string]$Stage)
@@ -239,9 +248,28 @@ try {
   $viewer.FullUI = 0
   $viewer.BackgroundColorOverride = $true
   $viewer.BackgroundColorGradient = $false
+  # Blanco puro en fondo y papel: el default pinta un marco azul-gris y una
+  # hoja gris claro que en la impresora del taller sale como un lavado de toner.
+  try { $viewer.BackgroundColor = 0xFFFFFF } catch { }
+  try {
+    $viewer.PaperColorOverride = $true
+    $viewer.PaperColor = 0xFFFFFF
+  } catch { }
   [SmvVisionEDrawingsEventBridge]::ResetLoad()
   $viewer.OpenDoc($resolvedInput, $false, $false, $true, '')
   Wait-EDrawingsEvent -Operation load -TimeoutMilliseconds ($TimeoutSeconds * 1000)
+
+  # Ampliar ANTES de orientar: al cambiar el tamano del viewport eDrawings
+  # reencuadra la vista, asi que orientar despues deja el encuadre correcto.
+  if (-not $NoFullScreen) {
+    try {
+      $viewer.ShowFullScreen($true)
+      $script:FullScreenActive = $true
+      Start-Sleep -Milliseconds 1200
+    } catch {
+      Write-ExporterStage "fullscreen:unavailable:$($_.Exception.Message)"
+    }
+  }
 
   if ($Mode -eq 'iso') {
     $viewer.ViewOrientation = 6
@@ -251,6 +279,11 @@ try {
   }
   $viewer.ShowShadedEdges = $true
   $viewer.UpdateScene()
+  Start-Sleep -Milliseconds 600
+  # Width/Height no se refrescan tras ShowFullScreen (getters cacheados del
+  # control), asi que no sirven como diagnostico: el tamano real solo se
+  # conoce del JPG ya escrito. Reportamos la bandera, no dimensiones falsas.
+  Write-ExporterStage "fullscreen:$(if ($script:FullScreenActive) { 'on' } else { 'off' })"
   Write-ExporterStage 'jpg-save:start'
   [SmvVisionEDrawingsEventBridge]::ResetSave()
   $viewer.Save($stagedJpgPath, $false, '')
@@ -285,6 +318,7 @@ try {
 } finally {
   Disconnect-EDrawingsEventBridge -Subscription $eventSubscription
   if ($null -ne $viewer) {
+    if ($script:FullScreenActive) { try { $viewer.ShowFullScreen($false) } catch { } }
     try { $viewer.CloseActiveDoc('') } catch { }
     try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($viewer) } catch { }
   }

@@ -27,7 +27,7 @@ export const FAMILIES: { id: PartFamily; label: string }[] = [
   { id: 'otros', label: 'Otros' },
 ];
 
-export type AssetFilter = 'all' | 'cad' | 'iso' | 'stl' | 'missing-pdf';
+export type AssetFilter = 'all' | 'cad' | 'iso' | 'stl' | 'missing-pdf' | 'missing-cad' | 'missing-iso';
 
 export const ASSET_FILTERS: { id: AssetFilter; label: string }[] = [
   { id: 'all', label: 'Todos' },
@@ -35,7 +35,14 @@ export const ASSET_FILTERS: { id: AssetFilter; label: string }[] = [
   { id: 'iso', label: 'Con ISO' },
   { id: 'stl', label: 'Con 3D' },
   { id: 'missing-pdf', label: 'Sin PDF' },
+  { id: 'missing-cad', label: 'Sin CAD' },
+  { id: 'missing-iso', label: 'Sin ISO' },
 ];
+
+/** Filtros "hueco" (huecos del catálogo): sólo se muestran como chip si hay al menos una pieza. */
+export function isGapAssetFilter(filter: AssetFilter): boolean {
+  return filter.startsWith('missing-');
+}
 
 const PUNZON_RE = /PUNZON|HOT\s*STAMP|PUNCH|MARCA|ESTAMP/i;
 const MATRIZ_RE = /MATRIZ|DIE|INSERT|CAVIDAD|DADO/i;
@@ -197,6 +204,10 @@ export function matchesAssetFilter(group: ToolcribPartGroup, filter: AssetFilter
       return group.stlView !== null;
     case 'missing-pdf':
       return !group.cad?.pdfUrl && !group.iso?.pdfUrl;
+    case 'missing-cad':
+      return group.cad === null;
+    case 'missing-iso':
+      return group.iso === null;
   }
 }
 
@@ -214,4 +225,73 @@ export function attachDrawingForGroup(group: ToolcribPartGroup): ToolcribActiveD
   if (group.iso?.pdfUrl) return group.iso;
   if (group.cad?.pdfUrl) return group.cad;
   return group.iso ?? group.cad;
+}
+
+/** El plano que "cuenta" para las estadísticas de impresión de un grupo (CAD; si no hay, ISO). */
+export function pendingPrintViewForGroup(group: ToolcribPartGroup): ToolcribActiveDrawingView | null {
+  return printDrawingForGroup(group) ?? group.iso;
+}
+
+/** Miniatura preferida del grupo: el ISO (vista isométrica) es más reconocible a simple vista que un plano acotado. */
+export function thumbnailPdfUrlForGroup(group: ToolcribPartGroup): string | null {
+  return group.iso?.pdfUrl ?? group.cad?.pdfUrl ?? null;
+}
+
+export type ToolcribSortKey = 'partNumber' | 'description' | 'revision' | 'prints' | 'lastPrinted';
+export type SortDirection = 'asc' | 'desc';
+
+export interface GroupPrintMetrics {
+  count: number;
+  lastPrintedAtUTC: string | null;
+}
+
+const EMPTY_METRICS: GroupPrintMetrics = { count: 0, lastPrintedAtUTC: null };
+
+function compareEs(a: string, b: string): number {
+  return a.localeCompare(b, 'es');
+}
+
+/**
+ * Ordena grupos por columna. `metricsFor` inyecta las estadísticas de
+ * impresión (viven en Firestore/estado de React, no en el grupo puro) para
+ * poder ordenar por "más impresas" / "impresas recientemente" sin acoplar
+ * este módulo a la capa de datos. Siempre desempata por número de parte para
+ * que el orden sea estable entre renders.
+ */
+export function sortToolcribGroups(
+  groups: readonly ToolcribPartGroup[],
+  key: ToolcribSortKey,
+  direction: SortDirection,
+  metricsFor: (group: ToolcribPartGroup) => GroupPrintMetrics = () => EMPTY_METRICS,
+): ToolcribPartGroup[] {
+  const sign = direction === 'asc' ? 1 : -1;
+  const decorated = groups.map((group) => ({ group, metrics: metricsFor(group) }));
+
+  decorated.sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case 'partNumber':
+        cmp = compareEs(a.group.partNumber, b.group.partNumber);
+        break;
+      case 'description':
+        cmp = compareEs(a.group.description, b.group.description);
+        break;
+      case 'revision':
+        cmp = compareEs(
+          a.group.cad?.revision ?? a.group.iso?.revision ?? '',
+          b.group.cad?.revision ?? b.group.iso?.revision ?? '',
+        );
+        break;
+      case 'prints':
+        cmp = a.metrics.count - b.metrics.count;
+        break;
+      case 'lastPrinted':
+        cmp = (a.metrics.lastPrintedAtUTC ?? '').localeCompare(b.metrics.lastPrintedAtUTC ?? '');
+        break;
+    }
+    if (cmp !== 0) return cmp * sign;
+    return compareEs(a.group.partNumber, b.group.partNumber);
+  });
+
+  return decorated.map((entry) => entry.group);
 }

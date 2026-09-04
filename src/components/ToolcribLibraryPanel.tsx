@@ -6,9 +6,12 @@
  * (variant=embedded) sigue siendo el acordeón compacto del flujo de análisis.
  */
 
-import { useCallback, useEffect, useMemo, useState, Suspense, lazy, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy, type ReactElement } from 'react';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   CheckCircle2,
   FileText,
   FolderOpen,
@@ -22,8 +25,8 @@ import {
   Trash2,
   Box,
   MoreHorizontal,
+  Tag,
 } from 'lucide-react';
-import Fuse from 'fuse.js';
 
 import {
   listActiveDrawingViews,
@@ -31,6 +34,7 @@ import {
   recordToolcribPrintLog,
   inactivatePart,
 } from '../lib/firebase/toolcrib';
+import { listPartAliases, type PartAliasDoc } from '../lib/firebase/aliases';
 import type { ToolcribActiveDrawingView } from '../types';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { formatRelativeTime } from '../lib/age';
@@ -38,22 +42,43 @@ import {
   ASSET_FILTERS,
   FAMILIES,
   attachDrawingForGroup,
+  canonicalPartNumber,
   groupDrawingViews,
+  isGapAssetFilter,
   matchesAssetFilter,
   matchesFamilyGroup,
+  pendingPrintViewForGroup,
   previewDrawingForGroup,
   printDrawingForGroup,
+  sortToolcribGroups,
+  thumbnailPdfUrlForGroup,
   type AssetFilter,
+  type GroupPrintMetrics,
   type PartFamily,
+  type SortDirection,
   type ToolcribPartGroup,
+  type ToolcribSortKey,
 } from '../lib/toolcribCatalog';
+import {
+  buildSearchIndex,
+  highlightSegments,
+  searchIndex,
+  withAliasSearchText,
+} from '../lib/toolcribSearch';
+import { ToolcribThumbnail } from './ToolcribThumbnail';
 import { ToolcribUploadModal } from './ToolcribUploadModal';
 import { ToolcribPrintModal } from './ToolcribPrintModal';
 import { ToolcribHistoryModal } from './ToolcribHistoryModal';
-// three.js (~600 KB) solo se necesita al abrir el visor 3D — carga bajo
-// demanda en lugar de en el bundle inicial (three-vendor chunk).
+import { ToolcribBatchPrintModal } from './ToolcribBatchPrintModal';
+import { ToolcribAliasModal, type ToolcribAliasTarget } from './ToolcribAliasModal';
+// three.js (~600 KB) y pdfjs-dist en el hilo principal solo se necesitan al
+// abrir sus respectivos modales — cargan bajo demanda en lugar de ir en el
+// bundle inicial (three-vendor / pdfjs-vendor chunks).
 const StlViewerModal = lazy(() =>
   import('./StlViewerModal').then((m) => ({ default: m.StlViewerModal })),
+);
+const ToolcribPdfViewer = lazy(() =>
+  import('./ToolcribPdfViewer').then((m) => ({ default: m.ToolcribPdfViewer })),
 );
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Input } from './ui/input';
@@ -132,12 +157,21 @@ export interface DrawingPrintStat {
   lastOrderRef: string | null;
 }
 
-function normalizeSearchTerm(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
+/** Resalta los tramos de `text` que coinciden con la busqueda. */
+function Highlighted({ text, query }: { text: string; query: string }): ReactElement {
+  return (
+    <>
+      {highlightSegments(text, query).map((segment, i) =>
+        segment.match ? (
+          <mark key={i} className="bg-accent/30 text-ink rounded-none px-0">
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={i}>{segment.text}</span>
+        ),
+      )}
+    </>
+  );
 }
 
 function buildDisplayName(view: ToolcribActiveDrawingView): string {
@@ -187,6 +221,80 @@ function FilterChip({
   );
 }
 
+function HealthStat({
+  label,
+  count,
+  total,
+  onClick,
+  tone = 'default',
+}: {
+  label: string;
+  count: number;
+  total: number;
+  onClick: () => void;
+  tone?: 'default' | 'danger';
+}): ReactElement {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'hover:underline transition-colors',
+        tone === 'danger' ? 'text-danger hover:text-danger/80' : 'hover:text-accent',
+      )}
+      title={`Filtrar por ${label.toLowerCase()}`}
+    >
+      {label}: {count} ({pct}%)
+    </button>
+  );
+}
+
+function SortableHead({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onSort,
+  disabled,
+  className,
+}: {
+  label: string;
+  sortKey: ToolcribSortKey;
+  activeKey: ToolcribSortKey;
+  direction: SortDirection;
+  onSort: (key: ToolcribSortKey) => void;
+  disabled?: boolean;
+  className?: string;
+}): ReactElement {
+  const isActive = activeKey === sortKey;
+  return (
+    <TableHead className={cn('font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5', className)}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        disabled={disabled}
+        title={disabled ? 'Se aplica al limpiar la búsqueda' : `Ordenar por ${label.toLowerCase()}`}
+        className={cn(
+          'inline-flex items-center gap-1 hover:text-accent transition-colors disabled:hover:text-ink-dim disabled:cursor-default',
+          isActive && !disabled && 'text-accent',
+        )}
+      >
+        <span>{label}</span>
+        {isActive && !disabled ? (
+          direction === 'asc' ? (
+            <ArrowUp size={10} />
+          ) : (
+            <ArrowDown size={10} />
+          )
+        ) : (
+          <ArrowUpDown size={10} className="opacity-30" />
+        )}
+      </button>
+    </TableHead>
+  );
+}
+
 export function ToolcribLibraryPanel({
   onAttachDrawing,
   attachedDrawingIds,
@@ -213,6 +321,48 @@ export function ToolcribLibraryPanel({
   const [rowState, setRowState] = useState<Record<string, RowActionState>>({});
   const [previewDrawing, setPreviewDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [stlDrawing, setStlDrawing] = useState<ToolcribActiveDrawingView | null>(null);
+  const [aliases, setAliases] = useState<PartAliasDoc[]>([]);
+  const [aliasTarget, setAliasTarget] = useState<ToolcribAliasTarget | null>(null);
+  const [sortKey, setSortKey] = useState<ToolcribSortKey>('partNumber');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(new Set());
+  const [batchPrintDrawings, setBatchPrintDrawings] = useState<ToolcribActiveDrawingView[] | null>(
+    null,
+  );
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const loadAliases = useCallback(async () => {
+    const result = await listPartAliases();
+    if (result.ok === false) {
+      log.warn('[toolcrib] listPartAliases falló — la búsqueda no incluirá alias de taller', result.reason);
+      return;
+    }
+    setAliases(result.value);
+  }, []);
+
+  // Se carga una sola vez al montar (mismo ciclo de vida que loadLibrary):
+  // los alias son poco frecuentes y su lectura es barata (<=1000 docs).
+  useEffect(() => {
+    void loadAliases();
+  }, [loadAliases]);
+
+  // "/" enfoca el buscador desde cualquier parte de la vista — en el taller se
+  // llega aquí con un número de parte en la mano, no con el mouse. Se ignora si
+  // el foco ya está en un campo de texto (si no, "/" sería intecleable).
+  useEffect(() => {
+    if (!isPage) return;
+    const handleSlash = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      event.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener('keydown', handleSlash);
+    return () => window.removeEventListener('keydown', handleSlash);
+  }, [isPage]);
 
   useEffect(() => {
     if (initialSearchTerm.trim().length > 0) {
@@ -330,6 +480,8 @@ export function ToolcribLibraryPanel({
       iso: 0,
       stl: 0,
       'missing-pdf': 0,
+      'missing-cad': 0,
+      'missing-iso': 0,
     };
     for (const group of familyMatchedForAssetCounts) {
       for (const filter of ASSET_FILTERS) {
@@ -341,51 +493,85 @@ export function ToolcribLibraryPanel({
     return counts;
   }, [familyMatchedForAssetCounts]);
 
-  const filteredGroups = useMemo(() => {
-    const familyMatched =
-      selectedFamily === 'all'
-        ? groups
-        : groups.filter((group) => matchesFamilyGroup(group, selectedFamily));
-    const assetMatched =
-      selectedAsset === 'all'
-        ? familyMatched
-        : familyMatched.filter((group) => matchesAssetFilter(group, selectedAsset));
+  // Salud del catálogo: SIEMPRE contra el total real, no el ya acotado por
+  // familia — si no, navegar a "Punzones / Marcas" haría parecer que el
+  // catálogo entero mejoró o empeoró de cobertura cuando sólo cambió la vista.
+  const catalogHealth = useMemo(() => {
+    let withCad = 0;
+    let withIso = 0;
+    let with3d = 0;
+    let missingBoth = 0;
+    for (const group of groups) {
+      if (group.cad) withCad += 1;
+      if (group.iso) withIso += 1;
+      if (group.stlView) with3d += 1;
+      if (!group.cad?.pdfUrl && !group.iso?.pdfUrl) missingBoth += 1;
+    }
+    return { total: groups.length, withCad, withIso, with3d, missingBoth };
+  }, [groups]);
 
-    const term = normalizeSearchTerm(searchTerm);
-    if (term.length === 0) {
-      return assetMatched;
+  // Alias de taller inyectados en el searchText: "el punzón de la M" debe
+  // encontrar la pieza aunque el catálogo no tenga esas palabras en ningún
+  // lado. Sin alias (el caso normal) esto devuelve el mismo array sin clonar.
+  const groupsWithAliases = useMemo(
+    () => withAliasSearchText(groups, aliases, canonicalPartNumber),
+    [groups, aliases],
+  );
+
+  // El indice se reconstruye solo cuando cambia el catalogo, no en cada tecla:
+  // antes se creaba un Fuse nuevo por pulsacion sobre el set ya filtrado.
+  const catalogIndex = useMemo(() => buildSearchIndex(groupsWithAliases), [groupsWithAliases]);
+
+  const hasQuery = searchTerm.trim().length > 0;
+
+  const filteredGroups = useMemo(() => {
+    const passesFilters = (group: ToolcribPartGroup) =>
+      matchesFamilyGroup(group, selectedFamily) && matchesAssetFilter(group, selectedAsset);
+
+    if (!hasQuery) {
+      // Sin búsqueda activa, el orden lo decide la columna elegida (por
+      // defecto, alfabético — el comportamiento de antes). Con búsqueda
+      // activa el orden lo decide la relevancia, no tendría sentido pelearse
+      // por cuál gana.
+      const metricsFor = (group: ToolcribPartGroup): GroupPrintMetrics => {
+        const view = pendingPrintViewForGroup(group);
+        const stat = view ? printStats.get(view.drawingId) : undefined;
+        return { count: stat?.count ?? 0, lastPrintedAtUTC: stat?.lastPrintedAtUTC ?? null };
+      };
+      return sortToolcribGroups(groups.filter(passesFilters), sortKey, sortDirection, metricsFor);
     }
 
-    const fuse = new Fuse(assetMatched, {
-      keys: [
-        { name: 'partNumber', weight: 2 },
-        { name: 'description', weight: 1 },
-        { name: 'searchText', weight: 0.8 },
-      ],
-      threshold: 0.4,
-      ignoreLocation: true,
-      includeScore: true,
+    // Buscar primero y filtrar despues: los escalones de `searchIndex` ya dejan
+    // el orden bueno y los chips no lo alteran.
+    const hits = searchIndex(catalogIndex, searchTerm, {
+      // En Biblioteca/OT no se prefiere ISO: ahi imprimir siempre usa el CAD.
+      tieBreak: excludeIsoForPrint ? undefined : (group) => (group.iso ? 1 : 0),
     });
 
-    const results = fuse.search(term);
-    if (excludeIsoForPrint) {
-      return results
-        .sort((a, b) => (a.score || 0) - (b.score || 0))
-        .map((result) => result.item);
-    }
+    return hits.map((hit) => hit.item).filter(passesFilters);
+  }, [
+    hasQuery,
+    searchTerm,
+    catalogIndex,
+    groups,
+    selectedFamily,
+    selectedAsset,
+    excludeIsoForPrint,
+    sortKey,
+    sortDirection,
+    printStats,
+  ]);
 
-    return results
-      .sort((a, b) => {
-        const scoreDiff = (a.score || 0) - (b.score || 0);
-        if (Math.abs(scoreDiff) < 0.1) {
-          const aIso = a.item.iso ? 1 : 0;
-          const bIso = b.item.iso ? 1 : 0;
-          if (aIso !== bIso) return bIso - aIso;
-        }
-        return scoreDiff;
-      })
-      .map((result) => result.item);
-  }, [searchTerm, groups, selectedFamily, selectedAsset, excludeIsoForPrint]);
+  const toggleSort = useCallback((key: ToolcribSortKey) => {
+    setSortKey((prevKey) => {
+      if (prevKey === key) {
+        setSortDirection((prevDir) => (prevDir === 'asc' ? 'desc' : 'asc'));
+      } else {
+        setSortDirection('asc');
+      }
+      return key;
+    });
+  }, []);
 
   const handleAttach = useCallback(
     async (view: ToolcribActiveDrawingView) => {
@@ -475,22 +661,128 @@ export function ToolcribLibraryPanel({
     [loadLibrary],
   );
 
+  const toggleGroupSelection = useCallback((key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
+
+  const handleBatchPrintSuccess = useCallback(
+    ({ soNumber, drawings }: { soNumber: string | null; drawings: ToolcribActiveDrawingView[] }) => {
+      for (const drawing of drawings) {
+        if (!drawing.pdfUrl) continue;
+        void recordToolcribPrintLog({
+          drawingId: drawing.drawingId,
+          partId: drawing.partId,
+          copies: 1,
+          orderRef: soNumber,
+        });
+      }
+      clearSelection();
+      // Da tiempo a que los logs lleguen a Firestore antes de refrescar,
+      // igual que la impresión individual — si no, el "Nx OT" queda atrasado.
+      window.setTimeout(() => void loadLibrary(), 1200);
+    },
+    [clearSelection, loadLibrary],
+  );
+
   const totalCount = groups.length;
   const visibleCount = filteredGroups.length;
+  const hasNarrowingFilters = selectedFamily !== 'all' || selectedAsset !== 'all';
+  const resetFilters = useCallback(() => {
+    setSelectedFamily('all');
+    setSelectedAsset('all');
+  }, []);
   const isEmpty = status === 'ready' && totalCount === 0;
   const listOpen = isPage || isOpen;
+
+  // La impresión en lote es una función de Biblioteca (isPage): el acordeón
+  // de Reporte ya tiene su propio flujo de adjuntar/imprimir por pieza y
+  // añadir checkboxes ahí sólo estorbaría en un espacio ya apretado.
+  const showBatchSelection = isPage;
+  const selectedEligibleGroups = useMemo(
+    () =>
+      showBatchSelection
+        ? filteredGroups.filter(
+            (group) => selectedKeys.has(group.key) && printDrawingForGroup(group)?.pdfUrl,
+          )
+        : [],
+    [showBatchSelection, filteredGroups, selectedKeys],
+  );
+  const visibleEligibleKeys = useMemo(
+    () =>
+      showBatchSelection
+        ? filteredGroups.filter((group) => printDrawingForGroup(group)?.pdfUrl).map((group) => group.key)
+        : [],
+    [showBatchSelection, filteredGroups],
+  );
+  const allVisibleEligibleSelected =
+    visibleEligibleKeys.length > 0 && visibleEligibleKeys.every((key) => selectedKeys.has(key));
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedKeys((prev) => {
+      if (visibleEligibleKeys.length > 0 && visibleEligibleKeys.every((key) => prev.has(key))) {
+        const next = new Set(prev);
+        for (const key of visibleEligibleKeys) next.delete(key);
+        return next;
+      }
+      return new Set([...prev, ...visibleEligibleKeys]);
+    });
+  }, [visibleEligibleKeys]);
+
+  const handleAliasSaved = useCallback(() => {
+    void loadAliases();
+    onCatalogChanged?.();
+  }, [loadAliases, onCatalogChanged]);
 
   const toolbar = (
     <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
       <div className="relative flex-1 w-full">
         <Search size={14} className="absolute left-3 top-2.5 text-ink-dim" />
         <Input
+          ref={searchInputRef}
           type="text"
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
-          placeholder="Buscar parte, descripción o revisión…"
-          className="pl-9 w-full border-2 border-line bg-surface-2 text-ink h-9 text-xs font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
+          onKeyDown={(event) => {
+            // Escape limpia primero y solo suelta el foco si ya estaba vacío.
+            if (event.key === 'Escape') {
+              if (searchTerm.length > 0) {
+                event.preventDefault();
+                setSearchTerm('');
+              } else {
+                event.currentTarget.blur();
+              }
+            }
+          }}
+          placeholder="Buscar parte, descripción, archivo o revisión…   ( / )"
+          aria-label="Buscar en el catálogo Tool Crib"
+          className="pl-9 pr-24 w-full border-2 border-line bg-surface-2 text-ink h-9 text-xs font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
         />
+        {hasQuery && (
+          <div className="absolute right-2 top-1.5 flex items-center gap-1.5">
+            <span className="font-mono text-[10px] text-ink-dim tabular-nums">
+              {visibleCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchTerm('');
+                searchInputRef.current?.focus();
+              }}
+              className="p-1 border-2 border-line hover:border-accent hover:text-accent text-ink-dim transition-colors"
+              title="Limpiar búsqueda (Esc)"
+              aria-label="Limpiar búsqueda"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2 w-full sm:w-auto">
         <Button
@@ -540,7 +832,7 @@ export function ToolcribLibraryPanel({
       <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none flex-nowrap sm:flex-wrap">
         {ASSET_FILTERS.map((filter) => {
           const count = assetCounts[filter.id];
-          if (filter.id === 'missing-pdf' && count === 0) return null;
+          if (isGapAssetFilter(filter.id) && count === 0) return null;
           return (
             <FilterChip
               key={filter.id}
@@ -552,6 +844,42 @@ export function ToolcribLibraryPanel({
           );
         })}
       </div>
+    </div>
+  );
+
+  // Huecos del catálogo, de un vistazo: cuánto falta digitalizar sin ir
+  // pieza por pieza. Sólo en Biblioteca dedicada — el acordeón de Reporte no
+  // necesita esta vista de auditoría.
+  const healthStrip = isPage && catalogHealth.total > 0 && (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 font-mono text-[10px] text-ink-dim uppercase tracking-wider">
+      <span className="font-bold text-ink-dim/80">Salud del catálogo:</span>
+      <HealthStat
+        label="Con ISO"
+        count={catalogHealth.withIso}
+        total={catalogHealth.total}
+        onClick={() => setSelectedAsset('iso')}
+      />
+      <HealthStat
+        label="Con CAD"
+        count={catalogHealth.withCad}
+        total={catalogHealth.total}
+        onClick={() => setSelectedAsset('cad')}
+      />
+      <HealthStat
+        label="Con 3D"
+        count={catalogHealth.with3d}
+        total={catalogHealth.total}
+        onClick={() => setSelectedAsset('stl')}
+      />
+      {catalogHealth.missingBoth > 0 && (
+        <HealthStat
+          label="Sin nada"
+          count={catalogHealth.missingBoth}
+          total={catalogHealth.total}
+          tone="danger"
+          onClick={() => setSelectedAsset('missing-pdf')}
+        />
+      )}
     </div>
   );
 
@@ -572,19 +900,92 @@ export function ToolcribLibraryPanel({
         <Table className="min-w-[620px] sm:min-w-full">
           <TableHeader className="sticky top-0 bg-surface-2 border-b-2 border-line z-10">
             <TableRow className="border-b-2 border-line hover:bg-transparent">
-              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5">Número de Parte</TableHead>
-              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5">Descripción</TableHead>
-              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5 w-28">Rev</TableHead>
-              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5 text-right">Acciones</TableHead>
+              {showBatchSelection && (
+                <TableHead className="w-8 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleEligibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    disabled={visibleEligibleKeys.length === 0}
+                    title="Seleccionar todas las visibles con CAD imprimible"
+                    className="size-3.5 accent-accent border-2 border-line cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                </TableHead>
+              )}
+              <TableHead className="w-14 py-2.5" />
+              <SortableHead label="Número de Parte" sortKey="partNumber" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} disabled={hasQuery} />
+              <SortableHead label="Descripción" sortKey="description" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} disabled={hasQuery} />
+              <SortableHead label="Rev" sortKey="revision" activeKey={sortKey} direction={sortDirection} onSort={toggleSort} disabled={hasQuery} className="w-28" />
+              <TableHead className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim py-2.5 text-right">
+                <div className="flex items-center justify-end gap-2">
+                  <span>Acciones</span>
+                  {isPage && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 border-2 border-line hover:border-accent hover:text-accent rounded-none normal-case font-normal"
+                        title="Ordenar por…"
+                        disabled={hasQuery}
+                      >
+                        <ArrowUpDown size={10} />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[170px] bg-surface border-2 border-line shadow-hard-accent text-ink rounded-none p-1 normal-case font-normal">
+                        <DropdownMenuItem onClick={() => { setSortKey('prints'); setSortDirection('desc'); }} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                          Más impresas
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setSortKey('lastPrinted'); setSortDirection('desc'); }} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                          Impresas recientemente
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setSortKey('partNumber'); setSortDirection('asc'); }} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                          Alfabético
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredGroups.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center font-mono text-xs text-ink-dim uppercase">
-                  {normalizeSearchTerm(searchTerm).length > 0
-                    ? 'Ningún plano coincide con la búsqueda.'
-                    : 'Ningún plano coincide con los filtros seleccionados.'}
+                <TableCell colSpan={showBatchSelection ? 6 : 5} className="h-24 text-center font-mono text-xs text-ink-dim uppercase">
+                  {hasQuery ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <span>
+                        Ningún plano coincide con «{searchTerm.trim()}»
+                        {hasNarrowingFilters ? ' con estos filtros' : ''}.
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {hasNarrowingFilters && (
+                          <button
+                            type="button"
+                            onClick={resetFilters}
+                            className="border-2 border-line hover:border-accent hover:text-accent px-2 py-1 text-[10px] tracking-wider transition-colors"
+                          >
+                            Quitar filtros
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSearchTerm('')}
+                          className="border-2 border-line hover:border-accent hover:text-accent px-2 py-1 text-[10px] tracking-wider transition-colors"
+                        >
+                          Limpiar búsqueda
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2">
+                      <span>Ningún plano coincide con los filtros seleccionados.</span>
+                      <button
+                        type="button"
+                        onClick={resetFilters}
+                        className="border-2 border-line hover:border-accent hover:text-accent px-2 py-1 text-[10px] tracking-wider transition-colors"
+                      >
+                        Quitar filtros
+                      </button>
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             ) : (
@@ -592,11 +993,15 @@ export function ToolcribLibraryPanel({
                 <PartGroupRow
                   key={group.key}
                   group={group}
+                  searchTerm={searchTerm}
                   printStats={printStats}
                   rowState={rowState}
                   attachedDrawingIds={attachedDrawingIds}
                   pendingLinkLabel={pendingLinkLabel}
                   showAttach={Boolean(onAttachDrawing)}
+                  showCheckbox={showBatchSelection}
+                  selected={selectedKeys.has(group.key)}
+                  onToggleSelect={toggleGroupSelection}
                   onPreview={setPreviewDrawing}
                   onPrint={setPrintDrawing}
                   onHistory={setHistoryDrawing}
@@ -605,6 +1010,7 @@ export function ToolcribLibraryPanel({
                   onAttach={(view) => void handleAttach(view)}
                   onInactivate={(view) => void handleInactivate(view)}
                   onUseForPending={onUseForPendingOrder}
+                  onAlias={setAliasTarget}
                 />
               ))
             )}
@@ -618,6 +1024,7 @@ export function ToolcribLibraryPanel({
     <div className={cn(isPage ? 'flex-1 min-h-0 flex flex-col gap-4 p-5' : 'space-y-4')}>
       {toolbar}
       {filters}
+      {healthStrip}
       {errorMessage && (
         <div className="flex items-start gap-2 border-2 border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -632,6 +1039,41 @@ export function ToolcribLibraryPanel({
       {isEmpty && (
         <div className="font-mono text-xs text-ink-dim text-center py-8 border-2 border-dashed border-line bg-surface-2 p-6 corner-ticks">
           Aún no hay planos registrados. Ejecuta el script de bootstrap o carga el primer plano manual.
+        </div>
+      )}
+      {showBatchSelection && selectedKeys.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-2 border-accent bg-accent/10 shrink-0">
+          <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-ink">
+            {selectedKeys.size} {selectedKeys.size === 1 ? 'seleccionada' : 'seleccionadas'}
+            {selectedEligibleGroups.length !== selectedKeys.size
+              ? ` (${selectedEligibleGroups.length} imprimibles)`
+              : ''}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              onClick={() =>
+                setBatchPrintDrawings(
+                  selectedEligibleGroups
+                    .map((group) => printDrawingForGroup(group))
+                    .filter((view): view is ToolcribActiveDrawingView => view !== null),
+                )
+              }
+              disabled={selectedEligibleGroups.length === 0}
+              className="bg-accent text-bg font-mono font-bold uppercase text-[10px] tracking-wider rounded-none h-7 px-3 hover:bg-accent/80 shadow-hard active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1.5 disabled:opacity-50 disabled:shadow-none"
+            >
+              <Printer size={12} />
+              Imprimir Lote
+            </Button>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={clearSelection}
+              className="border-2 border-line text-ink font-mono font-bold uppercase text-[10px] tracking-wider hover:bg-surface-2 rounded-none h-7 px-3"
+            >
+              Limpiar selección
+            </Button>
+          </div>
         </div>
       )}
       {tableBlock}
@@ -754,23 +1196,19 @@ export function ToolcribLibraryPanel({
               </button>
             </div>
             <div className="grow overflow-hidden bg-surface-2 relative flex items-center justify-center min-h-[70vh]">
-              <object
-                data={`${previewDrawing.pdfUrl}#toolbar=0&navpanes=0&view=FitH`}
-                type="application/pdf"
-                className="w-full h-full border-none"
+              <Suspense
+                fallback={
+                  <div className="flex flex-col items-center gap-2 text-ink-dim font-mono text-xs uppercase tracking-widest">
+                    <Loader2 size={20} className="animate-spin text-accent" />
+                    Cargando visor…
+                  </div>
+                }
               >
-                <p className="text-center p-4">
-                  El navegador no soporta visualización incrustada de PDFs.{' '}
-                  <a
-                    href={previewDrawing.pdfUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-accent underline"
-                  >
-                    Descargar o abrir PDF
-                  </a>
-                </p>
-              </object>
+                <ToolcribPdfViewer
+                  pdfUrl={previewDrawing.pdfUrl}
+                  fileName={buildDisplayName(previewDrawing)}
+                />
+              </Suspense>
             </div>
           </div>
         </div>
@@ -786,17 +1224,35 @@ export function ToolcribLibraryPanel({
           />
         </Suspense>
       )}
+
+      <ToolcribBatchPrintModal
+        drawings={batchPrintDrawings}
+        onClose={() => setBatchPrintDrawings(null)}
+        onSuccess={handleBatchPrintSuccess}
+      />
+
+      <ToolcribAliasModal
+        target={aliasTarget}
+        onClose={() => setAliasTarget(null)}
+        onSaved={handleAliasSaved}
+      />
     </div>
   );
 }
 
 interface PartGroupRowProps {
   group: ToolcribPartGroup;
+  /** Consulta activa, sólo para resaltar los tramos coincidentes. */
+  searchTerm: string;
   printStats: ReadonlyMap<string, DrawingPrintStat>;
   rowState: Record<string, RowActionState>;
   attachedDrawingIds: ReadonlySet<string> | undefined;
   pendingLinkLabel: string | null | undefined;
   showAttach: boolean;
+  /** Biblioteca (isPage) muestra checkbox de selección para imprimir en lote. */
+  showCheckbox: boolean;
+  selected: boolean;
+  onToggleSelect: (key: string) => void;
   onPreview: (view: ToolcribActiveDrawingView) => void;
   onPrint: (view: ToolcribActiveDrawingView) => void;
   onHistory: (view: ToolcribActiveDrawingView) => void;
@@ -805,15 +1261,20 @@ interface PartGroupRowProps {
   onAttach: (view: ToolcribActiveDrawingView) => void;
   onInactivate: (view: ToolcribActiveDrawingView) => void;
   onUseForPending?: (view: ToolcribActiveDrawingView) => void;
+  onAlias: (target: ToolcribAliasTarget) => void;
 }
 
 function PartGroupRow({
   group,
+  searchTerm,
   printStats,
   rowState,
   attachedDrawingIds,
   pendingLinkLabel,
   showAttach,
+  showCheckbox,
+  selected,
+  onToggleSelect,
   onPreview,
   onPrint,
   onHistory,
@@ -822,15 +1283,18 @@ function PartGroupRow({
   onAttach,
   onInactivate,
   onUseForPending,
+  onAlias,
 }: PartGroupRowProps): ReactElement {
   const printView = printDrawingForGroup(group);
   const previewView = previewDrawingForGroup(group);
   const attachView = attachDrawingForGroup(group);
-  const pendingView = printView ?? group.iso;
   // Mismo target que abrirá el historial al hacer clic — así el número del
   // badge y lo que el modal muestra siempre coinciden (antes se sumaban las
   // impresiones de todo el grupo pero el historial solo mostraba un plano).
+  const pendingView = pendingPrintViewForGroup(group);
   const printStat = pendingView ? printStats.get(pendingView.drawingId) ?? null : null;
+  const selectionEligible = Boolean(printView?.pdfUrl);
+  const thumbnailUrl = thumbnailPdfUrlForGroup(group);
   const errorMember = group.members.find((member) => rowState[member.drawingId]?.status === 'error');
   const errorMessage = errorMember ? rowState[errorMember.drawingId]?.message : undefined;
   const attachBusy = group.members.some((member) => rowState[member.drawingId]?.status === 'attaching');
@@ -851,10 +1315,27 @@ function PartGroupRow({
 
   return (
     <TableRow className="border-b-2 border-line hover:bg-surface-2/60 transition-colors">
+      {showCheckbox && (
+        <TableCell className="py-3 align-top">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(group.key)}
+            disabled={!selectionEligible}
+            title={selectionEligible ? 'Seleccionar para lote' : 'Sin CAD imprimible'}
+            className="size-3.5 accent-accent border-2 border-line cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+          />
+        </TableCell>
+      )}
+      <TableCell className="py-3 align-top">
+        <ToolcribThumbnail pdfUrl={thumbnailUrl} alt={group.partNumber} />
+      </TableCell>
       <TableCell className="font-medium whitespace-nowrap py-3">
         <div className="flex flex-col items-start">
           <div className="flex items-center gap-1.5">
-            <span className="font-mono text-xs font-bold text-ink">{group.partNumber}</span>
+            <span className="font-mono text-xs font-bold text-ink">
+              <Highlighted text={group.partNumber} query={searchTerm} />
+            </span>
             {group.cad && (
               <span className="bg-surface-2 text-ink-dim border-2 border-line text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-none">
                 CAD
@@ -901,12 +1382,21 @@ function PartGroupRow({
       <TableCell className="py-3">
         <div className="flex flex-col max-w-[200px] sm:max-w-xs">
           <span className="truncate text-xs text-ink font-medium" title={group.description}>
-            {group.description || 'Sin descripción'}
+            {group.description ? (
+              <Highlighted text={group.description} query={searchTerm} />
+            ) : (
+              'Sin descripción'
+            )}
           </span>
           <span className="text-[11px] font-mono text-ink-dim truncate" title={cadFile ?? isoFile ?? ''}>
             <FileText size={10} className="inline-block mr-1 -mt-0.5 text-ink-dim" />
-            {cadFile ?? isoFile ?? '(sin archivo)'}
-            {cadFile && isoFile && cadFile !== isoFile ? ` · ${isoFile}` : ''}
+            <Highlighted text={cadFile ?? isoFile ?? '(sin archivo)'} query={searchTerm} />
+            {cadFile && isoFile && cadFile !== isoFile ? (
+              <>
+                {' · '}
+                <Highlighted text={isoFile} query={searchTerm} />
+              </>
+            ) : null}
           </span>
         </div>
       </TableCell>
@@ -1059,6 +1549,15 @@ function PartGroupRow({
                 >
                   <Plus size={12} className="mr-1.5" />
                   {isoAttached ? 'ISO ya adjunto' : 'Adjuntar ISO'}
+                </DropdownMenuItem>
+              )}
+              {pendingView && (
+                <DropdownMenuItem
+                  onClick={() => onAlias({ partNumber: group.partNumber, drawingId: pendingView.drawingId })}
+                  className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5"
+                >
+                  <Tag size={12} className="mr-1.5" />
+                  Agregar alias de taller
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator className="bg-line my-1" />

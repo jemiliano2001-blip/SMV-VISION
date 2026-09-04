@@ -24,6 +24,29 @@ function dataUrlToUint8Array(dataUrl: string): Uint8Array {
   return bytes;
 }
 
+const STAMP_MAX_FONT_SIZE = 16;
+const STAMP_MIN_FONT_SIZE = 6;
+/** Aire mínimo entre las tres columnas del sello, en múltiplos del cuerpo. */
+const STAMP_GAP_RATIO = 0.6;
+
+/**
+ * Mayor cuerpo (≤16) con el que SO + CANT + FECHA caben en una línea sin
+ * encimarse. Exportada para prueba: es geometría pura, sin pdf-lib.
+ */
+export function fitStampFontSize(
+  texts: readonly string[],
+  measure: (text: string, size: number) => number,
+  usableWidth: number,
+): number {
+  if (usableWidth <= 0) return STAMP_MIN_FONT_SIZE;
+  for (let size = STAMP_MAX_FONT_SIZE; size > STAMP_MIN_FONT_SIZE; size -= 0.5) {
+    const textWidth = texts.reduce((total, text) => total + measure(text, size), 0);
+    const gaps = Math.max(0, texts.length - 1) * size * STAMP_GAP_RATIO;
+    if (textWidth + gaps <= usableWidth) return size;
+  }
+  return STAMP_MIN_FONT_SIZE;
+}
+
 /** Una sola línea legible (SO/fecha pueden venir multi-línea). */
 function oneLine(value: string): string {
   return (value ?? '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -44,15 +67,23 @@ export async function stampPlanoOt(
   const page = pages[0];
   const { height } = page.getSize();
 
-  const fontSize = 16;
   const padding = 10;
   const margin = 12;
   const availableWidth = page.getWidth() - margin * 2;
-  
+
   const soText = `SO: ${oneLine(stamp.soNumber) || '—'}`;
   const cantText = `CANT: ${oneLine(stamp.cantidad) || '—'}`;
   const fechaText = `FECHA: ${oneLine(stamp.fecha) || '—'}`;
   const notasText = stamp.notas && stamp.notas.trim() !== '' ? `NOTAS: ${oneLine(stamp.notas)}` : null;
+
+  // SO va a la izquierda, CANT centrado y FECHA a la derecha: en una página
+  // angosta los tres se encimaban y salía "CANECHMA2026-09-04". Bajamos el
+  // cuerpo hasta que las tres cadenas quepan con una separación mínima.
+  const fontSize = fitStampFontSize(
+    [soText, cantText, fechaText],
+    (text, size) => font.widthOfTextAtSize(text, size),
+    availableWidth - padding * 2,
+  );
 
   const lineHeight = fontSize + 6;
   // Si hay notas, usamos 2 líneas de alto, si no, 1.

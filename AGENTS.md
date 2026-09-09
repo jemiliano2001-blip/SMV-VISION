@@ -231,6 +231,7 @@ Do NOT read the wiki for general coding questions or things already in this AGEN
 ## Learned User Preferences
 
 - Prefiere español casual y directo; antes de implementar features no triviales, usar brainstorming/plan y esperar aprobación explícita.
+- Vibe Coding en un SaaS Real (Filosofía de Producción): Nunca asumir un enfoque superficial de "prompt -> sitio web listo". Toda feature, refactor o integración debe contemplar con rigor ingenieril las 16 capas de un SaaS real (diseño de sistemas, arquitectura desacoplada, frontend de producción con cero CLS/skeletons/empty states, APIs tipadas de punta a punta, base de datos optimizada sin N+1, auth & permisos bajo "never trust the client", seguridad OWASP, CI/CD, rate limiting/cuotas, caché determinista, manejo de errores con result types, logging/observabilidad, testing riguroso con Triple Validación y resiliencia con retries/degradación elegante).
 - En Órdenes Odoo: sincronizar todas las compañías con pendientes de factura; la UI no carga órdenes hasta elegir una compañía (botones); no cargar “Todas” por defecto.
 - Remisión real sigue fuera de alcance por ahora; priorizar capacidades nuevas que conecten Biblioteca ↔ Órdenes ↔ Reporte (puente orden–plano).
 - Al terminar fases de programación o agregar código, ejecutar siempre el protocolo del skill `Auditoría Post-Fase` (null-safety defensivo, prevención de NaNs en inputs, consistencia de índices en arrays filtrados, sincronización de tablas UI/impresión y la Triple Validación: `npm test` + `npm run lint` + `npm run build`).

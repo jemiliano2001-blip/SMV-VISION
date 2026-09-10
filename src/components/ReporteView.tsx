@@ -843,14 +843,14 @@ export function ReporteView({
   return (
     <div className="h-full flex flex-col xl:flex-row">
       {/* ── Columna de entrada (CTA siempre visible al pie) ── */}
-      <section className="xl:w-[400px] xl:shrink-0 xl:h-full border-b-2 xl:border-b-0 xl:border-r-2 border-line bg-surface flex flex-col">
+      <section className="xl:w-[420px] xl:shrink-0 xl:h-full border-b xl:border-b-0 xl:border-r border-line bg-surface flex flex-col">
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           <div>
-            <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">
+            <p className="workspace-kicker mb-2">
               Auditoría de planos
             </p>
-            <h1 className="font-display font-black text-3xl uppercase italic tracking-[-1px] leading-none">
-              Generar Reporte
+            <h1 className="workspace-title text-4xl">
+              Generar reporte
             </h1>
           </div>
 
@@ -861,11 +861,11 @@ export function ReporteView({
               label="Órdenes Odoo"
               done={vision.seededBridgeLinks.length > 0 || Boolean(vision.results)}
             />
-            <div className="min-h-[150px] border-2 border-line bg-surface-2 flex flex-col items-center justify-center p-6 relative">
+            <div className="min-h-[150px] rounded-xl border border-line bg-surface-2/70 flex flex-col items-center justify-center p-6 relative">
               <div className="text-center space-y-2">
                 <Database className="mx-auto w-10 h-10 text-accent" />
-                <p className="font-display font-black uppercase text-xs tracking-tight text-ink">
-                  Conexión a Odoo Activa
+                <p className="font-display font-semibold text-sm tracking-tight text-ink">
+                  Conexión a Odoo activa
                 </p>
                 {vision.seededBridgeLinks.length > 0 ? (
                   <p className="text-[9px] text-accent font-mono uppercase font-black">

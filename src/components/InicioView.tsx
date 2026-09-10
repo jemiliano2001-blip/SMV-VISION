@@ -173,7 +173,10 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
   const totalPieces = useMemo(() => {
     if (orders.length === 0) return loadingOrders ? undefined : 0;
     return orders.reduce((sum, o) => {
-      return sum + o.order_lines.reduce((lSum, l) => lSum + Math.max(0, l.qty_pending), 0);
+      return sum + (o.order_lines ?? []).reduce((lSum, l) => {
+        const pending = Number.isFinite(l.qty_pending) ? l.qty_pending : 0;
+        return lSum + Math.max(0, pending);
+      }, 0);
     }, 0);
   }, [orders, loadingOrders]);
 
@@ -182,8 +185,8 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     const counts = new Map<string, number>();
     for (const o of orders) {
       const req = o.requisitor?.trim() || 'Sin requisitor';
-      const pieces = o.order_lines.reduce(
-        (sum, l) => sum + (l.qty_pending > 0 ? l.qty_pending : 0),
+      const pieces = (o.order_lines ?? []).reduce(
+        (sum, l) => sum + (Number.isFinite(l.qty_pending) && l.qty_pending > 0 ? l.qty_pending : 0),
         0,
       );
       counts.set(req, (counts.get(req) ?? 0) + (pieces > 0 ? pieces : 1));
@@ -200,7 +203,8 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     let mid = 0; // 7 - 15 días
     let critical = 0; // > 15 días
     for (const o of orders) {
-      const age = o.date_order ? getOrderAgeDays(o.date_order.split(' ')[0]) : 0;
+      const orderDate = typeof o.date_order === 'string' ? o.date_order.split(' ')[0] : '';
+      const age = orderDate ? getOrderAgeDays(orderDate) : 0;
       if (age === null || age < 7) {
         recent += 1;
       } else if (age <= 15) {
@@ -228,25 +232,29 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       variants={container}
       initial="hidden"
       animate="show"
-      className="bp-grid-lg min-h-full p-6 lg:p-10 max-w-[1400px]"
+      className="bp-grid-lg min-h-full px-4 py-5 sm:px-6 sm:py-7 lg:px-9 lg:py-8 max-w-[1480px] mx-auto"
     >
       {/* ── Encabezado ── */}
-      <motion.header variants={item} className="mb-8 flex flex-wrap items-end justify-between gap-4">
+      <motion.header variants={item} className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">Centro de Control</p>
-          <h1 className="font-display font-black text-5xl lg:text-6xl uppercase italic tracking-[-2px] leading-none">
-            Inicio
+          <p className="workspace-kicker mb-2">Centro de producción</p>
+          <h1 className="workspace-title text-4xl sm:text-5xl text-ink">
+            Prioridades del taller
           </h1>
+          <p className="mt-2 text-sm text-ink-dim">Órdenes, carga y alertas que requieren atención hoy.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <p className="font-mono text-[11px] text-ink-dim capitalize">{now}</p>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <p className="font-mono text-[10px] text-ink-dim capitalize">{now}</p>
+          <Button onClick={() => onNavigate('reporte')} className="h-11 rounded-lg bg-accent px-4 text-white font-semibold shadow-hard-accent hover:bg-accent/90">
+            <ScanLine size={16} /> Nuevo reporte
+          </Button>
         </div>
       </motion.header>
 
       {error && (
         <motion.div
           variants={item}
-          className="mb-6 flex items-start gap-2 border-2 border-danger bg-danger/10 px-4 py-3 text-sm text-danger"
+          className="mb-5 flex items-start gap-2 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-sm text-danger"
         >
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span className="grow font-mono text-xs">{error}</span>
@@ -263,10 +271,10 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       )}
 
       {/* ── Métricas Principales (KPI Cards) ── */}
-      <motion.section variants={item} className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
+      <motion.section variants={item} aria-label="Resumen operativo" className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <StatCard
           icon={CloudDownload}
-          value={show(totalToInvoiceOrders || (orders.length > 0 ? orders.length : undefined))}
+          value={show(totalToInvoiceOrders)}
           label="Órdenes pendientes"
           onClick={() => onNavigate('odoo')}
         />
@@ -284,7 +292,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
           tone={sinOc ? 'text-warn' : undefined}
           onClick={() => onNavigate('entregas-sin-oc')}
         />
-        <div className="corner-ticks bg-surface border-2 border-line p-3 sm:p-4 flex flex-col justify-between">
+        <div className="workspace-panel p-3 sm:p-4 flex flex-col justify-between">
           <div className="flex items-start justify-between mb-2">
             <RefreshCw size={16} className={`text-ink-dim ${syncing ? 'animate-spin text-accent' : ''}`} />
             <Button
@@ -292,14 +300,14 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
               size="sm"
               onClick={() => void handleTriggerSync()}
               disabled={syncing}
-              className="h-6 px-1.5 sm:px-2 text-[8px] sm:text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-bg transition-colors"
+              className="h-8 rounded-lg px-2 text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-white transition-colors"
               title="Disparar sincronización con Odoo ahora"
             >
               {syncing ? `${syncElapsed}s` : 'Sincronizar'}
             </Button>
           </div>
           <div>
-            <p className={`font-display font-black italic leading-none text-xl sm:text-2xl lg:text-3xl truncate ${isError ? 'text-danger' : isStale ? 'text-warn' : 'text-ink'}`}>
+            <p className={`font-display font-bold leading-none text-xl sm:text-2xl lg:text-3xl truncate ${isError ? 'text-danger' : isStale ? 'text-warn' : 'text-ink'}`}>
               {effectiveLastSyncDate ? formatRelativeTime(effectiveLastSyncDate) : '—'}
             </p>
             <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
@@ -355,13 +363,13 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       )}
 
       {/* ── Widgets Operativos: Carga por Requisitor & Semáforo de Antigüedad ── */}
-      <motion.section variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <motion.section variants={item} className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-7">
         {/* Widget 1: Carga de Piezas por Requisitor */}
-        <div className="corner-ticks bg-surface border-2 border-line p-5 flex flex-col justify-between">
+        <div className="workspace-panel p-5 flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-line/60">
             <div className="flex items-center gap-2">
               <Users size={16} className="text-accent" />
-              <h2 className="font-display font-bold uppercase text-sm tracking-wide">
+              <h2 className="font-display font-semibold text-base tracking-tight">
                 Carga por Requisitor / Ingeniero
               </h2>
             </div>
@@ -394,11 +402,11 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         </div>
 
         {/* Widget 2: Semáforo de Antigüedad (Aging) */}
-        <div className="corner-ticks bg-surface border-2 border-line p-5 flex flex-col justify-between">
+        <div className="workspace-panel p-5 flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-line/60">
             <div className="flex items-center gap-2">
               <Clock size={16} className="text-accent" />
-              <h2 className="font-display font-bold uppercase text-sm tracking-wide">
+              <h2 className="font-display font-semibold text-base tracking-tight">
                 Semáforo de Antigüedad (Aging)
               </h2>
             </div>
@@ -429,21 +437,21 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
 
             {/* Desglose de 3 columnas */}
             <div className="grid grid-cols-3 gap-2 pt-2 text-center">
-              <div className="bg-surface-2 border border-line p-2.5">
+              <div className="bg-surface-2/70 rounded-lg border border-line p-2.5">
                 <span className="inline-block w-2 h-2 rounded-full bg-ok mb-1" />
                 <p className="font-display font-black text-xl text-ok leading-none">{agingStats.recent}</p>
                 <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&lt; 7 días</p>
                 <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctRecent}%</p>
               </div>
 
-              <div className="bg-surface-2 border border-line p-2.5">
+              <div className="bg-surface-2/70 rounded-lg border border-line p-2.5">
                 <span className="inline-block w-2 h-2 rounded-full bg-warn mb-1" />
                 <p className="font-display font-black text-xl text-warn leading-none">{agingStats.mid}</p>
                 <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">7–15 días</p>
                 <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctMid}%</p>
               </div>
 
-              <div className="bg-surface-2 border border-line p-2.5">
+              <div className="bg-surface-2/70 rounded-lg border border-line p-2.5">
                 <span className="inline-block w-2 h-2 rounded-full bg-danger mb-1" />
                 <p className="font-display font-black text-xl text-danger leading-none">{agingStats.critical}</p>
                 <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&gt; 15 días</p>
@@ -473,7 +481,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       </motion.section>
 
       {/* ── Accesos Rápidos y Última Auditoría ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {/* Accesos rápidos */}
         <motion.section variants={item} className="space-y-3">
           <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-1">Módulos del Taller</p>
@@ -501,7 +509,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         <motion.section variants={item} className="space-y-3">
           <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-1">Estado de Sesión</p>
           {analysisSummary ? (
-            <div className="corner-ticks bg-surface border-2 border-line p-5">
+            <div className="workspace-panel p-5">
               <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mb-3">Última auditoría de visión</p>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <Stat n={analysisSummary.totalOrders} l="Órdenes" />
@@ -510,11 +518,11 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
               </div>
             </div>
           ) : (
-            <div className="corner-ticks bg-surface border-2 border-line p-5 flex flex-col justify-between h-[calc(100%-24px)]">
+            <div className="workspace-panel p-5 flex flex-col justify-between h-[calc(100%-24px)]">
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <Activity size={16} className="text-ok" />
-                  <h3 className="font-display font-bold uppercase text-sm">Flujo de Producción Activo</h3>
+                  <h3 className="font-display font-semibold text-base">Flujo de producción activo</h3>
                 </div>
                 <p className="font-mono text-xs text-ink-dim leading-relaxed">
                   Sistema conectado a Firestore y Odoo. Puedes iniciar la auditoría de planos o consultar el catálogo de Tool Crib para imprimir órdenes de trabajo.
@@ -558,7 +566,7 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
           <ArrowRight size={14} className="text-ink-dim opacity-0 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
-      <p className={`font-display font-black italic leading-none text-2xl sm:text-3xl lg:text-4xl truncate ${tone}`}>
+      <p className={`font-display font-bold leading-none text-2xl sm:text-3xl lg:text-4xl truncate ${tone}`}>
         {value}
       </p>
       <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
@@ -568,16 +576,16 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
   );
 
   if (!onClick) {
-    return <div className="corner-ticks bg-surface border-2 border-line p-3 sm:p-4">{body}</div>;
+    return <div className="workspace-panel p-3 sm:p-4">{body}</div>;
   }
 
   return (
     <motion.button
       type="button"
       onClick={onClick}
-      whileHover={{ y: -2, boxShadow: '4px 4px 0px var(--color-accent)' }}
-      whileTap={{ y: 0, boxShadow: '0px 0px 0px var(--color-accent)' }}
-      className="group corner-ticks bg-surface border-2 border-line p-3 sm:p-4 text-left transition-colors hover:border-accent outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      whileHover={{ y: -2 }}
+      whileTap={{ y: 0 }}
+      className="group workspace-panel min-h-28 p-3 sm:p-4 text-left transition-colors hover:border-accent/60 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
     >
       {body}
     </motion.button>
@@ -587,7 +595,7 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
 function Stat({ n, l, tone = 'text-ink' }: { n: number | string; l: string; tone?: string }) {
   return (
     <div>
-      <p className={`font-display font-black text-2xl italic leading-none ${tone}`}>{n}</p>
+      <p className={`font-display font-bold text-2xl leading-none ${tone}`}>{n}</p>
       <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">{l}</p>
     </div>
   );
@@ -598,16 +606,16 @@ function QuickAction({ icon: Icon, title, desc, onClick }: { icon: LucideIcon; t
     <motion.button
       type="button"
       onClick={onClick}
-      whileHover={{ scale: 1.02, x: 4, boxShadow: '4px 4px 0px var(--color-accent)' }}
-      whileTap={{ scale: 0.98, x: 0, boxShadow: '0px 0px 0px var(--color-accent)' }}
-      className="w-full text-left bg-surface border-2 border-line p-4 flex items-center gap-4 transition-colors hover:border-accent group outline-none focus-visible:ring-2 focus-visible:ring-accent relative overflow-hidden"
+      whileHover={{ y: -2 }}
+      whileTap={{ y: 0 }}
+      className="w-full min-h-16 text-left workspace-panel p-4 flex items-center gap-4 transition-colors hover:border-accent/60 group outline-none focus-visible:ring-2 focus-visible:ring-accent relative overflow-hidden"
     >
       <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-      <span className="grid place-items-center w-10 h-10 bg-surface-2 border-2 border-line group-hover:border-accent group-hover:bg-accent group-hover:text-bg transition-colors shrink-0">
+      <span className="grid place-items-center w-10 h-10 rounded-lg bg-surface-2 border border-line group-hover:border-accent group-hover:bg-accent group-hover:text-white transition-colors shrink-0">
         <Icon size={18} />
       </span>
       <div className="min-w-0">
-        <h3 className="font-display font-black text-[15px] uppercase tracking-wide group-hover:text-accent transition-colors">{title}</h3>
+        <h3 className="font-display font-semibold text-[15px] tracking-tight group-hover:text-accent transition-colors">{title}</h3>
         <p className="font-mono text-[10px] text-ink-dim truncate">{desc}</p>
       </div>
       <ArrowRight size={16} className="ml-auto text-ink-dim opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all group-hover:text-accent" />

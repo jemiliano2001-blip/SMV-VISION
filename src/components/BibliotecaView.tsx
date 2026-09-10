@@ -30,18 +30,19 @@ export function BibliotecaView({
     : null;
 
   return (
-    <div className="bp-grid-lg h-full min-h-0 flex flex-col p-6 lg:p-8 max-w-[1200px]">
-      <header className="mb-4 shrink-0">
-        <p className="font-mono text-[10px] uppercase tracking-[4px] text-accent mb-1">Catálogo Tool Crib</p>
-        <h1 className="font-display font-black text-4xl lg:text-5xl uppercase italic tracking-[-2px] leading-none flex items-center gap-3">
-          <Library size={36} className="text-accent" /> Biblioteca
+    <div className="bp-grid-lg h-full min-h-0 flex flex-col px-4 py-5 sm:px-6 sm:py-7 lg:px-9 lg:py-8 max-w-[1480px] mx-auto">
+      <header className="mb-5 shrink-0">
+        <p className="workspace-kicker mb-2">Catálogo Tool Crib</p>
+        <h1 className="workspace-title text-4xl lg:text-5xl flex items-center gap-3">
+          <span className="grid place-items-center size-11 rounded-xl bg-accent/10 text-accent"><Library size={24} /></span>
+          Biblioteca de planos
         </h1>
-        <p className="font-mono text-[11px] text-ink-dim mt-2 max-w-2xl">
+        <p className="text-sm text-ink-dim mt-2 max-w-2xl">
           Una fila por pieza: CAD para imprimir OT, ISO para ver/reportar, 3D si hay STL.
           Imprimir queda en el audit log.
         </p>
         {pendingLink && (
-          <div className="mt-3 flex items-center gap-3 border-2 border-accent bg-accent/10 px-3 py-2 max-w-xl">
+          <div className="mt-4 flex items-center gap-3 rounded-xl border border-accent/50 bg-accent/10 px-4 py-3 max-w-2xl">
             <p className="font-mono text-[11px] text-ink flex-1">
               Elige un plano y pulsa <strong>Usar para {pendingLabel}</strong> para vincularlo a la orden sin volver a buscar.
             </p>

@@ -48,12 +48,12 @@ Este workspace está vinculado al proyecto de Firebase **`smv-brain`** (ver `.fi
 
 El audit trail es **fire-and-forget**: si falta configuración o la escritura falla, la app sigue funcionando normalmente — nunca bloquea ni rompe el flujo de Gemini.
 
-### Autenticación (obligatoria para escribir audit trail)
+### Autenticación (obligatoria para escribir audit trail y para Gemini)
 
-A partir de PR #2a la app exige iniciar sesión con Google antes de analizar. El componente `AuthGate` muestra una pantalla completa de login y sólo renderiza la app cuando hay un `User` activo. Las reglas de Firestore verifican que `request.auth.uid == userUid` en cada `create`.
+La app exige iniciar sesión con **email/password** antes de analizar (el flujo de Google se quitó a propósito: es una app privada sin allowlist de dominio). El componente `AuthGate` muestra una pantalla completa de login y sólo renderiza la app cuando hay un `User` activo. Las reglas de Firestore verifican que `request.auth.uid == userUid` en cada `create`, y la Cloud Function `analyzeGemini` exige `request.auth` para responder.
 
-- Para desarrollo local: usa cualquier cuenta Google con la que tu proyecto `smv-brain` tenga permitido el sign-in. En la Firebase Console → **Authentication → Sign-in method**, el proveedor Google debe estar habilitado (ya lo hace `firebase init auth`).
-- Si las variables `VITE_FIREBASE_*` faltan, `AuthGate` muestra un banner de advertencia y deja pasar la app sin login (audit trail desactivado, no bloquea el análisis).
+- Para desarrollo local: crea el usuario en Firebase Console → **Authentication → Sign-in method** (habilita el proveedor Email/Password) → **Users**.
+- Si las variables `VITE_FIREBASE_*` faltan, `AuthGate` deja pasar la app sin login, pero "Analizar" falla igual porque no hay forma de llamar a `analyzeGemini`.
 
 ### App Check (recomendado en producción)
 

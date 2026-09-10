@@ -254,16 +254,16 @@ export function OdooOrdersPanel({
   return (
     <div className="h-full flex flex-col bg-bg">
       {/* ── Header Principal ── */}
-      <header className="shrink-0 border-b-2 border-line bg-surface px-6 py-4 flex items-center justify-between flex-wrap gap-4">
+      <header className="shrink-0 border-b border-line bg-surface/95 backdrop-blur-xl px-4 sm:px-6 lg:px-9 py-4 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-accent text-bg flex items-center justify-center corner-ticks shadow-hard">
+          <div className="w-11 h-11 rounded-xl bg-accent/10 text-accent flex items-center justify-center">
             <CloudDownload size={22} strokeWidth={2.5} />
           </div>
           <div>
-            <h1 className="font-display font-black text-2xl uppercase tracking-tight italic leading-none">
-              Órdenes Odoo
+            <h1 className="font-display font-bold text-2xl sm:text-3xl tracking-[-0.04em] leading-none">
+              Órdenes de producción
             </h1>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-ink-dim mt-1">
+            <p className="text-xs text-ink-dim mt-1">
               Pendientes de facturación (to invoice + upselling)
             </p>
           </div>
@@ -271,7 +271,7 @@ export function OdooOrdersPanel({
         <div className="flex items-center gap-2 flex-wrap">
           {meta && (
             <div
-              className={`font-mono text-[10px] uppercase tracking-widest px-3 py-2 border-2 ${
+              className={`font-mono text-[10px] uppercase tracking-wider px-3 py-2 rounded-lg border ${
                 meta.status === 'error'
                   ? 'border-danger/50 bg-danger/10 text-danger'
                   : 'border-line text-ink-dim'
@@ -303,7 +303,7 @@ export function OdooOrdersPanel({
             variant="ghost"
             onClick={() => setInvoicePanelOpen(true)}
             disabled={loading || filters.filteredOrders.length === 0}
-            className="flex items-center gap-2 px-4 py-2 border-2 border-accent bg-accent text-bg hover:bg-accent/80 transition-colors disabled:opacity-30 text-[11px] font-black uppercase tracking-widest shadow-hard hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 h-auto rounded-none"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-accent bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-30 text-[11px] font-semibold shadow-hard-accent h-10"
           >
             <Mail size={14} />
             Factura / Remisión
@@ -317,7 +317,7 @@ export function OdooOrdersPanel({
               });
             }}
             disabled={loading || filters.filteredOrders.length === 0}
-            className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-semibold h-10 text-ink"
           >
             <FileDown size={14} />
             PDF
@@ -326,7 +326,7 @@ export function OdooOrdersPanel({
             variant="ghost"
             onClick={() => void handleRefresh()}
             disabled={loading || syncingOdoo}
-            className="flex items-center gap-2 px-4 py-2 border-2 border-line bg-surface-2 hover:border-accent hover:text-accent transition-colors disabled:opacity-50 text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-line bg-surface-2 hover:border-accent hover:text-accent transition-colors disabled:opacity-50 text-[11px] font-semibold h-10 text-ink"
           >
             <RefreshCw size={14} className={(loading || syncingOdoo) ? 'animate-spin' : ''} />
             {syncingOdoo ? `Sincronizando… ${syncElapsedSeconds}s` : loading ? 'Cargando…' : 'Refrescar'}
@@ -371,7 +371,7 @@ export function OdooOrdersPanel({
       )}
 
       {/* ── Compañías (partners) — carga perezosa ── */}
-      <section className="shrink-0 border-b-2 border-line bg-surface px-4 sm:px-6 py-3">
+      <section className="shrink-0 border-b border-line bg-surface px-4 sm:px-6 lg:px-9 py-3">
         <div className="flex items-center gap-2 mb-2">
           <Building2 size={14} className="text-accent" />
           <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim">
@@ -379,7 +379,7 @@ export function OdooOrdersPanel({
           </span>
         </div>
         {partners.length === 0 ? (
-          <p className="font-mono text-[11px] text-ink-dim uppercase tracking-wider">
+          <p className="text-xs text-ink-dim">
             Sin compañías en el último sync. Pulsa Refrescar para sincronizar Odoo.
           </p>
         ) : (
@@ -391,7 +391,7 @@ export function OdooOrdersPanel({
                   key={partner.key}
                   type="button"
                   onClick={() => selectPartner(partner.key)}
-                  className={`flex items-center gap-2 px-3 py-1.5 border-2 text-[11px] font-black uppercase tracking-wider transition-colors shrink-0 ${
+                  className={`flex min-h-10 items-center gap-2 px-3 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors shrink-0 ${
                     selected
                       ? 'border-accent bg-accent text-bg'
                       : 'border-line bg-surface-2 text-ink hover:border-accent hover:text-accent'
@@ -611,20 +611,20 @@ export function OdooOrdersPanel({
             <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
           </div>
         ) : !selectedPartnerKey ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-12 text-center max-w-2xl mx-auto">
+          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 rounded-2xl border border-dashed border-line bg-surface/70 p-12 text-center max-w-2xl mx-auto shadow-hard">
             <Building2 size={48} className="text-line" />
-            <p className="font-display font-black text-2xl uppercase italic">
+            <p className="font-display font-semibold text-2xl tracking-tight text-ink">
               Elige una compañía para ver sus órdenes
             </p>
-            <p className="font-mono text-xs uppercase tracking-widest">
+            <p className="max-w-md text-sm leading-relaxed text-ink-dim">
               Los botones de arriba cargan solo las órdenes de esa compañía.
             </p>
           </div>
         ) : filters.filteredOrders.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-12 text-center max-w-2xl mx-auto">
+          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 rounded-2xl border border-dashed border-line bg-surface/70 p-12 text-center max-w-2xl mx-auto shadow-hard">
             <CloudDownload size={48} className="text-line" />
-            <p className="font-display font-black text-2xl uppercase italic">No se encontraron órdenes</p>
-            <p className="font-mono text-xs uppercase tracking-widest">
+            <p className="font-display font-semibold text-2xl tracking-tight text-ink">No se encontraron órdenes</p>
+            <p className="max-w-md text-sm leading-relaxed text-ink-dim">
               {filters.searchTerm || filters.selectedRequisitor !== 'ALL'
                 ? 'Ninguna orden coincide con los filtros de búsqueda aplicados.'
                 : 'Todas las órdenes de esta compañía están facturadas o no hay datos sincronizados.'}

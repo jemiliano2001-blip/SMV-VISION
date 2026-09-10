@@ -69,16 +69,16 @@ export function EntregasSinOCPanel() {
   return (
     <div className="h-full flex flex-col bg-bg">
       {/* ── Header ── */}
-      <header className="shrink-0 border-b-2 border-line bg-surface px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between flex-wrap gap-3">
+      <header className="shrink-0 border-b border-line bg-surface/95 backdrop-blur-xl px-4 sm:px-6 lg:px-9 py-4 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <div className="size-9 sm:size-10 bg-warn text-bg flex items-center justify-center corner-ticks shadow-hard shrink-0">
+          <div className="size-11 rounded-xl bg-warn/12 text-warn flex items-center justify-center shrink-0">
             <FileWarning size={20} strokeWidth={2.5} />
           </div>
           <div>
-            <h1 className="font-display font-black text-xl sm:text-2xl uppercase tracking-tight italic leading-none">
-              Entregas sin OC (Suprajit)
+            <h1 className="font-display font-bold text-2xl sm:text-3xl tracking-[-0.04em] leading-none">
+              Entregas sin OC
             </h1>
-            <p className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-ink-dim mt-1">
+            <p className="text-xs text-ink-dim mt-1">
               Cotizaciones entregadas sin orden de compra capturada
             </p>
           </div>
@@ -101,7 +101,7 @@ export function EntregasSinOCPanel() {
             variant="ghost"
             onClick={() => void handleRefreshSync()}
             disabled={loading || syncing}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 border-2 border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[10px] sm:text-[11px] font-black uppercase tracking-widest h-auto rounded-none text-ink hover:bg-surface-2"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg border border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[10px] sm:text-[11px] font-semibold h-10 text-ink"
           >
             <RefreshCw size={14} className={(loading || syncing) ? 'animate-spin' : ''} />
             {syncing ? 'Sincronizando…' : loading ? 'Cargando…' : 'Refrescar Odoo'}

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import {
   AlertTriangle,
   CheckSquare,
@@ -25,6 +26,7 @@ import type {
   OdooOrderLineView,
   ProductionStatus,
 } from '../../lib/firebase/odooOrders';
+import type { OrderDrawingLink } from '../../types';
 import type { UseOrderDrawingBridgeResult } from '../../hooks/useOrderDrawingBridge';
 import { formatAgeDays, getOrderAgeDays } from '../../lib/age';
 import { checkRevisionDiscrepancy } from '../../lib/matching';
@@ -37,6 +39,7 @@ export interface OrderCardProps {
   order: OdooOrderView;
   productionMap: Map<string, ProductionStatus>;
   bridge: UseOrderDrawingBridgeResult;
+  resolvedLinksMap?: Map<string, OrderDrawingLink>;
   selectedLines: Set<string>;
   lineBusyKey: string | null;
   sendingKey: string | null;
@@ -58,10 +61,11 @@ export interface OrderCardProps {
   onSendOrderToReport?: (order: OdooOrderView) => void | Promise<void>;
 }
 
-export function OrderCard({
+export const OrderCard = memo(function OrderCard({
   order,
   productionMap,
   bridge,
+  resolvedLinksMap,
   selectedLines,
   lineBusyKey,
   sendingKey,
@@ -215,7 +219,7 @@ export function OrderCard({
               const lineKey = makeOrderDrawingLinkKey(order.id, idx);
               const isMatching = lineBusyKey === lineKey;
               const isSending = sendingKey === lineKey;
-              const link = bridge.links[lineKey];
+              const link = resolvedLinksMap?.get(lineKey) ?? bridge.links[lineKey];
               const partLabel =
                 link?.cadDrawing?.partNumber ??
                 link?.reportDrawing?.partNumber ??
@@ -422,4 +426,4 @@ export function OrderCard({
       </div>
     </div>
   );
-}
+});

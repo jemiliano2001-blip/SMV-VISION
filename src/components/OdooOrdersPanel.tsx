@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   CloudDownload,
@@ -32,6 +32,7 @@ import type { OrderDrawingLink } from '../types';
 import { useSyncMeta } from '../hooks/useSyncMeta';
 import type { UseToolcribCatalogResult } from '../hooks/useToolcribCatalog';
 import type { UseOrderDrawingBridgeResult } from '../hooks/useOrderDrawingBridge';
+import { makeOrderDrawingLinkKey, parseOdooLineLabels } from '../lib/orderDrawingBridge';
 import { useOdooLineActions } from '../hooks/useOdooLineActions';
 import { useBatchPrintOts } from '../hooks/useBatchPrintOts';
 import { useOdooOrdersFilters } from '../hooks/useOdooOrdersFilters';
@@ -99,6 +100,46 @@ export function OdooOrdersPanel({
     onError: lineActions.setLineActionError,
   });
 
+  // Precomputar mapa puro de links para evitar re-renders y evaluar en O(1)
+  const resolvedLinksMap = useMemo(() => {
+    const map = new Map<string, OrderDrawingLink>();
+    if (orders.length === 0 || catalog.views.length === 0) {
+      return map;
+    }
+    for (const order of orders) {
+      const lines = order.order_lines ?? [];
+      for (let idx = 0; idx < lines.length; idx++) {
+        const line = lines[idx];
+        const pending = line.qty_pending_from_pickings ?? line.qty_pending;
+        if (pending <= 0) continue;
+
+        const key = makeOrderDrawingLinkKey(order.id, idx);
+        const existing = bridge.links[key];
+        if (existing) {
+          map.set(key, existing);
+          continue;
+        }
+
+        const { pieza, numeroParte } = parseOdooLineLabels(line.product, line.description || '');
+        const link = bridge.resolveLink(
+          {
+            orderId: order.id,
+            lineIndex: idx,
+            soNumber: order.name,
+            poNumber: order.client_order_ref ?? '',
+            pieza,
+            numeroParte,
+            qtyPending: line.qty_pending,
+          },
+          catalog.views,
+          catalog.signalsByDrawingId,
+        );
+        map.set(key, link);
+      }
+    }
+    return map;
+  }, [orders, catalog.views, catalog.signalsByDrawingId, bridge.links, bridge.resolveLink]);
+
   const isOrderMissingDrawing = useCallback(
     (order: OdooOrderView) => {
       const lines = order.order_lines ?? [];
@@ -106,18 +147,29 @@ export function OdooOrdersPanel({
         const line = lines[idx];
         const pending = line.qty_pending_from_pickings ?? line.qty_pending;
         if (pending > 0) {
-          const link = lineActions.resolveLineLink(order, line, idx, catalog.views);
-          if (!link.cadDrawing && !link.reportDrawing) {
+          const key = makeOrderDrawingLinkKey(order.id, idx);
+          const link = resolvedLinksMap.get(key);
+          if (!link || (!link.cadDrawing && !link.reportDrawing)) {
             return true;
           }
         }
       }
       return false;
     },
-    [lineActions, catalog.views],
+    [resolvedLinksMap],
   );
 
   const filters = useOdooOrdersFilters({ orders, isOrderMissingDrawing });
+
+  // Paginación progresiva para mantener 60 FPS en listas largas de órdenes
+  const [visibleOrderLimit, setVisibleOrderLimit] = useState(25);
+  useEffect(() => {
+    setVisibleOrderLimit(25);
+  }, [selectedPartnerKey, filters.searchTerm, filters.selectedRequisitor, filters.urgencyFilter]);
+
+  const displayedOrders = useMemo(() => {
+    return filters.filteredOrders.slice(0, visibleOrderLimit);
+  }, [filters.filteredOrders, visibleOrderLimit]);
 
   const fetchOrders = useCallback(async (partnerKey: string) => {
     setLoading(true);
@@ -232,6 +284,7 @@ export function OdooOrdersPanel({
       order={order}
       productionMap={productionMap}
       bridge={bridge}
+      resolvedLinksMap={resolvedLinksMap}
       selectedLines={batchPrint.selectedLines}
       lineBusyKey={lineActions.lineBusyKey}
       sendingKey={lineActions.sendingKey}
@@ -645,7 +698,32 @@ export function OdooOrdersPanel({
         ) : filters.viewMode === 'all' ? (
           /* ── MODO 1: Vista de Lista Plana (Todas las órdenes) ── */
           <div className="space-y-6 max-w-6xl mx-auto">
-            {filters.filteredOrders.map((order) => renderOrderCard(order))}
+            {displayedOrders.map((order) => renderOrderCard(order))}
+            {filters.filteredOrders.length > visibleOrderLimit && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-2 border-line bg-surface shadow-hard">
+                <span className="font-mono text-xs text-ink-dim uppercase">
+                  Mostrando {displayedOrders.length} de {filters.filteredOrders.length} órdenes
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setVisibleOrderLimit((prev) => prev + 25)}
+                    className="font-mono text-xs font-bold uppercase tracking-wider border-2 border-line hover:border-accent"
+                  >
+                    Cargar 25 más
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setVisibleOrderLimit(filters.filteredOrders.length)}
+                    className="font-mono text-xs uppercase tracking-wider text-accent underline"
+                  >
+                    Mostrar todas ({filters.filteredOrders.length})
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           /* ── MODO 2: Vista Agrupada por Requisitor / Ingeniero ── */

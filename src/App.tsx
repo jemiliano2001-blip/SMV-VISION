@@ -57,19 +57,25 @@ export default function App() {
     vision.previewOrder || cropAdjustTarget || quickPurchaseData || historyDrawing || stlDrawing,
   );
 
+  const handleToggleEdit = useCallback(() => {
+    vision.setEditMode(!vision.editMode);
+  }, [vision]);
+
+  const handleEscape = useCallback(() => {
+    if (vision.previewOrder) vision.setPreviewOrder(null);
+    if (cropAdjustTarget) setCropAdjustTarget(null);
+    if (quickPurchaseData) setQuickPurchaseData(null);
+    if (historyDrawing) setHistoryDrawing(null);
+    if (stlDrawing) setStlDrawing(null);
+  }, [vision, cropAdjustTarget, quickPurchaseData, historyDrawing, stlDrawing]);
+
   useIndustrialHotkeys({
     activeView,
     enabled: !anyModalOpen,
-    onToggleEdit: () => vision.setEditMode(!vision.editMode),
+    onToggleEdit: handleToggleEdit,
     onExportPdf: vision.downloadPdf,
     onNavigate: (v) => setActiveView(v as AppView),
-    onEscape: () => {
-      if (vision.previewOrder) vision.setPreviewOrder(null);
-      if (cropAdjustTarget) setCropAdjustTarget(null);
-      if (quickPurchaseData) setQuickPurchaseData(null);
-      if (historyDrawing) setHistoryDrawing(null);
-      if (stlDrawing) setStlDrawing(null);
-    },
+    onEscape: handleEscape,
   });
 
   // Navegación

@@ -6,7 +6,7 @@
  * (variant=embedded) sigue siendo el acordeón compacto del flujo de análisis.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue, memo, Suspense, lazy, type ReactElement } from 'react';
 import {
   AlertCircle,
   ArrowDown,
@@ -310,6 +310,8 @@ export function ToolcribLibraryPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [views, setViews] = useState<ToolcribActiveDrawingView[]>([]);
   const [searchTerm, setSearchTerm] = useState(initialSearchTerm);
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const [visibleLimit, setVisibleLimit] = useState(50);
   const [selectedFamily, setSelectedFamily] = useState<PartFamily>('all');
   const [selectedAsset, setSelectedAsset] = useState<AssetFilter>('all');
   const [printStats, setPrintStats] = useState<Map<string, DrawingPrintStat>>(new Map());
@@ -370,6 +372,10 @@ export function ToolcribLibraryPanel({
       setIsOpen(true);
     }
   }, [initialSearchTerm]);
+
+  useEffect(() => {
+    setVisibleLimit(50);
+  }, [deferredSearchTerm, selectedFamily, selectedAsset, sortKey, sortDirection]);
 
   // Listener a nivel window (no depende de dónde viva el foco) — antes el
   // cierre con Escape dejaba de funcionar en cuanto el usuario clickeaba
@@ -522,7 +528,7 @@ export function ToolcribLibraryPanel({
   // antes se creaba un Fuse nuevo por pulsacion sobre el set ya filtrado.
   const catalogIndex = useMemo(() => buildSearchIndex(groupsWithAliases), [groupsWithAliases]);
 
-  const hasQuery = searchTerm.trim().length > 0;
+  const hasQuery = deferredSearchTerm.trim().length > 0;
 
   const filteredGroups = useMemo(() => {
     const passesFilters = (group: ToolcribPartGroup) =>
@@ -543,7 +549,7 @@ export function ToolcribLibraryPanel({
 
     // Buscar primero y filtrar despues: los escalones de `searchIndex` ya dejan
     // el orden bueno y los chips no lo alteran.
-    const hits = searchIndex(catalogIndex, searchTerm, {
+    const hits = searchIndex(catalogIndex, deferredSearchTerm, {
       // En Biblioteca/OT no se prefiere ISO: ahi imprimir siempre usa el CAD.
       tieBreak: excludeIsoForPrint ? undefined : (group) => (group.iso ? 1 : 0),
     });
@@ -551,7 +557,7 @@ export function ToolcribLibraryPanel({
     return hits.map((hit) => hit.item).filter(passesFilters);
   }, [
     hasQuery,
-    searchTerm,
+    deferredSearchTerm,
     catalogIndex,
     groups,
     selectedFamily,
@@ -561,6 +567,10 @@ export function ToolcribLibraryPanel({
     sortDirection,
     printStats,
   ]);
+
+  const displayedGroups = useMemo(() => {
+    return filteredGroups.slice(0, visibleLimit);
+  }, [filteredGroups, visibleLimit]);
 
   const toggleSort = useCallback((key: ToolcribSortKey) => {
     setSortKey((prevKey) => {
@@ -989,11 +999,11 @@ export function ToolcribLibraryPanel({
                 </TableCell>
               </TableRow>
             ) : (
-              filteredGroups.map((group) => (
+              displayedGroups.map((group) => (
                 <PartGroupRow
                   key={group.key}
                   group={group}
-                  searchTerm={searchTerm}
+                  searchTerm={deferredSearchTerm}
                   printStats={printStats}
                   rowState={rowState}
                   attachedDrawingIds={attachedDrawingIds}
@@ -1007,8 +1017,8 @@ export function ToolcribLibraryPanel({
                   onHistory={setHistoryDrawing}
                   onStl={setStlDrawing}
                   onUpdate={setUpdateDrawing}
-                  onAttach={(view) => void handleAttach(view)}
-                  onInactivate={(view) => void handleInactivate(view)}
+                  onAttach={handleAttach}
+                  onInactivate={handleInactivate}
                   onUseForPending={onUseForPendingOrder}
                   onAlias={setAliasTarget}
                 />
@@ -1016,6 +1026,31 @@ export function ToolcribLibraryPanel({
             )}
           </TableBody>
         </Table>
+        {filteredGroups.length > visibleLimit && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 border-t-2 border-line bg-surface-2 shrink-0">
+            <span className="font-mono text-xs text-ink-dim uppercase">
+              Mostrando {displayedGroups.length} de {filteredGroups.length} planos
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setVisibleLimit((prev) => prev + 50)}
+                className="font-mono text-xs font-bold uppercase tracking-wider border-2 border-line hover:border-accent"
+              >
+                Cargar 50 más
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setVisibleLimit(filteredGroups.length)}
+                className="font-mono text-xs uppercase tracking-wider text-accent underline"
+              >
+                Mostrar todos ({filteredGroups.length})
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1264,7 +1299,7 @@ interface PartGroupRowProps {
   onAlias: (target: ToolcribAliasTarget) => void;
 }
 
-function PartGroupRow({
+const PartGroupRow = memo(function PartGroupRow({
   group,
   searchTerm,
   printStats,
@@ -1598,4 +1633,4 @@ function PartGroupRow({
       </TableCell>
     </TableRow>
   );
-}
+});

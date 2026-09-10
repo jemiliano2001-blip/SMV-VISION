@@ -714,7 +714,7 @@ export interface ReporteViewProps {
   onVincular: (order: Order) => void;
 }
 
-export function ReporteView({
+export const ReporteView = memo(function ReporteView({
   vision,
   catalog,
   purchasedKeys,
@@ -1887,4 +1887,4 @@ export function ReporteView({
       </section>
     </div>
   );
-}
+});

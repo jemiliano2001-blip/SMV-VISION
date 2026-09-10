@@ -24,6 +24,11 @@ export interface UseOrderDrawingBridgeResult {
   linkList: readonly OrderDrawingLink[];
   pendingKey: string | null;
   aliases: readonly PartAliasDoc[];
+  resolveLink: (
+    input: ResolveOrderDrawingInput,
+    library: readonly ToolcribActiveDrawingView[],
+    signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
+  ) => OrderDrawingLink;
   resolveAndStore: (
     input: ResolveOrderDrawingInput,
     library: readonly ToolcribActiveDrawingView[],
@@ -56,6 +61,23 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
     };
   }, []);
 
+  const resolveLink = useCallback(
+    (
+      input: ResolveOrderDrawingInput,
+      library: readonly ToolcribActiveDrawingView[],
+      signalsByDrawingId?: ReadonlyMap<string, PieceMatchSignals>,
+    ): OrderDrawingLink => {
+      return resolveOrderDrawingLink(
+        input,
+        library,
+        signalsByDrawingId,
+        undefined,
+        aliases,
+      );
+    },
+    [aliases],
+  );
+
   const resolveAndStore = useCallback(
     (
       input: ResolveOrderDrawingInput,
@@ -69,7 +91,19 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
         undefined,
         aliases,
       );
-      setLinks((prev) => ({ ...prev, [link.key]: link }));
+      setLinks((prev) => {
+        const existing = prev[link.key];
+        if (
+          existing &&
+          existing.status === link.status &&
+          existing.matchScore === link.matchScore &&
+          existing.cadDrawing?.drawingId === link.cadDrawing?.drawingId &&
+          existing.reportDrawing?.drawingId === link.reportDrawing?.drawingId
+        ) {
+          return prev;
+        }
+        return { ...prev, [link.key]: link };
+      });
       return link;
     },
     [aliases],
@@ -146,6 +180,7 @@ export function useOrderDrawingBridge(): UseOrderDrawingBridgeResult {
     linkList,
     pendingKey,
     aliases,
+    resolveLink,
     resolveAndStore,
     upsertManual,
     getLink,

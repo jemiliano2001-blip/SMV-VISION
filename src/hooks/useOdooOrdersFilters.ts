@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import type { OdooOrderView } from '../lib/firebase/odooOrders';
 import { getOrderAgeDays } from '../lib/age';
 
@@ -27,6 +27,7 @@ export function useOdooOrdersFilters({
 }: UseOdooOrdersFiltersOptions) {
   const [viewMode, setViewMode] = useState<'all' | 'by_requisitor'>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const [selectedRequisitor, setSelectedRequisitor] = useState<string>('ALL');
   const [urgencyFilter, setUrgencyFilter] = useState<UrgencyFilter>('ALL');
   const [collapsedRequisitores, setCollapsedRequisitores] = useState<Record<string, boolean>>({});
@@ -40,9 +41,9 @@ export function useOdooOrdersFilters({
     return Array.from(set).sort();
   }, [orders]);
 
-  // Órdenes que pasan la búsqueda libre (base común)
+  // Órdenes que pasan la búsqueda libre (base común) — usa deferredSearchTerm para 60fps typing
   const searchMatchedOrders = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
+    const term = deferredSearchTerm.trim().toLowerCase();
     if (!term) return orders;
     return orders.filter((o) => {
       const nameMatch = o.name.toLowerCase().includes(term);
@@ -56,7 +57,7 @@ export function useOdooOrdersFilters({
       );
       return nameMatch || poMatch || partnerMatch || reqMatch || lineMatch;
     });
-  }, [orders, searchTerm]);
+  }, [orders, deferredSearchTerm]);
 
   // Contadores de urgencia en base a la búsqueda actual
   const urgencyCounts = useMemo(() => {

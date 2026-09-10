@@ -56,6 +56,10 @@ export function useOdooLineActions({
       lineIdx: number,
       library: readonly ToolcribActiveDrawingView[],
     ): OrderDrawingLink => {
+      const key = makeOrderDrawingLinkKey(order.id, lineIdx);
+      const existing = bridge.links[key];
+      if (existing) return existing;
+
       const { pieza, numeroParte } = parseOdooLineLabels(line.product, line.description || '');
       return bridge.resolveAndStore(
         {
@@ -68,10 +72,10 @@ export function useOdooLineActions({
           qtyPending: line.qty_pending,
         },
         library,
-        undefined,
+        catalog.signalsByDrawingId,
       );
     },
-    [bridge],
+    [bridge, catalog.signalsByDrawingId],
   );
 
   const handlePrintLinePlano = useCallback(

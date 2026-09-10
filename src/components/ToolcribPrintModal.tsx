@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Printer, Loader2, AlertCircle, Sparkles, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { openStampedPlanoOt } from '../lib/planoOt';
+import { openStampedPlanoOt, type PlanoOtMask, type PlanoOtStamp } from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
 import {
@@ -13,6 +13,8 @@ import {
   scorePieceMatch,
 } from '../lib/matching';
 import type { ToolcribActiveDrawingView } from '../types';
+
+const PlanoOtPreview = lazy(() => import('./PlanoOtPreview').then(module => ({ default: module.PlanoOtPreview })));
 
 export interface ToolcribPrintModalProps {
   drawing: ToolcribActiveDrawingView | null;
@@ -36,6 +38,11 @@ export function ToolcribPrintModal({
   const [notas, setNotas] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ dataUrl: string; stamp: PlanoOtStamp } | null>(null);
+  const [mask, setMask] = useState<PlanoOtMask | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
+  const [skipMask, setSkipMask] = useState(false);
+  const generation = useRef(0);
 
   const [odooOrders, setOdooOrders] = useState<OdooOrderView[]>([]);
   const [matchingOrders, setMatchingOrders] = useState<{ order: OdooOrderView; qty: number }[]>([]);
@@ -44,6 +51,13 @@ export function ToolcribPrintModal({
   const isOpen = drawing !== null;
 
   useEffect(() => {
+    generation.current += 1;
+    let cancelled = false;
+    setIsProcessing(false);
+    setPreview(null);
+    setMask(null);
+    setSkipMask(false);
+    setPreviewReady(false);
     if (drawing) {
       setSoNumber(initialSoNumber?.trim() ?? '');
       setCantidad(initialCantidad?.trim() ?? '');
@@ -52,12 +66,12 @@ export function ToolcribPrintModal({
       setIsLoadingOrders(true);
       listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX })
         .then((res) => {
-          if (res.ok) {
+          if (!cancelled && res.ok) {
             setOdooOrders(res.value);
           }
         })
         .finally(() => {
-          setIsLoadingOrders(false);
+          if (!cancelled) setIsLoadingOrders(false);
         });
     } else {
       setSoNumber('');
@@ -67,6 +81,7 @@ export function ToolcribPrintModal({
       setMatchingOrders([]);
       setError(null);
     }
+    return () => { cancelled = true; generation.current += 1; };
   }, [drawing, initialSoNumber, initialCantidad]);
 
   useEffect(() => {
@@ -118,22 +133,35 @@ export function ToolcribPrintModal({
       setError('Este plano no tiene un PDF accesible.');
       return;
     }
+    if (preview && (!previewReady || (!mask && !skipMask))) return;
+    if (!Number.isFinite(Number(cantidad)) || Number(cantidad) <= 0) {
+      setError('Escribe una cantidad de piezas mayor que cero.');
+      return;
+    }
 
+    const currentGeneration = generation.current;
     setIsProcessing(true);
     setError(null);
 
     try {
-      const dataUrl = await fetchPdfAsDataUrl(drawing.pdfUrl);
+      if (!preview) {
+        const dataUrl = await fetchPdfAsDataUrl(drawing.pdfUrl);
+        if (generation.current !== currentGeneration) return;
+        const now = new Date();
+        const fecha = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-      const now = new Date();
-      const fecha = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        setPreview({ dataUrl, stamp: {
+          soNumber: soNumber.trim() || 'N/A',
+          cantidad: cantidad.trim(),
+          fecha,
+          notas: notas.trim(),
+        } });
+        setPreviewReady(false);
+        return;
+      }
 
-      await openStampedPlanoOt(dataUrl, {
-        soNumber: soNumber.trim() || 'N/A',
-        cantidad: cantidad.trim() || 'N/A',
-        fecha,
-        notas: notas.trim(),
-      });
+      await openStampedPlanoOt(preview.dataUrl, { ...preview.stamp, quantityMask: mask });
+      if (generation.current !== currentGeneration) return;
 
       const submittedSoNumber = soNumber.trim() || null;
       setSoNumber('');
@@ -142,15 +170,15 @@ export function ToolcribPrintModal({
       onSuccess({ soNumber: submittedSoNumber });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al procesar el PDF para impresión.');
+      if (generation.current === currentGeneration) setError(err instanceof Error ? err.message : 'Error al procesar el PDF para impresión.');
     } finally {
-      setIsProcessing(false);
+      if (generation.current === currentGeneration) setIsProcessing(false);
     }
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent showCloseButton={false} className="max-w-lg bg-surface border-2 border-line p-0 overflow-hidden shadow-hard-accent text-ink rounded-none flex flex-col">
+      <DialogContent showCloseButton={false} className={`${preview ? 'sm:max-w-5xl' : 'sm:max-w-lg'} max-h-[94dvh] bg-surface border-2 border-line p-0 overflow-hidden shadow-hard-accent text-ink rounded-none flex flex-col`}>
         <DialogHeader className="flex flex-row items-center justify-between px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white shrink-0 space-y-0">
           <div className="flex items-center gap-3">
             <div className="size-8 bg-accent text-bg flex items-center justify-center font-bold">
@@ -169,6 +197,8 @@ export function ToolcribPrintModal({
             variant="outline"
             size="icon"
             onClick={onClose}
+            disabled={isProcessing}
+            aria-label="Cerrar impresión de OT"
             className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
             title="Cerrar (ESC)"
           >
@@ -176,7 +206,7 @@ export function ToolcribPrintModal({
           </Button>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto min-h-0">
           {error && (
             <div className="flex items-start gap-2 border-2 border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger">
               <AlertCircle size={14} className="shrink-0 mt-0.5" />
@@ -184,6 +214,16 @@ export function ToolcribPrintModal({
             </div>
           )}
 
+          {preview ? <>
+            <Suspense fallback={<p role="status">Cargando vista previa…</p>}>
+              <PlanoOtPreview dataUrl={preview.dataUrl} stamp={preview.stamp} mask={mask}
+                onMaskChange={next => { setMask(next); setSkipMask(false); }} onReady={setPreviewReady} />
+            </Suspense>
+            {!mask && <label className="flex gap-2 items-center text-sm">
+              <input type="checkbox" checked={skipMask} onChange={event => setSkipMask(event.target.checked)} />
+              Este plano no necesita ocultar una cantidad original.
+            </label>}
+          </> : <>
           {matchingOrders.length > 0 && (
             <div className="space-y-2 bg-surface-2 p-3 border-2 border-line">
               <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-ink-dim flex items-center gap-1.5">
@@ -219,6 +259,7 @@ export function ToolcribPrintModal({
               Número de Orden (SO)
             </label>
             <Input
+              aria-label="Número de Orden (SO)"
               value={soNumber}
               onChange={(e) => setSoNumber(e.target.value)}
               placeholder="Ej. 2026/S00781"
@@ -232,7 +273,9 @@ export function ToolcribPrintModal({
               Cantidad de Piezas
             </label>
             <Input
+              aria-label="Cantidad de Piezas"
               type="number"
+              required
               min="1"
               value={cantidad}
               onChange={(e) => setCantidad(e.target.value)}
@@ -247,6 +290,7 @@ export function ToolcribPrintModal({
               Notas Adicionales (Aparecerán en el PDF)
             </label>
             <Input
+              aria-label="Notas Adicionales"
               value={notas}
               onChange={(e) => setNotas(e.target.value)}
               placeholder='Ej. "Cuidado con el acabado aquí"'
@@ -254,8 +298,10 @@ export function ToolcribPrintModal({
               className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
           </div>
+          </>}
 
           <DialogFooter className="pt-2 flex justify-end gap-2 border-t-2 border-line mt-4">
+            {preview && <Button type="button" variant="outline" disabled={isProcessing} onClick={() => { setPreview(null); setPreviewReady(false); }}>Volver a datos</Button>}
             <Button
               type="button"
               variant="outline"
@@ -267,7 +313,7 @@ export function ToolcribPrintModal({
             </Button>
             <Button
               type="submit"
-              disabled={isProcessing}
+              disabled={isProcessing || (!!preview && (!previewReady || (!mask && !skipMask)))}
               className="bg-accent text-bg px-6 h-9 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0 rounded-none flex items-center gap-2"
             >
               {isProcessing ? (
@@ -277,7 +323,7 @@ export function ToolcribPrintModal({
               ) : (
                 <>
                   <Printer size={13} />
-                  Imprimir OT
+                  {preview ? 'Imprimir OT' : 'Vista previa'}
                 </>
               )}
             </Button>

@@ -101,26 +101,40 @@ export async function stampPlanoOt(
       .map(text => ({ text, size: detailSize, notes })));
   }
   const boxH = padding * 2 + rows.reduce((sum, row) => sum + row.size * 1.3, 0);
-  const extraHeight = boxH + margin * 2;
-  const page = pdfDoc.addPage([width, height + extraHeight]);
+  // El sello vive DENTRO de la hoja original — nunca la crece. Agregar alto
+  // extra cambia la proporción ancho:alto de la página, y al imprimir en papel
+  // estándar el visor la ajusta y deja bandas muertas a los lados. En vez de
+  // eso, el plano se encoge un poco y se recorre hacia abajo para abrir espacio
+  // arriba, así la hoja de salida conserva el tamaño/proporción del plano fuente.
+  const headerHeight = boxH + margin * 2;
+  const scale = (height - headerHeight) / height;
+  if (scale < 0.5) {
+    throw new Error('Las notas son muy largas para caber sin reducir demasiado el plano. Acórtalas.');
+  }
+  const availableHeight = height * scale;
+  const xOffset = (width - width * scale) / 2;
+  const page = pdfDoc.addPage([width, height]);
   if (embedded) page.drawPage(embedded, {
-    x: rotation === 180 || rotation === 270 ? width : 0,
-    y: rotation === 90 || rotation === 180 ? height : 0,
+    x: rotation === 180 || rotation === 270 ? xOffset + width * scale : xOffset,
+    y: rotation === 90 || rotation === 180 ? availableHeight : 0,
+    xScale: scale,
+    yScale: scale,
     rotate: degrees(-rotation),
   });
   const mask = stamp.quantityMask;
   if (mask) {
     // Cubierta visual para impresión, no redacción de datos confidenciales.
+    // Mismo escalado/offset que el plano incrustado, para seguir cubriendo lo correcto.
     page.drawRectangle({
-      x: mask.x * width, y: (1 - mask.y - mask.height) * height,
-      width: mask.width * width, height: mask.height * height, color: rgb(1, 1, 1),
+      x: xOffset + mask.x * width * scale, y: (1 - mask.y - mask.height) * height * scale,
+      width: mask.width * width * scale, height: mask.height * height * scale, color: rgb(1, 1, 1),
     });
   }
   page.drawRectangle({
-    x: margin, y: height + margin, width: width - margin * 2, height: boxH,
+    x: margin, y: availableHeight + margin, width: width - margin * 2, height: boxH,
     color: rgb(1, 1, 1), borderColor: rgb(0, 0, 0), borderWidth: 2,
   });
-  let y = height + extraHeight - margin - padding;
+  let y = height - margin - padding;
   for (const row of rows) {
     y -= row.size;
     page.drawText(row.text, { x: margin + padding, y, size: row.size, font,

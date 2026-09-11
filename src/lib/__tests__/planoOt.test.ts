@@ -39,19 +39,27 @@ describe('OT de impresión', () => {
     const pdf = await PDFDocument.load(bytes);
     expect(pdf.getPageCount()).toBe(2);
     expect(pdf.getPage(0).getRotation().angle).toBe(0);
+    // La hoja de salida conserva el tamaño del CropBox normalizado: el sello
+    // se acomoda encogiendo el plano hacia abajo, nunca crece la página
+    // (eso es justo lo que antes dejaba bandas muertas al imprimir en papel real).
     expect(pdf.getPage(0).getWidth()).toBe(rotation % 180 ? 700 : 500);
-    expect(pdf.getPage(0).getHeight()).toBeGreaterThan(rotation % 180 ? 500 : 700);
+    expect(pdf.getPage(0).getHeight()).toBe(rotation % 180 ? 500 : 700);
     expect(pdf.getPage(1).getSize()).toEqual({ width: 400, height: 500 });
     const original = await PDFDocument.load(source.split(',')[1]);
     expect(original.getPage(0).getSize()).toEqual({ width: 600, height: 800 });
     expect(original.getPage(0).getRotation().angle).toBe(rotation);
   });
 
-  it('conserva encabezados y notas largos agregando altura', async () => {
+  it('mantiene el tamaño de página igual sin importar el largo de las notas', async () => {
     const source = await fixture();
     const short = await PDFDocument.load(await stampPlanoOt(source, stamp));
-    const long = await PDFDocument.load(await stampPlanoOt(source, { ...stamp, notas: 'Acabado especial. '.repeat(30) }));
-    expect(long.getPage(0).getHeight()).toBeGreaterThan(short.getPage(0).getHeight());
+    const long = await PDFDocument.load(await stampPlanoOt(source, { ...stamp, notas: 'Acabado especial. '.repeat(10) }));
+    expect(long.getPage(0).getSize()).toEqual(short.getPage(0).getSize());
+  });
+
+  it('rechaza notas tan largas que encogerían el plano más de la mitad', async () => {
+    await expect(stampPlanoOt(await fixture(), { ...stamp, notas: 'Acabado especial. '.repeat(60) }))
+      .rejects.toThrow('Acórtalas');
   });
 
   it('falla ante selección inválida en vez de imprimir una máscara desplazada', async () => {

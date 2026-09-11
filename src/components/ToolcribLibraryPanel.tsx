@@ -92,6 +92,7 @@ import {
 } from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
 import { log } from '../lib/log';
+import { clearAllAnalysisCache } from '../lib/documentAnalysis/cache';
 
 export interface ToolcribAttachment {
   drawingId: string;
@@ -798,7 +799,9 @@ export function ToolcribLibraryPanel({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void loadLibrary()}
+          onClick={() => {
+            void clearAllAnalysisCache().then(() => loadLibrary());
+          }}
           disabled={status === 'loading'}
           className="border-2 border-line text-ink font-black uppercase text-[10px] tracking-widest hover:bg-surface-2 hover:text-ink transition-colors rounded-none h-9 px-3 w-full sm:w-auto"
           title="Refrescar biblioteca"

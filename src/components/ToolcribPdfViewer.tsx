@@ -142,8 +142,14 @@ export function ToolcribPdfViewer({ pdfUrl, fileName }: ToolcribPdfViewerProps) 
         const context = canvas.getContext('2d');
         if (!context) return;
 
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
+        // HiDPI: render at native pixel density so the PDF looks sharp on
+        // Retina / 2x screens instead of blurry-stretched.
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.ceil(viewport.width * dpr);
+        canvas.height = Math.ceil(viewport.height * dpr);
+        canvas.style.width = `${Math.ceil(viewport.width)}px`;
+        canvas.style.height = `${Math.ceil(viewport.height)}px`;
+        context.scale(dpr, dpr);
 
         renderTaskRef.current?.cancel();
         const task = page.render({ canvas, canvasContext: context, viewport });

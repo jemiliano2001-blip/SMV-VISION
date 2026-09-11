@@ -1,4 +1,4 @@
-import { createStore, del, get, set } from 'idb-keyval';
+import { clear, createStore, del, get, set } from 'idb-keyval';
 import { log } from '../log';
 
 const CACHE_NAMESPACE = 'smvVisionDocAnalysisV1';
@@ -188,5 +188,19 @@ export async function clearLatestAuditSession(): Promise<void> {
     await del(LATEST_AUDIT_SESSION_KEY, getCacheStore());
   } catch (error) {
     log.warn('[cache] clearLatestAuditSession failed', error);
+  }
+}
+
+/**
+ * Borra TODAS las entradas del store de análisis en IndexedDB.
+ * Tras llamar a esto, el siguiente análisis de planos hará llamadas
+ * frescas a Gemini en lugar de usar resultados cacheados.
+ */
+export async function clearAllAnalysisCache(): Promise<void> {
+  try {
+    await clear(getCacheStore());
+    log.info('[cache] all analysis cache entries cleared');
+  } catch (error) {
+    log.warn('[cache] clearAllAnalysisCache failed', error);
   }
 }

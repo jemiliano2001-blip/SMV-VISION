@@ -199,7 +199,7 @@ export function ToolcribPrintModal({
             onClick={onClose}
             disabled={isProcessing}
             aria-label="Cerrar impresión de OT"
-            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+            className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
             title="Cerrar (ESC)"
           >
             <X size={14} />
@@ -255,10 +255,11 @@ export function ToolcribPrintModal({
           )}
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="print-so-number" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Número de Orden (SO)
             </label>
             <Input
+              id="print-so-number"
               aria-label="Número de Orden (SO)"
               value={soNumber}
               onChange={(e) => setSoNumber(e.target.value)}
@@ -269,10 +270,11 @@ export function ToolcribPrintModal({
           </div>
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="print-quantity" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Cantidad de Piezas
             </label>
             <Input
+              id="print-quantity"
               aria-label="Cantidad de Piezas"
               type="number"
               required
@@ -286,10 +288,11 @@ export function ToolcribPrintModal({
           </div>
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="print-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Notas Adicionales (Aparecerán en el PDF)
             </label>
             <Input
+              id="print-notes"
               aria-label="Notas Adicionales"
               value={notas}
               onChange={(e) => setNotas(e.target.value)}

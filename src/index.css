@@ -117,6 +117,41 @@
     line-height: 1;
   }
 
+  /* Adaptación progresiva de módulos históricos al shell actual. */
+  .catalog-workspace .border-2,
+  .tooling-workspace .border-2,
+  .order-card .border-2 {
+    border-width: 1px;
+  }
+
+  .catalog-workspace .rounded-none,
+  .tooling-workspace .rounded-none,
+  .order-card .rounded-none {
+    border-radius: 0.625rem;
+  }
+
+  .catalog-workspace .shadow-hard,
+  .catalog-workspace .shadow-hard-accent,
+  .tooling-workspace .shadow-hard,
+  .tooling-workspace .shadow-hard-accent,
+  .order-card .shadow-hard,
+  .order-card .shadow-hard-accent {
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .catalog-workspace button,
+  .tooling-workspace button,
+  .order-card button {
+    min-height: 44px;
+  }
+
+  .tooling-workspace input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  .tooling-workspace select {
+    min-height: 44px;
+    border-width: 1px;
+    border-radius: 0.625rem;
+  }
+
   /* Marcas de registro/encuadre (eco del recorte isométrico) */
   .corner-ticks { position: relative; }
   .corner-ticks::before,

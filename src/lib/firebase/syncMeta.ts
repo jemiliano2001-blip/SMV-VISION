@@ -22,6 +22,8 @@ export interface OdooSyncMeta {
   partners: OdooSyncPartner[];
 }
 
+export type OdooSyncMetaState = 'loading' | 'ready' | 'empty' | 'unavailable' | 'error';
+
 function normalizePartners(raw: unknown): OdooSyncPartner[] {
   if (!Array.isArray(raw)) return [];
   const out: OdooSyncPartner[] = [];
@@ -50,11 +52,11 @@ function normalizePartners(raw: unknown): OdooSyncPartner[] {
  * Returns an unsubscribe function.
  */
 export function subscribeToOdooSyncMeta(
-  cb: (meta: OdooSyncMeta | null) => void,
+  cb: (meta: OdooSyncMeta | null, state: OdooSyncMetaState) => void,
 ): () => void {
   const database = getFirestoreClient();
   if (!database) {
-    cb(null);
+    cb(null, 'unavailable');
     return () => {};
   }
 
@@ -64,14 +66,14 @@ export function subscribeToOdooSyncMeta(
     ref,
     (snap) => {
       if (!snap.exists()) {
-        cb(null);
+        cb(null, 'empty');
         return;
       }
       const data = snap.data();
       // serverTimestamp() resolves to null locally before the write completes
       const ts = data.lastSyncAt as Timestamp | null;
       if (!ts) {
-        cb(null);
+        cb(null, 'loading');
         return;
       }
       const successTs = data.lastSuccessfulSyncAt as Timestamp | null | undefined;
@@ -82,14 +84,11 @@ export function subscribeToOdooSyncMeta(
         status: data.status === 'error' ? 'error' : 'ok',
         errorMessage: data.errorMessage as string | undefined,
         partners: normalizePartners(data.partners),
-      });
+      }, 'ready');
     },
     (error) => {
-      // No distinguimos "sin permiso" de "nunca corrió" en la UI (requeriría
-      // cambiar la firma del callback en los 3 consumidores) pero al menos
-      // dejamos el motivo real en el log — antes desaparecía sin rastro.
       log.warn('[smv-vision][syncMeta] onSnapshot falló, chip de sync sin datos', error);
-      cb(null);
+      cb(null, 'error');
     },
   );
 }

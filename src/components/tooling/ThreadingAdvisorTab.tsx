@@ -430,10 +430,11 @@ export function ThreadingAdvisorTab(): ReactElement {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                    <label htmlFor="thread-start-z" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                       Z Inicio (pulgadas)
                     </label>
                     <Input
+                      id="thread-start-z"
                       type="number"
                       step="0.05"
                       value={startZInch}
@@ -442,10 +443,11 @@ export function ThreadingAdvisorTab(): ReactElement {
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                    <label htmlFor="thread-end-z" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                       Z Final (pulgadas)
                     </label>
                     <Input
+                      id="thread-end-z"
                       type="number"
                       step="0.05"
                       value={endZInch}
@@ -458,10 +460,11 @@ export function ThreadingAdvisorTab(): ReactElement {
             ) : (
               <>
                 <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                  <label htmlFor="thread-major-diameter" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                     Diámetro Mayor Nominal (mm)
                   </label>
                   <Input
+                    id="thread-major-diameter"
                     type="number"
                     step="0.5"
                     value={majorDiameterMm}
@@ -471,10 +474,11 @@ export function ThreadingAdvisorTab(): ReactElement {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                  <label htmlFor="thread-pitch" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                     Paso de Rosca (mm)
                   </label>
                   <Input
+                    id="thread-pitch"
                     type="number"
                     step="0.25"
                     value={pitchMmCustom}

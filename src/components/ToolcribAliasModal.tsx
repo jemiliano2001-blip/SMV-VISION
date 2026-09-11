@@ -111,8 +111,9 @@ export function ToolcribAliasModal({ target, onClose, onSaved }: ToolcribAliasMo
             size="icon"
             onClick={onClose}
             disabled={isSaving}
-            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+            className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
             title="Cerrar (ESC)"
+            aria-label="Cerrar formulario de alias"
           >
             <X size={14} />
           </Button>
@@ -139,10 +140,11 @@ export function ToolcribAliasModal({ target, onClose, onSaved }: ToolcribAliasMo
           )}
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="drawing-alias" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Apodo / alias
             </label>
             <Input
+              id="drawing-alias"
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
               placeholder='Ej. "punzón de la M", "el gavilán chico"'

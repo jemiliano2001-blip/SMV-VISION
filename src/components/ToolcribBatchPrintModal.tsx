@@ -138,8 +138,9 @@ export function ToolcribBatchPrintModal({
             size="icon"
             onClick={onClose}
             disabled={isProcessing}
-            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+            className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
             title="Cerrar (ESC)"
+            aria-label="Cerrar impresión en lote"
           >
             <X size={14} />
           </Button>
@@ -156,10 +157,11 @@ export function ToolcribBatchPrintModal({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                <label htmlFor="batch-print-so-number" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                   Número de Orden (SO)
                 </label>
                 <Input
+                  id="batch-print-so-number"
                   value={soNumber}
                   onChange={(e) => setSoNumber(e.target.value)}
                   placeholder="Ej. 2026/S00781"
@@ -168,10 +170,11 @@ export function ToolcribBatchPrintModal({
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                <label htmlFor="batch-print-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                   Notas (todas las hojas)
                 </label>
                 <Input
+                  id="batch-print-notes"
                   value={notas}
                   onChange={(e) => setNotas(e.target.value)}
                   placeholder='Ej. "Cuidado con el acabado"'

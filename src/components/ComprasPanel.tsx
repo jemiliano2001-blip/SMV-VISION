@@ -216,7 +216,7 @@ export function ComprasPanel(): ReactElement {
                   variant="ghost"
                   size="icon"
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 text-ink-dim hover:text-ink hover:bg-transparent h-8 w-8"
+                  className="absolute right-0 top-1/2 min-h-11 min-w-11 -translate-y-1/2 text-ink-dim hover:text-ink hover:bg-transparent"
                 >
                   <X size={14} />
                 </Button>
@@ -294,8 +294,9 @@ export function ComprasPanel(): ReactElement {
                             href={item.link.startsWith('http') ? item.link : `https://${item.link}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-line text-ink hover:text-white hover:bg-accent hover:border-accent transition-colors"
+                            className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-lg border border-line text-ink hover:text-white hover:bg-accent hover:border-accent transition-colors"
                             title="Abrir enlace"
+                            aria-label={`Abrir enlace de compra de ${item.nombre}`}
                           >
                             <ExternalLink size={13} />
                           </a>
@@ -306,8 +307,9 @@ export function ComprasPanel(): ReactElement {
                           variant="outline"
                           size="icon"
                           onClick={() => handleOpenEdit(item)}
-                          className="h-8 w-8 rounded-lg border border-line text-ink bg-transparent hover:text-white hover:bg-accent hover:border-accent transition-colors"
+                          className="min-h-11 min-w-11 rounded-lg border border-line text-ink bg-transparent hover:text-white hover:bg-accent hover:border-accent transition-colors"
                           title="Editar"
+                          aria-label={`Editar ${item.nombre}`}
                         >
                           <Pencil size={13} />
                         </Button>
@@ -315,8 +317,9 @@ export function ComprasPanel(): ReactElement {
                           variant="outline"
                           size="icon"
                           onClick={() => void handleDelete(item.id)}
-                          className="h-8 w-8 rounded-lg border border-line text-ink bg-transparent hover:text-white hover:bg-danger hover:border-danger transition-colors"
+                          className="min-h-11 min-w-11 rounded-lg border border-line text-ink bg-transparent hover:text-white hover:bg-danger hover:border-danger transition-colors"
                           title="Eliminar"
+                          aria-label={`Eliminar ${item.nombre}`}
                         >
                           <Trash2 size={13} />
                         </Button>
@@ -332,15 +335,16 @@ export function ComprasPanel(): ReactElement {
 
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="max-w-lg rounded-xl p-0 gap-0 overflow-hidden bg-surface border border-line shadow-hard-accent flex flex-col" showCloseButton={false}>
-          <DialogHeader className="flex flex-row items-center justify-between px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white shrink-0 space-y-0">
-            <DialogTitle className="font-display text-lg font-black uppercase tracking-tight m-0">
+          <DialogHeader className="flex flex-row items-center justify-between px-5 py-3 border-b border-line bg-surface-2 text-ink shrink-0 space-y-0">
+            <DialogTitle className="font-display text-lg font-semibold tracking-tight m-0">
               {editingItem ? 'Editar Material' : 'Nuevo Material'}
             </DialogTitle>
             <Button
               variant="outline"
               size="icon"
               onClick={() => setIsModalOpen(false)}
-              className="h-8 w-8 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
+              aria-label="Cerrar formulario de material"
+              className="min-h-11 min-w-11 rounded-lg border border-line bg-transparent text-ink hover:bg-accent hover:text-white hover:border-accent transition-colors"
             >
               <X size={14} />
             </Button>
@@ -355,12 +359,13 @@ export function ComprasPanel(): ReactElement {
               </div>
             )}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Nombre / Descripción *</label>
+              <label htmlFor="purchase-name" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Nombre / Descripción *</label>
               <Input
+                id="purchase-name"
                 required
                 value={nombre}
                 onChange={(e) => setNombre(e.target.value)}
-                className="w-full rounded-lg border border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
+                className="w-full rounded-lg border border-line bg-surface-2 text-ink min-h-11 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
                 placeholder="Ej. Acero M2 de 1/2 x 7/8 x 20"
               />
               {duplicateWarning && (
@@ -370,50 +375,55 @@ export function ComprasPanel(): ReactElement {
             
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Tipo</label>
+                <label htmlFor="purchase-type" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Tipo</label>
                 <select
+                  id="purchase-type"
                   value={tipo}
                   onChange={(e) => setTipo(e.target.value as PurchaseItemType)}
-                  className="w-full rounded-lg border border-line bg-surface-2 text-ink h-9 px-3 py-1 text-[12px] font-mono outline-none focus:border-accent"
+                  className="w-full rounded-lg border border-line bg-surface-2 text-ink min-h-11 px-3 py-1 text-[12px] font-mono outline-none focus:border-accent"
                 >
                   {ITEM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Proveedor</label>
+                <label htmlFor="purchase-provider" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Proveedor</label>
                 <Input
+                  id="purchase-provider"
                   value={proveedor}
                   onChange={(e) => setProveedor(e.target.value)}
-                  className="w-full rounded-lg border border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
+                  className="w-full rounded-lg border border-line bg-surface-2 text-ink min-h-11 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
                   placeholder="Ej. McMaster, Aceros MTY"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">SKU / Número de Parte</label>
+              <label htmlFor="purchase-sku" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">SKU / Número de Parte</label>
               <Input
+                id="purchase-sku"
                 value={sku}
                 onChange={(e) => setSku(e.target.value)}
-                className="w-full rounded-lg border border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
+                className="w-full rounded-lg border border-line bg-surface-2 text-ink min-h-11 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
                 placeholder="Ej. 8975K14"
               />
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Link de Compra</label>
+              <label htmlFor="purchase-link" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Link de Compra</label>
               <Input
+                id="purchase-link"
                 type="url"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
-                className="w-full rounded-lg border border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
+                className="w-full rounded-lg border border-line bg-surface-2 text-ink min-h-11 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent shadow-none"
                 placeholder="https://..."
               />
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Notas</label>
+              <label htmlFor="purchase-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Notas</label>
               <textarea
+                id="purchase-notes"
                 rows={2}
                 value={notas}
                 onChange={(e) => setNotas(e.target.value)}
@@ -427,14 +437,14 @@ export function ComprasPanel(): ReactElement {
                 type="button"
                 variant="outline"
                 onClick={() => setIsModalOpen(false)}
-                className="rounded-lg border border-line text-ink font-semibold text-[11px] hover:bg-surface-2 hover:text-ink transition-colors h-9 px-4"
+                className="rounded-lg border border-line text-ink font-semibold text-[11px] hover:bg-surface-2 hover:text-ink transition-colors min-h-11 px-4"
               >
                 Cancelar
               </Button>
               <Button
                 type="submit"
                 disabled={isSaving}
-                className="rounded-lg bg-accent text-white px-6 h-9 text-[11px] font-semibold hover:bg-accent/90 transition-colors shadow-hard-accent disabled:opacity-50 flex items-center gap-2"
+                className="rounded-lg bg-accent text-white px-6 min-h-11 text-[11px] font-semibold hover:bg-accent/90 transition-colors shadow-hard-accent disabled:opacity-50 flex items-center gap-2"
               >
                 {isSaving ? <Loader2 size={12} className="animate-spin" /> : null}
                 {isSaving ? 'Guardando...' : 'Guardar'}

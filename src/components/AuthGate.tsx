@@ -131,11 +131,11 @@ function LoadingScreen(): ReactElement {
 function AuthUnavailableScreen(): ReactElement {
   return (
     <div className="min-h-screen bg-bg bp-grid-lg flex items-center justify-center p-6 font-sans">
-      <div className="w-full max-w-md border-2 border-danger bg-surface shadow-hard corner-ticks">
-        <div className="border-b-2 border-danger px-6 py-4 bg-surface-2 text-ink flex items-center gap-3">
+      <div className="workspace-panel w-full max-w-md overflow-hidden border-danger/50">
+        <div className="border-b border-danger/40 px-6 py-4 bg-surface-2 text-ink flex items-center gap-3">
           <ShieldAlert size={22} className="text-danger" />
-          <h1 className="font-display text-[20px] font-black tracking-[-0.5px] uppercase italic">
-            SMV<span className="text-danger">//</span>VISION
+          <h1 className="font-display text-[20px] font-bold tracking-[-0.5px]">
+            SMV<span className="text-danger">/</span>VISION
           </h1>
         </div>
         <div className="p-6 flex flex-col gap-4">
@@ -150,7 +150,7 @@ function AuthUnavailableScreen(): ReactElement {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="w-full bg-danger text-bg hover:bg-danger/80 px-4 py-3 text-[13px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-hard active:translate-x-0.5 active:translate-y-0.5 transition-all"
+            className="w-full min-h-11 rounded-lg bg-danger text-white hover:bg-danger/90 px-4 text-[13px] font-bold flex items-center justify-center gap-2 transition-all"
           >
             Recargar
           </button>
@@ -202,11 +202,11 @@ function LoginScreen({
 
   return (
     <div className="min-h-screen bg-bg bp-grid-lg flex items-center justify-center p-6 font-sans">
-      <div className="w-full max-w-md border-2 border-line bg-surface shadow-hard-accent corner-ticks">
-        <div className="border-b-2 border-line px-6 py-4 bg-surface-2 text-ink flex items-center gap-3">
+      <div className="workspace-panel w-full max-w-md overflow-hidden">
+        <div className="border-b border-line px-6 py-4 bg-surface-2 text-ink flex items-center gap-3">
           <ShieldCheck size={22} className="text-accent" />
-          <h1 className="font-display text-[20px] font-black tracking-[-0.5px] uppercase italic">
-            SMV<span className="text-accent">//</span>VISION
+          <h1 className="font-display text-[20px] font-bold tracking-[-0.5px]">
+            SMV<span className="text-accent">/</span>VISION
           </h1>
         </div>
 
@@ -223,32 +223,34 @@ function LoginScreen({
           <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-4" noValidate>
             <div className="space-y-3">
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-black uppercase tracking-widest text-ink-dim flex items-center gap-1.5">
+                <label htmlFor="login-email" className="text-[10px] font-bold uppercase tracking-widest text-ink-dim flex items-center gap-1.5">
                   <Mail size={12} /> Correo
                 </label>
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="email"
                   placeholder="usuario@smv.com"
-                  className="w-full border-2 border-line bg-surface-2 text-ink px-3 py-2 text-sm font-bold outline-none focus:border-accent"
+                  className="w-full min-h-11 rounded-lg border border-line bg-surface-2 text-ink px-3 py-2 text-sm font-bold outline-none focus:border-accent"
                 />
                 {fieldErrors.email && (
                   <span className="text-[10px] font-bold text-danger">{fieldErrors.email}</span>
                 )}
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-black uppercase tracking-widest text-ink-dim flex items-center gap-1.5">
+                <label htmlFor="login-password" className="text-[10px] font-bold uppercase tracking-widest text-ink-dim flex items-center gap-1.5">
                   <Lock size={12} /> Contraseña
                 </label>
                 <input
+                  id="login-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
                   placeholder="••••••••"
-                  className="w-full border-2 border-line bg-surface-2 text-ink px-3 py-2 text-sm font-bold outline-none focus:border-accent"
+                  className="w-full min-h-11 rounded-lg border border-line bg-surface-2 text-ink px-3 py-2 text-sm font-bold outline-none focus:border-accent"
                 />
                 {fieldErrors.password && (
                   <span className="text-[10px] font-bold text-danger">{fieldErrors.password}</span>
@@ -259,7 +261,7 @@ function LoginScreen({
             <button
               type="submit"
               disabled={signingIn}
-              className="w-full bg-accent text-bg hover:bg-accent/80 disabled:opacity-40 px-4 py-4 text-[14px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-hard active:translate-x-0.5 active:translate-y-0.5 transition-all"
+              className="w-full min-h-12 rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-40 px-4 text-[14px] font-bold flex items-center justify-center gap-2 shadow-hard-accent transition-all"
             >
               {signingIn ? <Loader2 size={20} className="animate-spin" /> : <LogIn size={20} />} Entrar
             </button>
@@ -284,7 +286,7 @@ function LoginScreen({
               <button
                 type="button"
                 onClick={onBypass}
-                className="w-full border-2 border-line bg-surface-2 text-ink-dim hover:border-accent hover:text-accent transition-colors px-4 py-3 text-[12px] font-black uppercase tracking-widest flex items-center justify-center gap-2"
+                className="w-full min-h-11 rounded-lg border border-line bg-surface-2 text-ink-dim hover:border-accent hover:text-accent transition-colors px-4 text-[12px] font-bold flex items-center justify-center gap-2"
               >
                 <Ghost size={16} /> Omitir Login (Modo Debug)
               </button>

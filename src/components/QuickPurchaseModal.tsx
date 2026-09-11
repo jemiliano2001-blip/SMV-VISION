@@ -136,10 +136,11 @@ export function QuickPurchaseModal({
 
           {/* Nombre / Descripción */}
           <div className="space-y-1">
-            <label className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+            <label htmlFor="quick-purchase-name" className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
               Material o Pieza Requerida *
             </label>
             <input
+              id="quick-purchase-name"
               type="text"
               required
               value={nombre}
@@ -152,10 +153,11 @@ export function QuickPurchaseModal({
           {/* Tipo y SKU */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+              <label htmlFor="quick-purchase-type" className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
                 Tipo de Compra
               </label>
               <select
+                id="quick-purchase-type"
                 value={tipo}
                 onChange={(e) => setTipo(e.target.value as PurchaseItemType)}
                 className="w-full bg-surface border-2 border-line px-3 py-1.5 font-mono text-xs text-ink focus:outline-none focus:border-accent uppercase cursor-pointer"
@@ -168,10 +170,11 @@ export function QuickPurchaseModal({
             </div>
 
             <div className="space-y-1">
-              <label className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+              <label htmlFor="quick-purchase-sku" className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
                 SKU / Código de Parte
               </label>
               <input
+                id="quick-purchase-sku"
                 type="text"
                 value={sku}
                 onChange={(e) => setSku(e.target.value)}
@@ -184,10 +187,11 @@ export function QuickPurchaseModal({
           {/* Proveedor y Link */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+              <label htmlFor="quick-purchase-provider" className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
                 Proveedor Sugerido
               </label>
               <input
+                id="quick-purchase-provider"
                 type="text"
                 list="proveedores-list"
                 value={proveedor}
@@ -203,10 +207,11 @@ export function QuickPurchaseModal({
             </div>
 
             <div className="space-y-1">
-              <label className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+              <label htmlFor="quick-purchase-link" className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
                 Enlace / Cotización (URL)
               </label>
               <input
+                id="quick-purchase-link"
                 type="url"
                 value={link}
                 onChange={(e) => setLink(e.target.value)}
@@ -218,10 +223,11 @@ export function QuickPurchaseModal({
 
           {/* Notas y Trazabilidad */}
           <div className="space-y-1">
-            <label className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
+            <label htmlFor="quick-purchase-notes" className="block font-mono text-[10px] font-bold uppercase tracking-wider text-ink-dim">
               Notas y Trazabilidad SO / PO
             </label>
             <textarea
+              id="quick-purchase-notes"
               rows={2}
               value={notas}
               onChange={(e) => setNotas(e.target.value)}

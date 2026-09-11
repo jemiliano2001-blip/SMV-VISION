@@ -48,7 +48,7 @@ export function NavRail({ activeView, onNavigate, version }: NavRailProps): Reac
   const auth = useFirebaseUser();
   const configured = isFirebaseConfigured();
   const { theme, setTheme } = useTheme();
-  const { totalToInvoiceOrders, isError, isStale } = useSyncMeta();
+  const { state: syncState, totalToInvoiceOrders, isError, isStale } = useSyncMeta();
 
   const handleSignOut = useCallback(() => {
     void signOutUser();
@@ -111,18 +111,24 @@ export function NavRail({ activeView, onNavigate, version }: NavRailProps): Reac
                   {isOdoo && (
                     <span
                       className={`absolute -top-1 -right-1 size-2 rounded-full border border-surface ${
-                        isError
+                        isError || syncState === 'error'
                           ? 'bg-danger'
                           : isStale
                             ? 'bg-warn'
-                            : 'bg-ok'
+                            : syncState === 'ready'
+                              ? 'bg-ok'
+                              : 'bg-ink-dim'
                       }`}
                       title={
-                        isError
+                        isError || syncState === 'error'
                           ? 'Atención: Hubo un fallo en la última sincronización'
                           : isStale
                             ? 'Sincronización pendiente / más de 35 min'
-                            : 'Sincronizado con Odoo'
+                            : syncState === 'ready'
+                              ? 'Sincronizado con Odoo'
+                              : syncState === 'loading'
+                                ? 'Verificando sincronización con Odoo'
+                                : 'Estado de Odoo no disponible'
                       }
                     />
                   )}

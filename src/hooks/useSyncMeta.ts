@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   subscribeToOdooSyncMeta,
   type OdooSyncMeta,
+  type OdooSyncMetaState,
 } from '../lib/firebase/syncMeta';
 
 export interface UseSyncMetaResult {
   meta: OdooSyncMeta | null;
+  state: OdooSyncMetaState;
   isStale: boolean;
   isError: boolean;
   totalToInvoiceOrders: number;
@@ -20,8 +22,15 @@ export interface UseSyncMetaResult {
  */
 export function useSyncMeta(): UseSyncMetaResult {
   const [meta, setMeta] = useState<OdooSyncMeta | null>(null);
+  const [state, setState] = useState<OdooSyncMetaState>('loading');
 
-  useEffect(() => subscribeToOdooSyncMeta(setMeta), []);
+  useEffect(
+    () => subscribeToOdooSyncMeta((nextMeta, nextState) => {
+      setMeta(nextMeta);
+      setState(nextState);
+    }),
+    [],
+  );
 
   const totalToInvoiceOrders = useMemo(() => {
     if (!meta || !meta.partners) return 0;
@@ -29,7 +38,7 @@ export function useSyncMeta(): UseSyncMetaResult {
   }, [meta]);
 
   const partnersCount = meta?.partners?.length ?? 0;
-  const isError = meta?.status === 'error';
+  const isError = state === 'error' || meta?.status === 'error';
   const effectiveLastSyncDate = meta?.lastSuccessfulSyncAt ?? meta?.lastSyncAt ?? null;
 
   const isStale = useMemo(() => {
@@ -40,6 +49,7 @@ export function useSyncMeta(): UseSyncMetaResult {
 
   return {
     meta,
+    state,
     isStale,
     isError,
     totalToInvoiceOrders,

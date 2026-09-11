@@ -117,8 +117,9 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
             variant="outline"
             size="icon"
             onClick={onClose}
-            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+            className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
             title="Cerrar (ESC)"
+            aria-label="Cerrar carga de plano"
           >
             <X size={14} />
           </Button>
@@ -134,10 +135,11 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              <label htmlFor="drawing-customer" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                 Cliente <span className="text-accent">*</span>
               </label>
               <Input
+                id="drawing-customer"
                 required
                 value={customer}
                 onChange={(e) => setCustomer(e.target.value)}
@@ -147,10 +149,11 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              <label htmlFor="drawing-revision" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                 Revisión <span className="text-accent">*</span>
               </label>
               <Input
+                id="drawing-revision"
                 required
                 value={revision}
                 onChange={(e) => setRevision(e.target.value)}
@@ -162,10 +165,11 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
           </div>
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="drawing-part-number" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Número de Parte <span className="text-accent">*</span>
             </label>
             <Input
+              id="drawing-part-number"
               required
               value={partNumber}
               onChange={(e) => setPartNumber(e.target.value)}
@@ -176,10 +180,11 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
           </div>
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="drawing-description" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Descripción
             </label>
             <Input
+              id="drawing-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Breve descripción de la pieza"
@@ -189,10 +194,11 @@ export function ToolcribUploadModal({ isOpen, onClose, onSuccess, initialPartNum
           </div>
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+            <label htmlFor="drawing-pdf" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Archivo PDF <span className="text-accent">*</span>
             </label>
             <input
+              id="drawing-pdf"
               type="file"
               accept=".pdf"
               required

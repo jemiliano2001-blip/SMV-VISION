@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import type { Order, ToolcribActiveDrawingView } from '../types';
 import type { VisionAnalysisHook } from '../hooks/useVisionAnalysis';
+import { useSyncMeta } from '../hooks/useSyncMeta';
 import type { UseToolcribCatalogResult } from '../hooks/useToolcribCatalog';
 import { ToolcribLibraryPanel } from './ToolcribLibraryPanel';
 import { ReportRowActions } from './ReportRowActions';
@@ -727,6 +728,16 @@ export const ReporteView = memo(function ReporteView({
   const [tableViewMode, setTableViewMode] = useState<'dashboard' | 'print'>('dashboard');
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'ready' | 'missing' | 'mismatch'>('all');
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(new Set());
+  const { state: syncState, isError: isSyncError, isStale: isSyncStale } = useSyncMeta();
+  const syncCopy = syncState === 'loading'
+    ? { title: 'Verificando conexión con Odoo', detail: 'Confirmando el estado de la última sincronización.', tone: 'text-ink-dim' }
+    : isSyncError
+      ? { title: 'Último sync con incidencias', detail: 'La auditoría puede usar datos existentes; sincroniza para obtener información reciente.', tone: 'text-danger' }
+      : isSyncStale
+        ? { title: 'Datos de Odoo desactualizados', detail: 'La última sincronización tiene más de 35 minutos.', tone: 'text-warn' }
+        : syncState === 'ready'
+          ? { title: 'Órdenes Odoo disponibles', detail: 'Las órdenes pendientes se obtendrán al ejecutar la auditoría.', tone: 'text-ok' }
+          : { title: 'Estado de Odoo no disponible', detail: 'No fue posible confirmar la conexión en esta sesión.', tone: 'text-warn' };
 
   // Base común de KPIs y pestañas: el buscador y el toggle "solo faltantes" ya
   // recortaron `filteredResults`. Contar los KPIs sobre `results` (todo) haría que
@@ -863,9 +874,9 @@ export const ReporteView = memo(function ReporteView({
             />
             <div className="min-h-[150px] rounded-xl border border-line bg-surface-2/70 flex flex-col items-center justify-center p-6 relative">
               <div className="text-center space-y-2">
-                <Database className="mx-auto w-10 h-10 text-accent" />
-                <p className="font-display font-semibold text-sm tracking-tight text-ink">
-                  Conexión a Odoo activa
+                <Database className={`mx-auto w-10 h-10 ${syncCopy.tone}`} />
+                <p className={`font-display font-semibold text-sm tracking-tight ${syncCopy.tone}`} aria-live="polite">
+                  {syncCopy.title}
                 </p>
                 {vision.seededBridgeLinks.length > 0 ? (
                   <p className="text-[9px] text-accent font-mono uppercase font-black">
@@ -884,7 +895,7 @@ export const ReporteView = memo(function ReporteView({
                   </p>
                 ) : (
                   <p className="text-[9px] text-ink-dim font-mono uppercase">
-                    Las órdenes pendientes se obtendrán automáticamente al ejecutar la auditoría.
+                    {syncCopy.detail}
                   </p>
                 )}
               </div>
@@ -1004,7 +1015,7 @@ export const ReporteView = memo(function ReporteView({
           <button
             onClick={vision.extractInfo}
             disabled={vision.isExtracting}
-            className="w-full bg-accent text-bg font-display font-black py-4 text-lg uppercase tracking-[3px] transition-all shadow-hard hover:shadow-none hover:translate-x-1 hover:translate-y-1 active:scale-[0.98] disabled:bg-surface disabled:text-ink-dim disabled:shadow-none disabled:translate-x-0 disabled:translate-y-0 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+            className="w-full min-h-14 rounded-xl bg-accent text-white font-display font-bold py-4 text-base tracking-wide transition-all shadow-hard-accent hover:bg-accent/90 active:scale-[0.98] disabled:bg-surface disabled:text-ink-dim disabled:shadow-none disabled:cursor-not-allowed flex items-center justify-center gap-3"
           >
             {vision.isExtracting ? (
               <>
@@ -1026,8 +1037,8 @@ export const ReporteView = memo(function ReporteView({
         <div className="p-6 lg:p-8 flex flex-col min-h-full">
           <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
             <div className="flex items-center gap-3">
-              <span className="w-3 h-3 bg-accent" />
-              <h2 className="font-display font-black text-2xl uppercase italic tracking-tight">
+              <span className="w-2.5 h-2.5 rounded-full bg-accent" />
+              <h2 className="workspace-title text-2xl">
                 Audit Dashboard
               </h2>
             </div>
@@ -1206,7 +1217,7 @@ export const ReporteView = memo(function ReporteView({
                 <div
                   className="absolute inset-0 opacity-20 pointer-events-none"
                   style={{
-                    backgroundImage: 'radial-gradient(#FF4E00 1px, transparent 0)',
+                    backgroundImage: 'radial-gradient(var(--color-accent) 1px, transparent 0)',
                     backgroundSize: '24px 24px',
                   }}
                 />

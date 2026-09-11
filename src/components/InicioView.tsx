@@ -62,10 +62,11 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     month: 'long',
     year: 'numeric',
   });
-  const { meta, isError, isStale, totalToInvoiceOrders, effectiveLastSyncDate } = useSyncMeta();
+  const { meta, state: syncState, isError, isStale, totalToInvoiceOrders, effectiveLastSyncDate } = useSyncMeta();
   const [sinOc, setSinOc] = useState<number | null | undefined>(undefined);
   const [orders, setOrders] = useState<OdooOrderView[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
+  const [ordersLoadFailed, setOrdersLoadFailed] = useState(false);
   const [selectedPartnerKey, setSelectedPartnerKey] = useState<string>('ALL');
   const [syncing, setSyncing] = useState(false);
   const [syncElapsed, setSyncElapsed] = useState(0);
@@ -80,14 +81,17 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         const res = await listOrdersToInvoice({ partnerKeyPrefix: '' });
         if (res.ok) {
           setOrders(res.value);
+          setOrdersLoadFailed(false);
           setError(null);
         } else {
           // Fallback a Suprajit si no trae prefijo vacío
           const fallback = await listOrdersToInvoice({ partnerKeyPrefix: REPORT_PARTNER_KEY_PREFIX });
           if (fallback.ok) {
             setOrders(fallback.value);
+            setOrdersLoadFailed(false);
             setError(null);
           } else {
+            setOrdersLoadFailed(true);
             setError('No fue posible cargar las órdenes. Los datos mostrados pueden estar desactualizados.');
           }
         }
@@ -95,13 +99,16 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         const res = await listOrdersToInvoice({ partnerKey: partnerKeyFilter });
         if (res.ok) {
           setOrders(res.value);
+          setOrdersLoadFailed(false);
           setError(null);
         } else {
+          setOrdersLoadFailed(true);
           setError('No fue posible cargar las órdenes. Los datos mostrados pueden estar desactualizados.');
         }
       }
     } catch {
       setOrders([]);
+      setOrdersLoadFailed(true);
       setError('No fue posible cargar las órdenes. Los datos mostrados pueden estar desactualizados.');
     } finally {
       setLoadingOrders(false);
@@ -171,6 +178,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
 
   // Piezas totales pendientes
   const totalPieces = useMemo(() => {
+    if (ordersLoadFailed && orders.length === 0) return null;
     if (orders.length === 0) return loadingOrders ? undefined : 0;
     return orders.reduce((sum, o) => {
       return sum + (o.order_lines ?? []).reduce((lSum, l) => {
@@ -178,7 +186,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
         return lSum + Math.max(0, pending);
       }, 0);
     }, 0);
-  }, [orders, loadingOrders]);
+  }, [orders, loadingOrders, ordersLoadFailed]);
 
   // Carga por requisitor (Top 5)
   const requisitorChartData = useMemo<BarChartEntry[]>(() => {
@@ -226,6 +234,39 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
   }, [orders]);
 
   const partnersList = meta?.partners ?? [];
+  const pendingOrdersValue = meta
+    ? totalToInvoiceOrders
+    : syncState === 'loading'
+      ? undefined
+      : null;
+  const systemReady = syncState === 'ready' && !isError && !isStale && !ordersLoadFailed;
+  const systemStatus = systemReady
+    ? {
+        title: 'Flujo de producción disponible',
+        description: 'Firestore y Odoo reportan datos disponibles. Puedes iniciar una auditoría o consultar el catálogo.',
+        label: 'Listo para auditar',
+        tone: 'text-ok',
+        dot: 'bg-ok',
+      }
+    : syncState === 'loading'
+      ? {
+          title: 'Verificando servicios',
+          description: 'Estamos comprobando el estado de Firestore y la última sincronización con Odoo.',
+          label: 'Comprobando conexión',
+          tone: 'text-ink-dim',
+          dot: 'bg-ink-dim',
+        }
+      : {
+          title: 'Datos operativos no confirmados',
+          description: isError
+            ? 'La última sincronización con Odoo reportó una incidencia. Puedes consultar los datos existentes o intentar sincronizar de nuevo.'
+            : isStale
+              ? 'La información disponible tiene más de 35 minutos. Sincroniza antes de tomar decisiones operativas.'
+              : 'No fue posible confirmar la conexión con Firestore y Odoo en esta sesión.',
+          label: isError ? 'Sincronización con incidencias' : isStale ? 'Datos desactualizados' : 'Conexión no confirmada',
+          tone: isError ? 'text-danger' : 'text-warn',
+          dot: isError ? 'bg-danger' : 'bg-warn',
+        };
 
   return (
     <motion.div
@@ -261,7 +302,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
           <button
             type="button"
             onClick={() => setError(null)}
-            className="text-danger/70 hover:text-danger shrink-0"
+            className="grid min-h-11 min-w-11 place-items-center rounded-lg text-danger/70 hover:bg-danger/10 hover:text-danger shrink-0"
             title="Cerrar"
             aria-label="Cerrar error"
           >
@@ -274,7 +315,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
       <motion.section variants={item} aria-label="Resumen operativo" className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <StatCard
           icon={CloudDownload}
-          value={show(totalToInvoiceOrders)}
+          value={show(pendingOrdersValue)}
           label="Órdenes pendientes"
           onClick={() => onNavigate('odoo')}
         />
@@ -300,7 +341,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
               size="sm"
               onClick={() => void handleTriggerSync()}
               disabled={syncing}
-              className="h-8 rounded-lg px-2 text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-white transition-colors"
+              className="min-h-11 rounded-lg px-3 text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-white transition-colors"
               title="Disparar sincronización con Odoo ahora"
             >
               {syncing ? `${syncElapsed}s` : 'Sincronizar'}
@@ -311,7 +352,15 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
               {effectiveLastSyncDate ? formatRelativeTime(effectiveLastSyncDate) : '—'}
             </p>
             <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
-              {isError ? 'Sync · Fallo' : isStale ? 'Sync · Desactualizado' : 'Último sync Odoo'}
+              {syncState === 'loading'
+                ? 'Verificando sync Odoo'
+                : isError
+                  ? 'Sync · Fallo'
+                  : isStale
+                    ? 'Sync · Desactualizado'
+                    : syncState === 'ready'
+                      ? 'Último sync Odoo'
+                      : 'Sync no disponible'}
             </p>
           </div>
         </div>
@@ -327,7 +376,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
           <button
             type="button"
             onClick={() => setSelectedPartnerKey('ALL')}
-            className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors shrink-0 ${
+            className={`min-h-11 rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider border transition-colors shrink-0 ${
               selectedPartnerKey === 'ALL'
                 ? 'border-accent bg-accent text-bg'
                 : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
@@ -342,7 +391,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
                 key={p.key}
                 type="button"
                 onClick={() => setSelectedPartnerKey(p.key)}
-                className={`px-3 py-1 text-[10px] font-black uppercase tracking-wider border-2 transition-colors flex items-center gap-1.5 shrink-0 ${
+                className={`min-h-11 rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider border transition-colors flex items-center gap-1.5 shrink-0 ${
                   isSelected
                     ? 'border-accent bg-accent text-bg'
                     : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
@@ -393,7 +442,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
             <button
               type="button"
               onClick={() => onNavigate('odoo')}
-              className="inline-flex items-center gap-1 font-mono text-[10px] uppercase font-bold text-accent hover:underline"
+              className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[10px] uppercase font-bold text-accent hover:bg-accent/10"
             >
               <span>Ver en Órdenes</span>
               <ArrowRight size={12} />
@@ -471,7 +520,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
             <button
               type="button"
               onClick={() => onNavigate('odoo')}
-              className="inline-flex items-center gap-1 font-mono text-[10px] uppercase font-bold text-accent hover:underline"
+              className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[10px] uppercase font-bold text-accent hover:bg-accent/10"
             >
               <span>Ver Órdenes</span>
               <ArrowRight size={12} />
@@ -521,23 +570,23 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
             <div className="workspace-panel p-5 flex flex-col justify-between h-[calc(100%-24px)]">
               <div>
                 <div className="flex items-center gap-2 mb-2">
-                  <Activity size={16} className="text-ok" />
-                  <h3 className="font-display font-semibold text-base">Flujo de producción activo</h3>
+                  <Activity size={16} className={systemStatus.tone} />
+                  <h3 className="font-display font-semibold text-base">{systemStatus.title}</h3>
                 </div>
                 <p className="font-mono text-xs text-ink-dim leading-relaxed">
-                  Sistema conectado a Firestore y Odoo. Puedes iniciar la auditoría de planos o consultar el catálogo de Tool Crib para imprimir órdenes de trabajo.
+                  {systemStatus.description}
                 </p>
               </div>
 
               <div className="pt-4 border-t border-line/60 flex items-center justify-between">
                 <span className="font-mono text-[10px] text-ink-dim flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-ok animate-pulse" />
-                  Listo para auditar
+                  <span className={`w-2 h-2 rounded-full ${systemStatus.dot} ${systemReady ? 'animate-pulse' : ''}`} />
+                  {systemStatus.label}
                 </span>
                 <button
                   type="button"
                   onClick={() => onNavigate('reporte')}
-                  className="font-mono text-[11px] font-bold text-accent uppercase hover:underline inline-flex items-center gap-1"
+                  className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[11px] font-bold text-accent uppercase hover:bg-accent/10"
                 >
                   <span>Iniciar reporte</span>
                   <ArrowRight size={12} />

@@ -78,8 +78,9 @@ export function ToolcribHistoryModal({
             variant="outline"
             size="icon"
             onClick={onClose}
-            className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+            className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
             title="Cerrar (ESC)"
+            aria-label="Cerrar historial de impresiones"
           >
             <X size={14} />
           </Button>

@@ -88,7 +88,7 @@ export const OrderCard = memo(function OrderCard({
       : { label: `◐ ${prod.entregadas}/${prod.total} OTs`, cls: 'bg-warn text-bg' };
 
   return (
-    <div className="border-2 border-line bg-surface flex flex-col shadow-hard">
+    <div className="order-card overflow-hidden rounded-xl border border-line bg-surface flex flex-col shadow-sm">
       <div className="border-b-2 border-line bg-[#0D2B4D] text-white px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
         <div>
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
@@ -151,7 +151,7 @@ export const OrderCard = memo(function OrderCard({
             size="sm"
             disabled={!order.order_lines.some((l) => l.qty_pending > 0)}
             onClick={() => onExportDeliverySlip(order)}
-            className="flex items-center gap-1.5 bg-surface text-ink hover:bg-line ml-1 sm:ml-2 h-8 px-2.5"
+            className="flex min-h-11 items-center gap-1.5 rounded-lg bg-surface px-3 text-ink hover:bg-line ml-1 sm:ml-2"
             title="Generar PDF de Remisión"
           >
             <Truck size={13} />
@@ -167,7 +167,7 @@ export const OrderCard = memo(function OrderCard({
                 !order.order_lines.some((l) => (l.qty_pending_from_pickings ?? l.qty_pending) > 0)
               }
               onClick={() => onSendOrderToReport(order)}
-              className="flex items-center gap-1.5 bg-accent text-bg hover:bg-accent/80 border-accent h-8 px-2.5 shadow-hard transition-all active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-40"
+              className="flex min-h-11 items-center gap-1.5 rounded-lg bg-accent px-3 text-white hover:bg-accent/90 border-accent shadow-hard-accent transition-all disabled:opacity-40"
               title="Enviar todas las líneas activas de esta orden al Reporte de auditoría"
             >
               {sendingKey === order.id ? (

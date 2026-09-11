@@ -509,12 +509,7 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
     setIsExtracting(true);
     setError(null);
     setSeedWarning(null);
-    setResults(null);
     hotStampRefImageRef.current = null;
-    editable.setEditMode(false);
-    editable.setExcludedOrders([]);
-    editable.setOriginalResults(null);
-    setAnalysisSummary(null);
     setExtractingStep('Iniciando análisis...');
 
     let currentWorkshopPdfs = [...workshopPdfsRef.current];
@@ -547,6 +542,14 @@ export function useVisionAnalysis({}: UseVisionAnalysisOptions = {}): VisionAnal
 
       const ordersList = step1Result.ordersList;
       const matchByOrder = step1Result.matchByOrder;
+
+      // La lectura de Odoo ya fue confirmada. Hasta este punto conservamos el
+      // reporte anterior para que un fallo transitorio no destruya la sesión.
+      setResults(null);
+      editable.setEditMode(false);
+      editable.setExcludedOrders([]);
+      editable.setOriginalResults(null);
+      setAnalysisSummary(null);
 
       const catalogFields = (order: ExtractedOrder): Partial<Order> => {
         const m = matchByOrder.get(order);

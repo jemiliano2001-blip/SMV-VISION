@@ -346,8 +346,9 @@ export function ToolingVaultTab(): ReactElement {
                           href={item.linkCompra}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center justify-center h-7 px-2 border-2 border-line bg-accent text-bg text-[10px] font-mono font-black uppercase hover:bg-accent/80 transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px]"
+                          className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-accent px-3 text-[10px] font-mono font-bold text-white hover:bg-accent/90 transition-all"
                           title="Reordenar"
+                          aria-label={`Reordenar ${item.codigoISO}`}
                         >
                           Reordenar
                         </a>
@@ -356,8 +357,9 @@ export function ToolingVaultTab(): ReactElement {
                         variant="outline"
                         size="icon"
                         onClick={() => handleOpenEdit(item)}
-                        className="h-7 w-7 rounded-none border-2 border-line text-ink hover:bg-accent hover:text-bg hover:border-accent"
+                        className="min-h-11 min-w-11 rounded-lg border border-line text-ink hover:bg-accent hover:text-white hover:border-accent"
                         title="Editar"
+                        aria-label={`Editar ${item.codigoISO}`}
                       >
                         <Pencil size={12} />
                       </Button>
@@ -365,8 +367,9 @@ export function ToolingVaultTab(): ReactElement {
                         variant="outline"
                         size="icon"
                         onClick={() => void handleDelete(item.id)}
-                        className="h-7 w-7 rounded-none border-2 border-line text-ink hover:bg-danger hover:text-bg hover:border-danger"
+                        className="min-h-11 min-w-11 rounded-lg border border-line text-ink hover:bg-danger hover:text-white hover:border-danger"
                         title="Eliminar"
+                        aria-label={`Eliminar ${item.codigoISO}`}
                       >
                         <Trash2 size={12} />
                       </Button>
@@ -381,16 +384,17 @@ export function ToolingVaultTab(): ReactElement {
 
       {/* Modal para Crear / Editar Herramienta */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="max-w-xl p-0 gap-0 bg-surface border-2 border-line shadow-hard-accent flex flex-col" showCloseButton={false}>
-          <DialogHeader className="flex flex-row items-center justify-between px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white shrink-0 space-y-0">
-            <DialogTitle className="font-display text-base font-black uppercase tracking-tight m-0">
+        <DialogContent className="max-w-xl p-0 gap-0 rounded-xl bg-surface border border-line shadow-hard-accent flex flex-col" showCloseButton={false}>
+          <DialogHeader className="flex flex-row items-center justify-between px-5 py-3 border-b border-line bg-surface-2 text-ink shrink-0 space-y-0">
+            <DialogTitle className="font-display text-base font-semibold tracking-tight m-0">
               {editingItem ? 'Editar Registro de Herramienta' : 'Nuevo Registro de Herramienta'}
             </DialogTitle>
             <Button
               variant="outline"
               size="icon"
               onClick={() => setIsModalOpen(false)}
-              className="h-7 w-7 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg"
+              aria-label="Cerrar formulario de herramienta"
+              className="min-h-11 min-w-11 rounded-lg border border-line bg-transparent text-ink hover:bg-accent hover:text-white hover:border-accent"
             >
               <X size={14} />
             </Button>
@@ -400,10 +404,11 @@ export function ToolingVaultTab(): ReactElement {
           <form onSubmit={handleSave} className="p-5 space-y-3 font-mono text-xs">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                <label htmlFor="tooling-code" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                   Código ISO / Nombre *
                 </label>
                 <Input
+                  id="tooling-code"
                   required
                   value={codigoISO}
                   onChange={(e) => setCodigoISO(e.target.value)}
@@ -412,10 +417,11 @@ export function ToolingVaultTab(): ReactElement {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                <label htmlFor="tooling-category" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                   Categoría
                 </label>
                 <select
+                  id="tooling-category"
                   value={categoria}
                   onChange={(e) => setCategoria(e.target.value as ToolingCategory)}
                   className="w-full h-8 px-2 border-2 border-line bg-surface-2 text-ink font-bold outline-none"
@@ -426,10 +432,11 @@ export function ToolingVaultTab(): ReactElement {
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              <label htmlFor="tooling-description" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                 Descripción Técnica
               </label>
               <Input
+                id="tooling-description"
                 value={descripcion}
                 onChange={(e) => setDescripcion(e.target.value)}
                 placeholder="ej. Inserto trígono negativo 6 filos para desbaste 4140"
@@ -439,8 +446,9 @@ export function ToolingVaultTab(): ReactElement {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Marca</label>
+                <label htmlFor="tooling-brand" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Marca</label>
                 <Input
+                  id="tooling-brand"
                   value={marca}
                   onChange={(e) => setMarca(e.target.value)}
                   placeholder="ej. Korloy / Haas"
@@ -448,8 +456,9 @@ export function ToolingVaultTab(): ReactElement {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Grado</label>
+                <label htmlFor="tooling-grade" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Grado</label>
                 <Input
+                  id="tooling-grade"
                   value={grado}
                   onChange={(e) => setGrado(e.target.value)}
                   placeholder="ej. NC3030 / HT-P25"
@@ -457,8 +466,9 @@ export function ToolingVaultTab(): ReactElement {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Rompevirutas</label>
+                <label htmlFor="tooling-chipbreaker" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Rompevirutas</label>
                 <Input
+                  id="tooling-chipbreaker"
                   value={rompevirutas}
                   onChange={(e) => setRompevirutas(e.target.value)}
                   placeholder="ej. PC / MA"
@@ -469,8 +479,9 @@ export function ToolingVaultTab(): ReactElement {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Proveedor</label>
+                <label htmlFor="tooling-provider" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Proveedor</label>
                 <Input
+                  id="tooling-provider"
                   value={proveedor}
                   onChange={(e) => setProveedor(e.target.value)}
                   placeholder="ej. Travers México"
@@ -478,8 +489,9 @@ export function ToolingVaultTab(): ReactElement {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Precio Unit.</label>
+                <label htmlFor="tooling-unit-price" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Precio Unit.</label>
                 <Input
+                  id="tooling-unit-price"
                   type="number"
                   step="0.01"
                   value={precioUnitario}
@@ -488,8 +500,9 @@ export function ToolingVaultTab(): ReactElement {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Máquina Asignada</label>
+                <label htmlFor="tooling-machine" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Máquina Asignada</label>
                 <Input
+                  id="tooling-machine"
                   value={maquinaAsignada}
                   onChange={(e) => setMaquinaAsignada(e.target.value)}
                   placeholder="ej. Haas ST-20"
@@ -499,8 +512,9 @@ export function ToolingVaultTab(): ReactElement {
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Link de Compra / Reorden</label>
+              <label htmlFor="tooling-link" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Link de Compra / Reorden</label>
               <Input
+                id="tooling-link"
                 type="url"
                 value={linkCompra}
                 onChange={(e) => setLinkCompra(e.target.value)}
@@ -510,10 +524,11 @@ export function ToolingVaultTab(): ReactElement {
             </div>
 
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              <label htmlFor="tooling-performance-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                 Notas de Rendimiento y Durabilidad
               </label>
               <textarea
+                id="tooling-performance-notes"
                 rows={2}
                 value={rendimientoNotas}
                 onChange={(e) => setRendimientoNotas(e.target.value)}

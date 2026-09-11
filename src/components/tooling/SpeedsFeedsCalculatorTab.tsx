@@ -323,10 +323,11 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
         <div className="mt-4 pt-3 border-t-2 border-line/40 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
             <div>
-              <label className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              <label htmlFor="sf-material" className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
                 Material de Pieza (Grupo ISO)
               </label>
               <select
+                id="sf-material"
                 value={selectedMaterialId}
                 onChange={(e) => handleMaterialChange(e.target.value)}
                 className="h-9 px-3 border-2 border-line bg-surface-2 text-ink text-xs font-mono font-bold outline-none focus:border-accent shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
@@ -340,10 +341,11 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
             </div>
 
             <div>
-              <label className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              <label htmlFor="sf-machine" className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
                 Máquina Haas de Taller
               </label>
               <select
+                id="sf-machine"
                 value={selectedHaasId}
                 onChange={(e) => setSelectedHaasId(e.target.value)}
                 className="h-9 px-3 border-2 border-line bg-surface-2 text-ink text-xs font-mono font-bold outline-none focus:border-accent shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
@@ -399,6 +401,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 {unitSystem === 'imperial' ? (
                   <>
                     <Input
+                      aria-label="Diámetro de la pieza en pulgadas"
                       type="number"
                       step="0.05"
                       min="0.1"
@@ -427,6 +430,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 ) : (
                   <>
                     <Input
+                      aria-label="Diámetro de la pieza en milímetros"
                       type="number"
                       step="0.5"
                       value={turningDiameterMm}
@@ -434,6 +438,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       className="h-9 border-2 border-line bg-surface-2 font-mono text-sm font-bold"
                     />
                     <input
+                      aria-label="Ajustar diámetro de la pieza en milímetros"
                       type="range"
                       min="3"
                       max="150"
@@ -459,6 +464,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 </div>
                 {unitSystem === 'imperial' ? (
                   <Input
+                    aria-label="Velocidad superficial en SFM"
                     type="number"
                     step="10"
                     value={turningSfm}
@@ -467,6 +473,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                   />
                 ) : (
                   <Input
+                    aria-label="Velocidad de corte en metros por minuto"
                     type="number"
                     step="5"
                     value={turningVc}
@@ -491,6 +498,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 {unitSystem === 'imperial' ? (
                   <>
                     <Input
+                      aria-label="Avance por revolución en pulgadas"
                       type="number"
                       step="0.0005"
                       value={turningFeedIpr}
@@ -524,6 +532,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 ) : (
                   <>
                     <Input
+                      aria-label="Avance por revolución en milímetros"
                       type="number"
                       step="0.01"
                       value={turningFeedMm}
@@ -560,12 +569,13 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
               {/* Profundidad de corte y Radio de punta */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">
+                  <label htmlFor="sf-turning-depth" className="block text-xs font-mono font-bold mb-1">
                     {unitSystem === 'imperial' ? 'Profundidad (DOC ap)' : 'Profundidad (ap)'}
                   </label>
                   {unitSystem === 'imperial' ? (
                     <>
                       <Input
+                        id="sf-turning-depth"
                         type="number"
                         step="0.005"
                         value={turningApInch}
@@ -579,6 +589,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                   ) : (
                     <>
                       <Input
+                        id="sf-turning-depth"
                         type="number"
                         step="0.1"
                         value={turningApMm}
@@ -591,9 +602,10 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Radio Punta (r)</label>
+                  <label htmlFor="sf-nose-radius" className="block text-xs font-mono font-bold mb-1">Radio Punta (r)</label>
                   {unitSystem === 'imperial' ? (
                     <select
+                      id="sf-nose-radius"
                       value={turningNoseRadiusInch}
                       onChange={(e) => setTurningNoseRadiusInch(Number(e.target.value))}
                       className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
@@ -605,6 +617,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                     </select>
                   ) : (
                     <select
+                      id="sf-nose-radius"
                       value={turningNoseRadiusMm}
                       onChange={(e) => setTurningNoseRadiusMm(Number(e.target.value))}
                       className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
@@ -629,6 +642,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                   </span>
                 </div>
                 <select
+                  aria-label="Diámetro de fresa"
                   value={millingToolDiaInch}
                   onChange={(e) => setMillingToolDiaInch(Number(e.target.value))}
                   className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
@@ -648,8 +662,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Número de Filos (Z)</label>
+                  <label htmlFor="sf-flutes" className="block text-xs font-mono font-bold mb-1">Número de Filos (Z)</label>
                   <select
+                    id="sf-flutes"
                     value={millingFlutes}
                     onChange={(e) => setMillingFlutes(Number(e.target.value))}
                     className="w-full h-9 border-2 border-line bg-surface-2 font-mono text-xs font-bold px-2"
@@ -662,8 +677,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">SFM (Vel. Superficie)</label>
+                  <label htmlFor="sf-milling-sfm" className="block text-xs font-mono font-bold mb-1">SFM (Vel. Superficie)</label>
                   <Input
+                    id="sf-milling-sfm"
                     type="number"
                     step="10"
                     value={millingSfm}
@@ -679,6 +695,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                   <span className="text-accent font-bold">{millingChipLoadInch}&quot; / diente</span>
                 </div>
                 <Input
+                  aria-label="Carga de viruta por diente"
                   type="number"
                   step="0.0005"
                   value={millingChipLoadInch}
@@ -689,8 +706,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Prof. Axial (ap / DOC)</label>
+                  <label htmlFor="sf-axial-depth" className="block text-xs font-mono font-bold mb-1">Prof. Axial (ap / DOC)</label>
                   <Input
+                    id="sf-axial-depth"
                     type="number"
                     step="0.025"
                     value={millingApInch}
@@ -702,8 +720,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                   </span>
                 </div>
                 <div>
-                  <label className="block text-xs font-mono font-bold mb-1">Paso Radial (ae / WOC)</label>
+                  <label htmlFor="sf-radial-step" className="block text-xs font-mono font-bold mb-1">Paso Radial (ae / WOC)</label>
                   <Input
+                    id="sf-radial-step"
                     type="number"
                     step="0.025"
                     value={millingAeInch}
@@ -733,6 +752,7 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       <span className="text-accent font-bold">{turningCutLengthInch}&quot;</span>
                     </div>
                     <Input
+                      aria-label="Longitud de corte en torno"
                       type="number"
                       step="0.25"
                       value={turningCutLengthInch}
@@ -743,8 +763,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] font-mono font-bold mb-1">D. Inicial</label>
+                      <label htmlFor="sf-turning-initial-diameter" className="block text-[11px] font-mono font-bold mb-1">D. Inicial</label>
                       <Input
+                        id="sf-turning-initial-diameter"
                         type="number"
                         step="0.125"
                         value={turningRawDiaInch}
@@ -753,8 +774,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-mono font-bold mb-1">D. Final</label>
+                      <label htmlFor="sf-turning-final-diameter" className="block text-[11px] font-mono font-bold mb-1">D. Final</label>
                       <Input
+                        id="sf-turning-final-diameter"
                         type="number"
                         step="0.125"
                         value={turningFinalDiaInch}
@@ -766,8 +788,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] font-mono font-bold mb-1">Tarifa ($/hr)</label>
+                      <label htmlFor="sf-turning-rate" className="block text-[11px] font-mono font-bold mb-1">Tarifa ($/hr)</label>
                       <Input
+                        id="sf-turning-rate"
                         type="number"
                         step="5"
                         value={turningHourlyRate}
@@ -776,8 +799,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-mono font-bold mb-1">Chuck (seg)</label>
+                      <label htmlFor="sf-chucking-time" className="block text-[11px] font-mono font-bold mb-1">Chuck (seg)</label>
                       <Input
+                        id="sf-chucking-time"
                         type="number"
                         step="5"
                         value={turningChuckingSec}
@@ -791,8 +815,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                 <>
                   <div className="grid grid-cols-3 gap-1.5">
                     <div>
-                      <label className="block text-[10px] font-mono font-bold mb-1">Largo (&quot;)</label>
+                      <label htmlFor="sf-pocket-length" className="block text-[10px] font-mono font-bold mb-1">Largo (&quot;)</label>
                       <Input
+                        id="sf-pocket-length"
                         type="number"
                         step="0.5"
                         value={millingPocketLengthInch}
@@ -801,8 +826,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-mono font-bold mb-1">Ancho (&quot;)</label>
+                      <label htmlFor="sf-pocket-width" className="block text-[10px] font-mono font-bold mb-1">Ancho (&quot;)</label>
                       <Input
+                        id="sf-pocket-width"
                         type="number"
                         step="0.5"
                         value={millingPocketWidthInch}
@@ -811,8 +837,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-mono font-bold mb-1">Prof (&quot;)</label>
+                      <label htmlFor="sf-pocket-depth" className="block text-[10px] font-mono font-bold mb-1">Prof (&quot;)</label>
                       <Input
+                        id="sf-pocket-depth"
                         type="number"
                         step="0.1"
                         value={millingPocketDepthInch}
@@ -824,8 +851,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] font-mono font-bold mb-1">Tarifa ($/hr)</label>
+                      <label htmlFor="sf-milling-rate" className="block text-[11px] font-mono font-bold mb-1">Tarifa ($/hr)</label>
                       <Input
+                        id="sf-milling-rate"
                         type="number"
                         step="5"
                         value={millingHourlyRate}
@@ -834,8 +862,9 @@ export function SpeedsFeedsCalculatorTab(): ReactElement {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-mono font-bold mb-1">Fijación (seg)</label>
+                      <label htmlFor="sf-fixture-time" className="block text-[11px] font-mono font-bold mb-1">Fijación (seg)</label>
                       <Input
+                        id="sf-fixture-time"
                         type="number"
                         step="5"
                         value={millingFixtureSec}

@@ -227,8 +227,9 @@ export function InvoiceRequestPanel({
               variant="outline"
               size="icon"
               onClick={onClose}
-              className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors"
+              className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
               title="Cerrar (ESC)"
+              aria-label="Cerrar solicitud de factura"
             >
               <X size={16} />
             </Button>
@@ -355,10 +356,11 @@ export function InvoiceRequestPanel({
                         {/* Remisión detail input */}
                         {sel.selected && sel.type === 'remision' && (
                           <div className="ml-7 mt-2">
-                            <label className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                            <label htmlFor={`remision-detail-${order.id}`} className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
                               Detalle de la remisión (piezas a entregar)
                             </label>
                             <Input
+                              id={`remision-detail-${order.id}`}
                               value={sel.remisionDetail}
                               onChange={(e) => updateSelection(order.id, { remisionDetail: e.target.value })}
                               placeholder="Ej: 4 sets de 4150-06"

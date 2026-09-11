@@ -47,3 +47,22 @@
 - `npm run build`: aprobado; misma advertencia conocida de chunks de Vite.
 - Navegador local en modo debug (sin datos reales de Firestore): modal de "Nuevo Material" verificado visualmente, bordes y botones consistentes con el resto de la app.
 - Sin commit, push ni despliegue.
+
+# Cierre de brechas funcionales y consistencia UI — 2026-09-11
+
+- El botón `Actualizar` de Biblioteca ahora refresca únicamente el catálogo. Ya no borra la caché de análisis de Gemini ni la última sesión recuperable almacenada en IndexedDB.
+- Una nueva auditoría conserva el reporte anterior mientras valida la lectura inicial de Odoo. El estado editable se sustituye solo después de obtener órdenes correctamente, evitando pérdida de trabajo por fallos transitorios.
+- La suscripción de `syncMeta/odoo` distingue `loading`, `ready`, `empty`, `unavailable` y `error`. Inicio, Reporte y NavRail dejan de presentar ceros o conexión positiva cuando el estado no está confirmado.
+- La Biblioteca embebida en Reporte mantiene buscador y acciones dentro de la columna de 420 px; sus botones se apilan en esa variante y conservan 44 px de alto.
+- Herramental usa el encabezado del workspace, iconos Lucide, pestañas `tablist`/`tab`/`tabpanel`, superficies suaves y controles táctiles de 44 px. Tool Crib, tarjetas Odoo, acceso y ErrorBoundary recibieron la misma adaptación visual.
+- Los formularios de acceso, Compras, compra rápida, Biblioteca, impresión, facturación y Herramental ahora asocian etiquetas con sus controles. Los botones de icono principales tienen nombres accesibles explícitos.
+- `scratch/` quedó fuera del typecheck de producción y el patrón radial del Reporte usa el token `--color-accent`.
+
+## Validación
+
+- `npm test`: 30 archivos, 327 pruebas aprobadas.
+- `npm run lint`: aprobado, sin errores TypeScript.
+- `npm run build`: aprobado. El primer intento paralelo encontró un bloqueo temporal `EBUSY` de Windows sobre un WASM de pdf.js; el build aislado terminó correctamente. Permanece la advertencia conocida de `react-vendor` mayor de 800 kB.
+- Navegador local en modo debug: Acceso, Inicio, Reporte y Herramental verificados en 1280 × 800 y 390 × 844. El overflow embebido quedó resuelto, los estados de Odoo muestran fallo/desconocido correctamente y las pestañas exponen semántica accesible.
+- Las lecturas remotas fallaron en el entorno debug, por lo que no se verificaron datos reales, Gemini, escritura Firestore, impresión física ni producción.
+- Sin commit, push ni despliegue.

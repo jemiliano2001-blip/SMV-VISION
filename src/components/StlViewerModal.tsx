@@ -849,7 +849,7 @@ export function StlViewerModal({
             <button
               type="button"
               onClick={() => setIsFullscreen((prev) => !prev)}
-              className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-white/10 transition-colors flex items-center justify-center hidden sm:flex"
+              className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-white/10 transition-colors items-center justify-center hidden sm:flex"
               title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
               aria-label="Pantalla completa"
             >
@@ -858,7 +858,7 @@ export function StlViewerModal({
             <button
               type="button"
               onClick={onClose}
-              className="h-8 w-8 rounded-none border-2 border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent hover:text-bg transition-colors flex items-center justify-center"
+              className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors flex items-center justify-center"
               title="Cerrar (ESC)"
               aria-label="Cerrar"
             >

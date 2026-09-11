@@ -92,7 +92,6 @@ import {
 } from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
 import { log } from '../lib/log';
-import { clearAllAnalysisCache } from '../lib/documentAnalysis/cache';
 
 export interface ToolcribAttachment {
   drawingId: string;
@@ -752,7 +751,7 @@ export function ToolcribLibraryPanel({
   }, [loadAliases, onCatalogChanged]);
 
   const toolbar = (
-    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+    <div className={cn('flex items-start gap-3', isPage ? 'flex-col sm:flex-row sm:items-center' : 'flex-col')}>
       <div className="relative flex-1 w-full">
         <Search size={14} className="absolute left-3 top-2.5 text-ink-dim" />
         <Input
@@ -773,7 +772,7 @@ export function ToolcribLibraryPanel({
           }}
           placeholder="Buscar parte, descripción, archivo o revisión…   ( / )"
           aria-label="Buscar en el catálogo Tool Crib"
-          className="pl-9 pr-24 w-full border-2 border-line bg-surface-2 text-ink h-9 text-xs font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
+          className="pl-9 pr-24 w-full border border-line bg-surface-2 text-ink min-h-11 text-xs font-mono focus-visible:ring-0 focus-visible:border-accent rounded-lg shadow-none"
         />
         {hasQuery && (
           <div className="absolute right-2 top-1.5 flex items-center gap-1.5">
@@ -795,15 +794,13 @@ export function ToolcribLibraryPanel({
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2 w-full sm:w-auto">
+      <div className={cn('flex w-full flex-wrap items-center gap-2', isPage && 'sm:w-auto sm:flex-nowrap')}>
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
-            void clearAllAnalysisCache().then(() => loadLibrary());
-          }}
+          onClick={() => void loadLibrary()}
           disabled={status === 'loading'}
-          className="border-2 border-line text-ink font-black uppercase text-[10px] tracking-widest hover:bg-surface-2 hover:text-ink transition-colors rounded-none h-9 px-3 w-full sm:w-auto"
+          className={cn('border border-line text-ink font-bold uppercase text-[10px] tracking-widest hover:bg-surface-2 hover:text-ink transition-colors rounded-lg min-h-11 px-3 w-full', isPage && 'sm:w-auto')}
           title="Refrescar biblioteca"
         >
           {status === 'loading' ? (
@@ -816,7 +813,7 @@ export function ToolcribLibraryPanel({
         <Button
           size="sm"
           onClick={() => setIsUploadModalOpen(true)}
-          className="bg-accent text-bg px-4 h-9 text-[10px] font-black uppercase tracking-widest hover:bg-accent/80 transition-colors shadow-hard active:translate-x-0.5 active:translate-y-0.5 rounded-none flex items-center gap-1.5 w-full sm:w-auto"
+          className={cn('bg-accent text-white px-4 min-h-11 text-[10px] font-bold uppercase tracking-widest hover:bg-accent/90 transition-colors shadow-hard-accent rounded-lg flex items-center gap-1.5 w-full', isPage && 'sm:w-auto')}
         >
           <Plus size={14} />
           Subir Plano
@@ -1121,13 +1118,13 @@ export function ToolcribLibraryPanel({
   return (
     <div
       className={cn(
-        'border-2 border-line bg-surface text-ink rounded-none shadow-hard',
+        'catalog-workspace border border-line bg-surface text-ink rounded-xl shadow-sm',
         isPage && 'h-full min-h-0 flex flex-col overflow-hidden',
       )}
     >
       {isPage ? (
-        <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b-2 border-line bg-[#0D2B4D] text-white">
-          <span className="flex items-center gap-2.5 font-display font-black text-lg uppercase tracking-tight text-white">
+        <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-line bg-surface-2 text-ink">
+          <span className="flex items-center gap-2.5 font-display font-semibold text-lg tracking-tight text-ink">
             <FolderOpen size={18} className="text-accent" />
             Biblioteca Tool Crib
           </span>
@@ -1539,8 +1536,9 @@ const PartGroupRow = memo(function PartGroupRow({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="h-7 w-7 rounded-none border-2 border-line bg-surface text-ink hover:bg-surface-2 hover:border-accent hover:text-accent transition-colors inline-flex items-center justify-center"
+              className="min-h-11 min-w-11 rounded-lg border border-line bg-surface text-ink hover:bg-surface-2 hover:border-accent hover:text-accent transition-colors inline-flex items-center justify-center"
               title="Más acciones"
+              aria-label="Más acciones del plano"
             >
               <MoreHorizontal size={12} />
             </DropdownMenuTrigger>

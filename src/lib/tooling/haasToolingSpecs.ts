@@ -1,3 +1,7 @@
+import { SRC_HAAS_TOOLING_CATALOG, SRC_UNVERIFIED, HAAS_TOOLING_SPECS_SOURCE } from './sources';
+
+export { HAAS_TOOLING_SPECS_SOURCE };
+
 export interface HaasToolHolderSpec {
   category: 'fresado_cat40' | 'torno_st_exterior' | 'torno_st_interior' | 'boquilla_er' | 'refaccion_torx';
   name: string;
@@ -7,6 +11,10 @@ export interface HaasToolHolderSpec {
   toolCapacity: string;
   pullStudOrClamp: string;
   notes: string;
+  /** Fuente del dato: catálogo oficial Haas Tooling cuando hay P/N, o `SRC_UNVERIFIED` para holders ISO genéricos. */
+  source: string;
+  /** true solo cuando `haasPartNumber` es un P/N real confirmado contra haastooling.com (CAT40). */
+  partNumberVerified: boolean;
 }
 
 export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
@@ -20,6 +28,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Boquillas ER32 (Diámetros de 2 mm a 20 mm / 3/32" a 3/4")',
     pullStudOrClamp: 'Tirante Haas 45° Rosca 5/8"-11 UNC (P/N 08-0125)',
     notes: 'Balanceado a 15,000 RPM G2.5. Runout < 0.0002" (5 µm). Tuerca ER32 par de apriete: 100 ft-lb (135 Nm).',
+    source: SRC_HAAS_TOOLING_CATALOG,
+    partNumberVerified: true,
   },
   {
     category: 'fresado_cat40',
@@ -30,6 +40,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Boquillas ER20 (Diámetros de 1 mm a 13 mm / 1/16" a 1/2")',
     pullStudOrClamp: 'Tirante Haas 45° Rosca 5/8"-11 UNC',
     notes: 'Ideal para brocas pequeñas y fresas de 1/8" a 3/8" con mínima interferencia.',
+    source: SRC_HAAS_TOOLING_CATALOG,
+    partNumberVerified: true,
   },
   {
     category: 'fresado_cat40',
@@ -40,6 +52,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Endmills de zanco 1/2" (12.7 mm)',
     pullStudOrClamp: 'Tirante Haas 45° Rosca 5/8"-11 UNC',
     notes: 'Cero deslizamiento axial bajo altas cargas de desbaste en acero 4140. Tornillo opresor 1/4"-28.',
+    source: SRC_HAAS_TOOLING_CATALOG,
+    partNumberVerified: true,
   },
   {
     category: 'fresado_cat40',
@@ -50,6 +64,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Cortadores con barreno central de 3/4" (19.05 mm)',
     pullStudOrClamp: 'Tirante Haas 45° Rosca 5/8"-11 UNC',
     notes: 'Incluye cuña de arrastre y tornillo central M10/M12. Para cabezales SEKT 45° o BAP400R.',
+    source: SRC_HAAS_TOOLING_CATALOG,
+    partNumberVerified: true,
   },
   {
     category: 'fresado_cat40',
@@ -60,6 +76,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Compatible con todos los conos CAT40 en máquinas Haas VF, Mini Mill y EC',
     pullStudOrClamp: 'Diámetro de cabeza: 0.590" (15 mm), Cuello: 0.392" (9.95 mm)',
     notes: 'Torque de apriete requerido: 70 ft-lbs (95 Nm). ¡Revisar periódicamente por micro-grietas!',
+    source: SRC_HAAS_TOOLING_CATALOG,
+    partNumberVerified: true,
   },
 
   // ── Torno Haas ST ──
@@ -71,6 +89,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos WNMG 0804xx (6 filos de corte económicos)',
     pullStudOrClamp: 'Brida superior / Clamp tipo M con tornillo M5x16',
     notes: 'Ángulo de ataque 95°. Estándar de batalla para desbaste y acabado en Haas ST-20/ST-25/ST-30.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
   {
     category: 'torno_st_exterior',
@@ -80,6 +100,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos WNMG 0804xx / WNMG 432',
     pullStudOrClamp: 'Clamp tipo M con tornillo M5x16',
     notes: 'Diseñado específicamente para la torreta BOT de tornos compactos Haas ST-10.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
   {
     category: 'torno_st_exterior',
@@ -89,6 +111,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos CNMG 1204xx (4 filos de máxima robustez)',
     pullStudOrClamp: 'Brida CL-06 + Calza de carburo SC-1204',
     notes: 'Máxima resistencia en desbaste pesado y corte interrumpido.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
   {
     category: 'torno_st_interior',
@@ -98,6 +122,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos positivos CCMT 09T304 / CCMT 32.51',
     pullStudOrClamp: 'Tornillo Torx cónico M3.5 x 8',
     notes: 'Diámetro mínimo de barreno: 32 mm. Requiere buje partido de 1" a 1" en torreta Haas.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
   {
     category: 'torno_st_interior',
@@ -107,6 +133,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos DCMT 11T304 / DCMT 32.51',
     pullStudOrClamp: 'Tornillo Torx M3.5',
     notes: 'Ideal para interiores estrechos y perfilado de gargantas y chaflanes interiores.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
 
   // ── Refacciones Torx ──
@@ -118,6 +146,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos CCMT 09T3 / DCMT 11T3 / APKT 1003',
     pullStudOrClamp: 'Cabeza Torx T15',
     notes: 'Usar pasta anti-aferrante (anti-seize) para evitar que el tornillo se pegue con el calor.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
   {
     category: 'refaccion_torx',
@@ -127,6 +157,8 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Insertos CCMT 060204 / DCMT 070204',
     pullStudOrClamp: 'Cabeza Torx T8',
     notes: '¡No apretar en exceso! Par recomendado: 0.9 Nm para evitar barrer la cabeza.',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   },
   {
     category: 'refaccion_torx',
@@ -136,5 +168,7 @@ export const HAAS_TOOLING_SPECS: HaasToolHolderSpec[] = [
     toolCapacity: 'Portas de zanco 20x20 y 25x25 mm',
     pullStudOrClamp: 'Llave hexagonal / Torx T20',
     notes: 'Sujeta simultáneamente el agujero y la cara superior del inserto (sistema M).',
+    source: SRC_UNVERIFIED,
+    partNumberVerified: false,
   }
 ];

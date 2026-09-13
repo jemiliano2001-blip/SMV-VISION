@@ -13,9 +13,12 @@ import {
 import { toast } from 'sonner';
 import { decodeThreadInsertCode } from '../../lib/tooling/threadInsertDecoder';
 import { calculateThreadDepths, generateHaasG76Block, pitchFromTpi } from '../../lib/tooling/threadingCalculator';
-import { METRIC_TAP_DRILLS, NPT_TAP_DRILLS, UNC_TAP_DRILLS, UNF_TAP_DRILLS } from '../../lib/tooling/tapDrillChart';
+import { METRIC_TAP_DRILLS, NPT_TAP_DRILLS, TAP_DRILL_CHART_SOURCE, UNC_TAP_DRILLS, UNF_TAP_DRILLS } from '../../lib/tooling/tapDrillChart';
 import { Input } from '../ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
+import { ThreadProfileSvg } from './visuals/ThreadProfileSvg';
+import { DataSourceChip } from './DataSourceChip';
+import { parseInputNumber } from './calculator/formatters';
 
 const INSERT_PRESETS = [
   '3ER 14UN',
@@ -37,6 +40,7 @@ export function ThreadingAdvisorTab(): ReactElement {
   const [threadStandard, setThreadStandard] = useState<ThreadStandard>('unc_unf');
   const [g76Format, setG76Format] = useState<G76Format>('haas_single');
   const [copiedCode, setCopiedCode] = useState(false);
+  const [highlightedPass, setHighlightedPass] = useState<number | undefined>(undefined);
 
   // ── Decodificador de insertos ──
   const [insertCode, setInsertCode] = useState('3ER 14UN');
@@ -195,6 +199,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                       Taller Principal
                     </span>
                   </div>
+                  <DataSourceChip source={TAP_DRILL_CHART_SOURCE} />
                   <div className="max-h-96 overflow-y-auto overflow-x-auto">
                     <Table>
                       <TableHeader>
@@ -230,6 +235,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                       Automotriz / Precisión
                     </span>
                   </div>
+                  <DataSourceChip source={TAP_DRILL_CHART_SOURCE} />
                   <div className="max-h-96 overflow-y-auto overflow-x-auto">
                     <Table>
                       <TableHeader>
@@ -266,6 +272,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                     Sellado Hermético
                   </span>
                 </div>
+                <DataSourceChip source={TAP_DRILL_CHART_SOURCE} />
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
@@ -301,6 +308,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                 <span>Tabla Métrica ISO (Paso Estándar Coarse)</span>
                 <span className="font-mono text-[9px] text-ink-dim">Broca Corte & Formado (Roll Tap)</span>
               </h4>
+              <DataSourceChip source={TAP_DRILL_CHART_SOURCE} />
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -381,7 +389,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                     type="number"
                     step="0.0625"
                     value={majorDiameterInch}
-                    onChange={(e) => setMajorDiameterInch(Number(e.target.value))}
+                    onChange={(e) => setMajorDiameterInch(parseInputNumber(e.target.value, majorDiameterInch))}
                     className="h-9 font-mono font-bold border-2 border-line bg-surface-2"
                   />
                   <div className="flex flex-wrap gap-1 mt-1.5">
@@ -403,13 +411,13 @@ export function ThreadingAdvisorTab(): ReactElement {
                 <div>
                   <div className="flex justify-between text-xs font-mono mb-1">
                     <span className="font-bold">Hilos por Pulgada (TPI)</span>
-                    <span className="text-accent font-black">{tpi} TPI (Avance F: {(1 / tpi).toFixed(4)}&quot;)</span>
+                    <span className="text-accent font-black">{tpi} TPI (Avance F: {(1 / Math.max(tpi, 0.001)).toFixed(4)}&quot;)</span>
                   </div>
                   <Input
                     type="number"
                     step="1"
                     value={tpi}
-                    onChange={(e) => setTpi(Number(e.target.value))}
+                    onChange={(e) => setTpi(parseInputNumber(e.target.value, tpi))}
                     className="h-9 font-mono font-bold border-2 border-line bg-surface-2"
                   />
                   <div className="flex flex-wrap gap-1 mt-1.5">
@@ -438,7 +446,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                       type="number"
                       step="0.05"
                       value={startZInch}
-                      onChange={(e) => setStartZInch(Number(e.target.value))}
+                      onChange={(e) => setStartZInch(parseInputNumber(e.target.value, startZInch))}
                       className="h-9 font-mono font-bold border-2 border-line bg-surface-2"
                     />
                   </div>
@@ -451,7 +459,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                       type="number"
                       step="0.05"
                       value={endZInch}
-                      onChange={(e) => setEndZInch(Number(e.target.value))}
+                      onChange={(e) => setEndZInch(parseInputNumber(e.target.value, endZInch))}
                       className="h-9 font-mono font-bold border-2 border-line bg-surface-2"
                     />
                   </div>
@@ -468,7 +476,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                     type="number"
                     step="0.5"
                     value={majorDiameterMm}
-                    onChange={(e) => setMajorDiameterMm(Number(e.target.value))}
+                    onChange={(e) => setMajorDiameterMm(parseInputNumber(e.target.value, majorDiameterMm))}
                     className="h-9 font-mono font-bold border-2 border-line bg-surface-2"
                   />
                 </div>
@@ -482,7 +490,7 @@ export function ThreadingAdvisorTab(): ReactElement {
                     type="number"
                     step="0.25"
                     value={pitchMmCustom}
-                    onChange={(e) => setPitchMmCustom(Number(e.target.value))}
+                    onChange={(e) => setPitchMmCustom(parseInputNumber(e.target.value, pitchMmCustom))}
                     className="h-9 font-mono font-bold border-2 border-line bg-surface-2"
                   />
                 </div>
@@ -574,6 +582,23 @@ export function ThreadingAdvisorTab(): ReactElement {
               </pre>
             </div>
 
+            {/* Perfil de Rosca en V con Pasadas de Infeed */}
+            <div className="border-2 border-line bg-surface p-5 shadow-hard space-y-3">
+              <h4 className="font-display font-black text-xs uppercase tracking-wider text-ink border-b-2 border-line pb-2 flex items-center gap-2">
+                <Compass size={14} className="text-accent" />
+                Perfil de Rosca en V ({depthResult.tpi ? `${depthResult.tpi} TPI aprox.` : `${effectivePitchMm.toFixed(2)}mm paso`})
+              </h4>
+              <ThreadProfileSvg
+                isExternal={isExternal}
+                majorDiameterMm={effectiveMajorMm}
+                pitchMm={effectivePitchMm}
+                threadDepthMm={isExternal ? depthResult.depthExternalMm : depthResult.depthInternalMm}
+                infeedScheduleMm={depthResult.infeedScheduleMm}
+                unitSystem={threadStandard === 'metric' ? 'metric' : 'imperial'}
+                highlightedPass={highlightedPass}
+              />
+            </div>
+
             {/* Cronograma de Pasadas con Profundidad en Pulgadas */}
             <div className="border-2 border-line bg-surface p-5 shadow-hard space-y-3">
               <h4 className="font-display font-black text-xs uppercase tracking-wider text-ink border-b-2 border-line pb-2 flex items-center gap-2">
@@ -592,11 +617,19 @@ export function ThreadingAdvisorTab(): ReactElement {
                   </TableHeader>
                   <TableBody>
                     {depthResult.infeedScheduleInch.map((dInch, i) => (
-                      <TableRow key={i}>
+                      <TableRow
+                        key={i}
+                        tabIndex={0}
+                        onMouseEnter={() => setHighlightedPass(i + 1)}
+                        onMouseLeave={() => setHighlightedPass(undefined)}
+                        onFocus={() => setHighlightedPass(i + 1)}
+                        onBlur={() => setHighlightedPass(undefined)}
+                        className={`cursor-default transition-colors ${highlightedPass === i + 1 ? 'bg-warn/10' : ''}`}
+                      >
                         <TableCell className="font-mono font-bold">#{i + 1}</TableCell>
                         <TableCell className="font-mono font-black text-accent">{dInch.toFixed(4)}&quot;</TableCell>
-                        <TableCell className="font-mono text-xs text-ink-dim">{depthResult.infeedScheduleMm[i].toFixed(3)} mm</TableCell>
-                        <TableCell className="font-mono text-xs">{depthResult.infeedSchedulePercent[i]}%</TableCell>
+                        <TableCell className="font-mono text-xs text-ink-dim">{(depthResult.infeedScheduleMm[i] ?? 0).toFixed(3)} mm</TableCell>
+                        <TableCell className="font-mono text-xs">{depthResult.infeedSchedulePercent[i] ?? 0}%</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

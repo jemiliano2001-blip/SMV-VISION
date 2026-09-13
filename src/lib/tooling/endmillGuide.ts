@@ -1,4 +1,7 @@
 import type { IsoMaterialGroup, EndmillRecommendation, EndmillTipGeometry } from './types';
+import { SRC_ENDMILL_GUIDE, ENDMILL_GUIDE_SOURCE } from './sources';
+
+export { ENDMILL_GUIDE_SOURCE };
 
 export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommendation> = {
   P: {
@@ -11,9 +14,10 @@ export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommenda
     reasons: [
       '4 filos proporcionan un balance óptimo entre resistencia del núcleo y espacio para viruta en acero 1018/4140.',
       'El recubrimiento AlTiN soporta temperaturas de corte de hasta 900°C formando una capa protectora de óxido de aluminio.',
-      'Un radio de esquina de 0.030" (0.8mm) previene el despostillamiento de la punta y triplica la vida útil vs esquina viva.',
+      'Un radio de esquina de 0.030" (0.8mm) previene el despostillamiento de la punta y puede mejorar la vida útil vs esquina viva.',
     ],
     topBrands: ['Haas Tooling 4F', 'YG-1 4G Mills / V7 Plus', 'Lakeshore Carbide', 'Accupro'],
+    source: SRC_ENDMILL_GUIDE,
   },
   M: {
     materialGroup: 'M',
@@ -28,6 +32,7 @@ export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommenda
       'Es indispensable mantener avance continuo para evitar frotamiento y endurecimiento por deformación.',
     ],
     topBrands: ['Helical Solutions (5 Flute)', 'Garr Tool Serie V-5', 'OSG EXOCARB', 'Harvey Tool'],
+    source: SRC_ENDMILL_GUIDE,
   },
   K: {
     materialGroup: 'K',
@@ -41,6 +46,7 @@ export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommenda
       'Se recomienda corte en seco con soplado de aire para evitar formación de pasta abrasiva con el refrigerante.',
     ],
     topBrands: ['YG-1 4G Mills', 'Haas Tooling', 'Kennametal KOR 5', 'Shars'],
+    source: SRC_ENDMILL_GUIDE,
   },
   N: {
     materialGroup: 'N',
@@ -55,6 +61,7 @@ export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommenda
       'El recubrimiento ZrN o DLC evita que el aluminio se caliente y se suelde al cortador (Built-Up Edge).',
     ],
     topBrands: ['YG-1 Alu-Power', 'Haas Tooling 3F Aluminum', 'Lakeshore Carbide 3F', 'Harvey Tool'],
+    source: SRC_ENDMILL_GUIDE,
   },
   S: {
     materialGroup: 'S',
@@ -68,6 +75,7 @@ export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommenda
       'Es crítico el uso de refrigerante a alta presión dirigido exactamente a la zona de corte para evacuar el calor.',
     ],
     topBrands: ['Helical Solutions Titanium', 'Harvey Tool', 'Guhring RF 100', 'Kennametal HARVI I'],
+    source: SRC_ENDMILL_GUIDE,
   },
   H: {
     materialGroup: 'H',
@@ -81,6 +89,7 @@ export const ENDMILL_RECOMMENDATIONS: Record<IsoMaterialGroup, EndmillRecommenda
       'El radio de esquina es obligatorio para evitar concentración de esfuerzos.',
     ],
     topBrands: ['Harvey Tool Hardened Steels', 'YG-1 X5070', 'OSG WXL', 'Mitsubishi VFH'],
+    source: SRC_ENDMILL_GUIDE,
   },
 };
 
@@ -93,7 +102,7 @@ export const TIP_GEOMETRY_GUIDE: Record<EndmillTipGeometry, { name: string; desc
   corner_radius: {
     name: 'Radio de Esquina (Bull Nose / Corner Radius)',
     description: 'Bordes reforzados con radio de 0.015", 0.030", 0.060" o métrico R0.5/R1.0mm.',
-    bestFor: 'Desbaste de aceros e inoxidables. Triplica la vida útil del cortador.',
+    bestFor: 'Desbaste de aceros e inoxidables. Puede mejorar la vida útil del cortador.',
   },
   ball_nose: {
     name: 'Cabeza Esférica / Bola (Ball Nose)',

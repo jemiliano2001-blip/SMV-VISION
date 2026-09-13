@@ -1,5 +1,14 @@
 import type { MaterialSpec } from './types';
 
+/**
+ * Referencias de los rangos de corte. Los valores son puntos de arranque
+ * conservadores para carburo recubierto (ISO P/M/K/N/S/H) tomados de las guías
+ * técnicas públicas de Sandvik Coromant y del Machinery's Handbook; el rango
+ * final siempre lo fija el catálogo del inserto/fresa que se tenga en mano.
+ */
+const SRC_SANDVIK = "Sandvik Coromant Technical Guide (Torneado/Fresado, carburo recubierto) · Machinery's Handbook 31 ed.";
+const SRC_POLYMER = 'Guías de maquinado de Ensinger / DuPont para Delrin® · Kc estimado para termoplásticos rígidos';
+
 export const MATERIAL_DATABASE: MaterialSpec[] = [
   {
     id: 'steel_4140',
@@ -14,6 +23,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.25, acabado: 0.08 },
     hardnessTypical: '28-34 HRC (Pre-tratado)',
     chipCharacteristics: 'Viruta en espiral continua o fragmentada con rompevirutas adecuado. Requiere filo tenaz.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'steel_1018',
@@ -28,6 +38,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.30, acabado: 0.10 },
     hardnessTypical: '120-160 HB',
     chipCharacteristics: 'Tiende a formar viruta larga y gomosa. Requiere rompevirutas agresivo para evitar enredos.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'steel_1045',
@@ -42,6 +53,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.28, acabado: 0.09 },
     hardnessTypical: '180-220 HB',
     chipCharacteristics: 'Excelente maquinabilidad, viruta controlable con insertos estándar P25.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'tool_steel_d2',
@@ -56,6 +68,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.18, acabado: 0.06 },
     hardnessTypical: '210-250 HB (Recocido)',
     chipCharacteristics: 'Muy abrasivo por carburos de cromo. Requiere insertos recubiertos AlTiN o PVD tenaz.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'tool_steel_d2_hardened',
@@ -70,6 +83,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.10, acabado: 0.04 },
     hardnessTypical: '58-62 HRC',
     chipCharacteristics: 'Micro-astillado en caliente. Usar insertos CBN (Borazón) o carburo micrograno nACo.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'stainless_304',
@@ -84,6 +98,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.20, acabado: 0.06 },
     hardnessTypical: '160-200 HB',
     chipCharacteristics: 'Endurecimiento por deformación (Work Hardening). Mantener avance continuo; NUNCA frotar.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'stainless_316',
@@ -98,6 +113,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.18, acabado: 0.06 },
     hardnessTypical: '170-210 HB',
     chipCharacteristics: 'Más gomoso y abrasivo que 304. Usar refrigerante a alta presión e insertos M20 PVD.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'stainless_416',
@@ -112,6 +128,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.25, acabado: 0.08 },
     hardnessTypical: '180-240 HB',
     chipCharacteristics: 'Viruta corta y quebradiza, excelente acabado superficial.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'aluminum_6061',
@@ -126,6 +143,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.35, acabado: 0.10 },
     hardnessTypical: '95 HB',
     chipCharacteristics: 'Corte ultra rápido. Usar insertos pulidos (filo espejo) sin recubrimiento o DLC para evitar adhesión.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'aluminum_7075',
@@ -140,6 +158,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.30, acabado: 0.09 },
     hardnessTypical: '150 HB',
     chipCharacteristics: 'Viruta más fragmentada que 6061. Excelente acabado superficial.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'brass_360',
@@ -154,6 +173,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.30, acabado: 0.08 },
     hardnessTypical: '60-80 HRB',
     chipCharacteristics: 'Viruta en polvo o fragmentos minúsculos. Excelente para producción masiva.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'cast_iron_gray',
@@ -168,6 +188,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.30, acabado: 0.10 },
     hardnessTypical: '180-240 HB',
     chipCharacteristics: 'Polvo y viruta desmenuzada abrasiva. Corte preferiblemente en seco o aire para evitar pasta.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'titanium_6al4v',
@@ -182,6 +203,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.15, acabado: 0.05 },
     hardnessTypical: '32-38 HRC',
     chipCharacteristics: 'Concentra todo el calor en la punta del filo. Usar refrigerante abundante a alta presión.',
+    source: SRC_SANDVIK,
   },
   {
     id: 'delrin_acetal',
@@ -196,6 +218,7 @@ export const MATERIAL_DATABASE: MaterialSpec[] = [
     recommendedFeedTurningMm: { desbaste: 0.35, acabado: 0.12 },
     hardnessTypical: '85 Rockwell M',
     chipCharacteristics: 'Viruta en cinta continua. Requiere filos ultra afilados sin recubrimiento para evitar rebaba.',
+    source: SRC_POLYMER,
   }
 ];
 

@@ -66,3 +66,19 @@
 - Navegador local en modo debug: Acceso, Inicio, Reporte y Herramental verificados en 1280 Ã— 800 y 390 Ã— 844. El overflow embebido quedÃ³ resuelto, los estados de Odoo muestran fallo/desconocido correctamente y las pestaÃ±as exponen semÃ¡ntica accesible.
 - Las lecturas remotas fallaron en el entorno debug, por lo que no se verificaron datos reales, Gemini, escritura Firestore, impresiÃ³n fÃ­sica ni producciÃ³n.
 - Sin commit, push ni despliegue.
+
+# Auditoría post-fase Herramental CNC (Fases 1–3) — 2026-09-11
+
+- Null-safety: parseInputNumber en inputs de ThreadingAdvisorTab y precio de ToolingVaultTab (antes Number('') ? NaN / Infinity en TPI).
+- 	oolingValidators.num ahora usa Number.isFinite (rechaza Infinity/NaN).
+- Búsqueda defensiva con `?? ''` en Blueprint Advisor y Bóveda; arrays opcionales con `?? []` en holders/paquete de herramientas.
+- Cronograma G76: acceso seguro a infeedScheduleMm[i] / percent; TPI con piso anti división por cero.
+- Comentario incorrecto en ormatters.ts (estado canónico) corregido.
+- UI: tablas de machuelos/bóveda ya tenían overflow-x-auto; vault th/td = 7 columnas alineadas; sin print:hidden desalineado en tooling.
+
+## Validación
+
+- `npm test`: 34 archivos, 358 pruebas aprobadas.
+- `npm run lint`: aprobado (tsc --noEmit).
+- `npm run build`: aprobado; advertencia conocida de chunks >800 kB.
+- Sin commit, push ni despliegue.

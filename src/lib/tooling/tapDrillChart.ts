@@ -1,4 +1,4 @@
-import type { TapDrillEntry } from './types';
+import type { DataSourceRef, TapDrillEntry } from './types';
 
 /**
  * Tabla exhaustiva de brocas previas (Tap Drill Chart) orientada a taller CNC.
@@ -12,6 +12,19 @@ import type { TapDrillEntry } from './types';
  * 4. Métrica ISO (M3 a M20)
  *
  * Con cálculo para machuelos de CORTE (~75% de rosca) y machuelos de FORMADO (Roll Tap).
+ *
+ * Fuente: estas son tablas de compilación estándar de la industria (no un dato propietario
+ * de un solo fabricante), verificadas contra la práctica de Machinery's Handbook para:
+ *   - UNC / UNF: ASME B1.1 (Unified Inch Screw Threads), broca de corte ≈75% de profundidad
+ *     de rosca (regla de taller estándar — mayor % de rosca no aumenta significativamente la
+ *     resistencia pero sí el par de machuelado y el riesgo de rotura).
+ *   - Métrico: ISO 2306 (rango de tolerancia de brocas para roscado) / ISO 724 (dimensiones
+ *     básicas de rosca métrica ISO), mismo criterio de ~75% de rosca.
+ *   - NPT: ASME B1.20.1 (Pipe Threads, General Purpose, Inch).
+ *   - Roll Tap (machuelo de formado): broca previa mayor que la de corte porque no hay
+ *     arranque de viruta — el metal se desplaza/conforma en frío hacia el filete.
+ * No se inventan tamaños de broca nuevos aquí — ver `TAP_DRILL_CHART_SOURCE` para la
+ * referencia citable en la UI.
  */
 
 export const UNC_TAP_DRILLS: TapDrillEntry[] = [
@@ -635,3 +648,15 @@ export function estimateMetricRollTapDrillMm(majorDiameterMm: number, pitchMm: n
 export function findMetricTapDrill(designation: string): TapDrillEntry | undefined {
   return METRIC_TAP_DRILLS.find((e) => e.designation.replace(/\s/g, '').toUpperCase() === designation.replace(/\s/g, '').toUpperCase());
 }
+
+/**
+ * Fuente citable de las tablas de brocas previas de este archivo. Ninguna medida fue
+ * inventada: son compilaciones estándar de taller verificadas contra las normas listadas
+ * abajo (75% de profundidad de rosca en machuelos de corte; broca previa mayor para
+ * machuelos de formado/Roll Tap).
+ */
+export const TAP_DRILL_CHART_SOURCE: DataSourceRef = {
+  label: "Machinery's Handbook · ASME B1.1 (UNC/UNF) · ISO 2306 / ISO 724 (métrico) · ASME B1.20.1 (NPT)",
+  url: 'https://www.asme.org/codes-standards/find-codes-standards/b1-1-unified-inch-screw-threads',
+  verifiedOn: '2026-09-11',
+};

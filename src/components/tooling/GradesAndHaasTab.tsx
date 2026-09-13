@@ -5,11 +5,24 @@ import {
   ExternalLink,
   Zap,
 } from 'lucide-react';
-import { searchGrades } from '../../lib/tooling/carbideGrades';
-import { HAAS_TOOLING_SPECS } from '../../lib/tooling/haasToolingSpecs';
+import { searchGrades, CARBIDE_GRADES_SOURCE } from '../../lib/tooling/carbideGrades';
+import { HAAS_TOOLING_SPECS, HAAS_TOOLING_SPECS_SOURCE } from '../../lib/tooling/haasToolingSpecs';
 import { getSupplierSearchUrl } from '../../lib/tooling/toolingSuppliers';
 import { Input } from '../ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
+import { DataSourceChip } from './DataSourceChip';
+
+const GRADE_BRANDS: { key: 'sandvik' | 'kennametal' | 'iscar' | 'korloy' | 'haasTooling' | 'mitsubishi' | 'walter' | 'kyocera' | 'seco' | 'yg1'; label: string }[] = [
+  { key: 'sandvik', label: 'Sandvik' },
+  { key: 'korloy', label: 'Korloy' },
+  { key: 'kennametal', label: 'Kennametal' },
+  { key: 'iscar', label: 'Iscar' },
+  { key: 'haasTooling', label: 'Haas Tooling' },
+  { key: 'mitsubishi', label: 'Mitsubishi' },
+  { key: 'walter', label: 'Walter' },
+  { key: 'kyocera', label: 'Kyocera' },
+  { key: 'seco', label: 'Seco' },
+  { key: 'yg1', label: 'YG-1' },
+];
 
 export function GradesAndHaasTab(): ReactElement {
   const [gradeSearch, setGradeSearch] = useState('');
@@ -70,87 +83,52 @@ export function GradesAndHaasTab(): ReactElement {
             </div>
           </div>
 
-          <div className="border-2 border-line bg-surface shadow-hard overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-surface-2 border-b-2 border-line">
-                <TableRow className="border-0">
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Grupo / Aplicación
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Sandvik
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Korloy
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Kennametal
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Iscar
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Haas Tooling
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Mitsubishi
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim border-r-2 border-line">
-                    Walter
-                  </TableHead>
-                  <TableHead className="font-black text-[10px] uppercase tracking-wider text-ink-dim">
-                    Kyocera / Seco
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredGrades.map((entry, idx) => (
-                  <TableRow key={idx} className="border-b-2 border-line hover:bg-surface-2/60 transition-colors">
-                    <TableCell className="border-r-2 border-line py-3">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className="bg-accent text-bg px-1.5 py-0.2 text-[9px] font-mono font-bold">
-                          {entry.isoGroup}
-                        </span>
-                        <span className="font-mono text-xs font-black text-ink">{entry.subGroup}</span>
-                      </div>
-                      <p className="text-[10px] font-mono text-ink-dim leading-tight">{entry.application}</p>
-                    </TableCell>
+          <div className="border-2 border-danger/40 bg-danger/5 p-3 text-[11px] font-mono text-ink-dim">
+            <strong className="text-danger uppercase">Orientativo, no un cruce oficial:</strong> estas equivalencias son una compilación
+            editorial multimarca para acelerar la búsqueda de un sustituto. Los grados de distintos fabricantes rara vez son idénticos
+            en composición o recubrimiento — confirma siempre contra el catálogo o el ingeniero de aplicación del fabricante antes de comprar.
+          </div>
+          <DataSourceChip source={CARBIDE_GRADES_SOURCE} />
 
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs font-bold text-ink">
-                      {entry.sandvik}
-                    </TableCell>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {filteredGrades.map((entry, idx) => (
+              <div key={idx} className="border-2 border-line bg-surface p-4 shadow-hard space-y-3">
+                <div className="flex items-center gap-1.5 border-b border-line pb-2">
+                  <span className="bg-accent text-bg px-1.5 py-0.5 text-[10px] font-mono font-bold shrink-0">
+                    {entry.isoGroup}
+                  </span>
+                  <h4 className="font-display font-black text-sm uppercase tracking-tight text-ink">
+                    {entry.subGroup}
+                  </h4>
+                </div>
+                <p className="text-[11px] font-mono text-ink-dim leading-tight">{entry.application}</p>
 
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs font-bold text-accent">
-                      {entry.korloy}
-                    </TableCell>
-
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs font-bold text-ink">
-                      {entry.kennametal}
-                    </TableCell>
-
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs font-bold text-ink">
-                      {entry.iscar}
-                    </TableCell>
-
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs font-bold text-ok">
-                      {entry.haasTooling}
-                    </TableCell>
-
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs text-ink-dim">
-                      {entry.mitsubishi}
-                    </TableCell>
-
-                    <TableCell className="border-r-2 border-line py-3 font-mono text-xs text-ink-dim">
-                      {entry.walter}
-                    </TableCell>
-
-                    <TableCell className="py-3 font-mono text-xs text-ink-dim">
-                      {entry.kyocera} / {entry.seco}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  {GRADE_BRANDS.map((brand) => (
+                    <div
+                      key={brand.key}
+                      className={`border px-2 py-1.5 ${
+                        brand.key === 'haasTooling'
+                          ? 'border-ok/40 bg-ok/10'
+                          : brand.key === 'korloy'
+                            ? 'border-accent/40 bg-accent/5'
+                            : 'border-line bg-surface-2'
+                      }`}
+                    >
+                      <span className="block text-[8px] font-mono uppercase tracking-wider text-ink-dim">{brand.label}</span>
+                      <strong
+                        className={`block text-[11px] font-mono font-bold truncate ${
+                          brand.key === 'haasTooling' ? 'text-ok' : brand.key === 'korloy' ? 'text-accent' : 'text-ink'
+                        }`}
+                        title={entry[brand.key]}
+                      >
+                        {entry[brand.key]}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       ) : (
@@ -170,9 +148,7 @@ export function GradesAndHaasTab(): ReactElement {
                 <option value="refaccion_torx">Refacciones Torx & Clamps</option>
               </select>
             </div>
-            <span className="text-xs font-mono text-ink-dim">
-              Compatibilidad 100% verificada para máquinas Haas VF y ST
-            </span>
+            <DataSourceChip source={HAAS_TOOLING_SPECS_SOURCE} />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -183,14 +159,18 @@ export function GradesAndHaasTab(): ReactElement {
                     <h4 className="font-display font-black text-sm uppercase tracking-tight text-ink">
                       {spec.name}
                     </h4>
-                    {spec.haasPartNumber && (
+                    {spec.partNumberVerified && spec.haasPartNumber ? (
                       <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-mono font-bold shrink-0">
-                        Haas P/N {spec.haasPartNumber}
+                        P/N Haas {spec.haasPartNumber}
+                      </span>
+                    ) : (
+                      <span className="bg-warn/20 text-warn border border-warn/40 px-2 py-0.5 text-[10px] font-mono font-bold shrink-0">
+                        ISO / sin P/N
                       </span>
                     )}
                   </div>
                   <p className="text-xs font-mono text-ink-dim mb-2">{spec.description}</p>
-                  
+
                   <div className="space-y-1 text-xs font-mono bg-surface-2 p-2.5 border border-line">
                     <div>
                       <span className="text-ink-dim">Cono / Zanco:</span> <strong className="text-ink">{spec.taperOrShank}</strong>
@@ -204,16 +184,21 @@ export function GradesAndHaasTab(): ReactElement {
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-line/60 flex items-center justify-between">
-                  <span className="text-[10px] font-mono text-ink-dim italic truncate mr-2">{spec.notes}</span>
-                  <a
-                    href={getSupplierSearchUrl('haas_tooling', spec.haasPartNumber || spec.name)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="shrink-0 inline-flex items-center gap-1 text-[10px] font-mono font-black uppercase text-accent hover:underline"
-                  >
-                    Ver en Haas Tooling <ExternalLink size={11} />
-                  </a>
+                <div className="pt-2 border-t border-line/60 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-mono text-ink-dim italic truncate mr-2">{spec.notes}</span>
+                    <a
+                      href={getSupplierSearchUrl('haas_tooling', spec.haasPartNumber || spec.name)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0 inline-flex items-center gap-1 text-[10px] font-mono font-black uppercase text-accent hover:underline"
+                    >
+                      Ver en Haas Tooling <ExternalLink size={11} />
+                    </a>
+                  </div>
+                  <p className="font-mono text-[9px] text-ink-dim">
+                    Fuente: <span className={spec.partNumberVerified ? 'text-ink font-bold' : 'text-warn font-bold'}>{spec.source}</span>
+                  </p>
                 </div>
               </div>
             ))}

@@ -5,8 +5,9 @@ import {
   ShoppingCart,
   Globe,
 } from 'lucide-react';
-import { TOOLING_SUPPLIERS, getSupplierSearchUrl } from '../../lib/tooling/toolingSuppliers';
+import { TOOLING_SUPPLIERS, getSupplierSearchUrl, TOOLING_SUPPLIERS_SOURCE } from '../../lib/tooling/toolingSuppliers';
 import { Input } from '../ui/input';
+import { DataSourceChip } from './DataSourceChip';
 
 export function SupplierDirectoryTab(): ReactElement {
   const [searchQuery, setSearchQuery] = useState('WNMG 080408');
@@ -70,6 +71,7 @@ export function SupplierDirectoryTab(): ReactElement {
         <p className="text-xs font-mono text-ink-dim">
           Haz click en el botón <strong>"Buscar en Tienda"</strong> de cualquier proveedor para abrir directamente los resultados con el término: <code className="text-accent font-bold font-mono">"{searchQuery || '—'}"</code>.
         </p>
+        <DataSourceChip source={TOOLING_SUPPLIERS_SOURCE} />
       </div>
 
       {/* Grid de Proveedores */}
@@ -104,6 +106,12 @@ export function SupplierDirectoryTab(): ReactElement {
                     {supplier.badge}
                   </span>
                 </div>
+
+                {supplier.searchType === 'site' && (
+                  <span className="inline-block mb-2 px-2 py-0.5 text-[9px] font-mono font-black uppercase border border-warn/40 bg-warn/10 text-warn">
+                    Búsqueda indirecta (Google site:)
+                  </span>
+                )}
 
                 <p className="text-xs font-mono text-ink-dim mb-2">{supplier.description}</p>
                 

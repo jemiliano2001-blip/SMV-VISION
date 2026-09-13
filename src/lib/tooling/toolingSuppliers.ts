@@ -1,3 +1,7 @@
+import { TOOLING_SUPPLIERS_SOURCE } from './sources';
+
+export { TOOLING_SUPPLIERS_SOURCE };
+
 export interface ToolingSupplier {
   id: string;
   name: string;
@@ -8,6 +12,12 @@ export interface ToolingSupplier {
   websiteUrl: string;
   searchUrlTemplate: string; // {q} se reemplaza por el término codificado
   badge: 'Oficial Haas' | 'Factura México CFDI' | 'Entrega Rápida 24h' | 'Mejor Precio' | 'Alta Precisión';
+  /**
+   * 'direct': `searchUrlTemplate` apunta al buscador propio del sitio del proveedor.
+   * 'site': es una búsqueda indirecta vía `google.com/search?q=site:...` (el proveedor
+   * no expone buscador propio indexable) — se muestra badge "Búsqueda indirecta" en UI.
+   */
+  searchType?: 'direct' | 'site';
 }
 
 export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
@@ -22,6 +32,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.haastooling.com',
     searchUrlTemplate: 'https://www.haastooling.com/search?query={q}',
     badge: 'Oficial Haas',
+    searchType: 'direct',
   },
   {
     id: 'mcmaster',
@@ -33,6 +44,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.mcmaster.com',
     searchUrlTemplate: 'https://www.mcmaster.com/{q}',
     badge: 'Entrega Rápida 24h',
+    searchType: 'direct',
   },
   {
     id: 'shars_tool',
@@ -44,6 +56,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.shars.com',
     searchUrlTemplate: 'https://www.shars.com/catalogsearch/result/?q={q}',
     badge: 'Mejor Precio',
+    searchType: 'direct',
   },
   {
     id: 'maritool',
@@ -55,6 +68,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.maritool.com',
     searchUrlTemplate: 'https://www.maritool.com/advanced_search_result.php?keywords={q}',
     badge: 'Alta Precisión',
+    searchType: 'direct',
   },
   {
     id: 'harvey_tool',
@@ -66,6 +80,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.harveyperformance.com',
     searchUrlTemplate: 'https://www.harveyperformance.com/?s={q}',
     badge: 'Alta Precisión',
+    searchType: 'direct',
   },
   {
     id: 'travers_usa',
@@ -77,6 +92,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.travers.com',
     searchUrlTemplate: 'https://www.travers.com/search/{q}',
     badge: 'Mejor Precio',
+    searchType: 'direct',
   },
   {
     id: 'msc_direct',
@@ -88,6 +104,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.mscdirect.com',
     searchUrlTemplate: 'https://www.mscdirect.com/browse?searchterm={q}',
     badge: 'Entrega Rápida 24h',
+    searchType: 'direct',
   },
   {
     id: 'lakeshore_carbide',
@@ -99,6 +116,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.lakeshorecarbide.com',
     searchUrlTemplate: 'https://www.lakeshorecarbide.com/search.aspx?find={q}',
     badge: 'Mejor Precio',
+    searchType: 'direct',
   },
 
   // ── México (Facturación CFDI) ──
@@ -112,6 +130,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.travers.com.mx',
     searchUrlTemplate: 'https://www.travers.com.mx/search/{q}',
     badge: 'Factura México CFDI',
+    searchType: 'direct',
   },
   {
     id: 'grainger_mexico',
@@ -123,6 +142,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.grainger.com.mx',
     searchUrlTemplate: 'https://www.grainger.com.mx/grainger/en/search?searchBar=true&searchType=all&searchTerm={q}',
     badge: 'Factura México CFDI',
+    searchType: 'direct',
   },
   {
     id: 'tezatools_mexico',
@@ -134,6 +154,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.tezatools.com.mx',
     searchUrlTemplate: 'https://www.google.com/search?q=site:tezatools.com.mx+{q}',
     badge: 'Factura México CFDI',
+    searchType: 'site',
   },
   {
     id: 'dihcsa_mexico',
@@ -145,6 +166,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.dihcsa.com.mx',
     searchUrlTemplate: 'https://www.google.com/search?q=site:dihcsa.com.mx+{q}',
     badge: 'Factura México CFDI',
+    searchType: 'site',
   },
   {
     id: 'yamazen_mexico',
@@ -156,6 +178,7 @@ export const TOOLING_SUPPLIERS: ToolingSupplier[] = [
     websiteUrl: 'https://www.yamazen.com.mx',
     searchUrlTemplate: 'https://www.google.com/search?q=site:yamazen.com.mx+{q}',
     badge: 'Alta Precisión',
+    searchType: 'site',
   },
 ];
 

@@ -65,6 +65,11 @@ export interface MillingCycleTimeInput {
   partHandlingSec?: number;
   /** Número de cambios de herramienta ATC (side mount 2.8s c/u) */
   toolChanges?: number;
+  /**
+   * Segundos chip-a-chip por cambio. Si se omite, se usa 2.8 s (aprox. genérica).
+   * Preferir el `toolChangeSec` oficial del perfil Haas cuando exista.
+   */
+  toolChangeSec?: number;
 }
 
 export interface MillingCycleTimeResult {
@@ -121,7 +126,7 @@ export function calculateTurningCycleTime(input: TurningCycleTimeInput): Turning
   const safeAp = Math.max(toFinite(depthOfCutAp, 0.080), 0.005);
   const safeFn = Math.max(toFinite(feedPerRev, 0.008), 0.001);
   const safeRpm = Math.max(toFinite(rpm, 1000), 50);
-  const safeRate = Math.max(toFinite(hourlyRate, 65), 1);
+  const safeRate = Math.max(toFinite(hourlyRate, 65), 0);
   const safeHandling = Math.max(toFinite(partHandlingSec, 20), 0);
   const safeChanges = Math.max(toFinite(toolChanges, 1), 0);
 
@@ -189,13 +194,15 @@ export function calculateMillingCycleTime(input: MillingCycleTimeInput): Milling
     hourlyRate,
     partHandlingSec = 30,
     toolChanges = 1,
+    toolChangeSec,
   } = input;
 
   const safeVol = Math.max(toFinite(materialVolumeToRemove, 6.0), 0.01);
   const safeMrr = Math.max(toFinite(mrr, 1.5), 0.01);
-  const safeRate = Math.max(toFinite(hourlyRate, 75), 1);
+  const safeRate = Math.max(toFinite(hourlyRate, 75), 0);
   const safeHandling = Math.max(toFinite(partHandlingSec, 30), 0);
   const safeChanges = Math.max(toFinite(toolChanges, 1), 0);
+  const secPerChange = Math.max(toFinite(toolChangeSec, 2.8), 0);
 
   // Tiempo de corte en minutos = volumen / MRR
   const cutTimeMin = safeVol / safeMrr;
@@ -204,8 +211,8 @@ export function calculateMillingCycleTime(input: MillingCycleTimeInput): Milling
   // Movimientos en el aire, aproximaciones y salidas (~15%)
   const airCutTimeSec = Math.round(pureCutTimeSec * 0.15);
 
-  // Tiempo de cambio de herramienta ATC Haas Side-Mount (2.8s por cambio)
-  const toolChangeTimeSec = Math.round(safeChanges * 2.8);
+  // ATC: usar chip-a-chip oficial Haas si viene; si no, 2.8 s genérico
+  const toolChangeTimeSec = Math.round(safeChanges * secPerChange);
 
   const totalCycleTimeSec = pureCutTimeSec + airCutTimeSec + toolChangeTimeSec + safeHandling;
   const formattedCycleTime = formatSecondsToTime(totalCycleTimeSec);

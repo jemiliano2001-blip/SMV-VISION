@@ -1,6 +1,8 @@
 import { findMaterialById } from './materialDatabase';
 import { findHaasMachineById } from './haasProfiles';
 import type {
+  HaasMachineProfile,
+  MachineLimitCheck,
   SpeedsFeedsTurningInput,
   SpeedsFeedsTurningResult,
   SpeedsFeedsMillingInput,
@@ -8,6 +10,43 @@ import type {
 } from './types';
 
 const MACHINE_EFFICIENCY = 0.80; // 80% de eficiencia mecánica de husillo Haas
+
+/**
+ * Potencia que el husillo puede entregar a `rpm` según su curva par/potencia.
+ * Debajo de `maxTorqueAtRpm` el motor está en zona de par constante:
+ * P(kW) = T(Nm) · n / 9549. Arriba entrega la potencia nominal.
+ */
+export function availableSpindleHpAtRpm(machine: HaasMachineProfile, rpm: number): number {
+  const safeRpm = Math.max(rpm, 1);
+  if (machine.maxTorqueNm && machine.maxTorqueAtRpm && safeRpm < machine.maxTorqueAtRpm) {
+    const kw = (machine.maxTorqueNm * safeRpm) / 9549;
+    return Number(Math.min(kw * 1.341, machine.horsepower).toFixed(2));
+  }
+  return machine.horsepower;
+}
+
+function buildMachineCheck(
+  machine: HaasMachineProfile,
+  rpm: number,
+  diameterMm: number,
+  motorPowerHpRequired: number
+): MachineLimitCheck {
+  const usableRpm = Math.min(rpm, machine.maxRpm);
+  const rpmIsCapped = rpm > machine.maxRpm;
+  const effectiveSurfaceSpeedMMin = Number(((Math.PI * diameterMm * usableRpm) / 1000).toFixed(1));
+  const availableHpAtRpm = availableSpindleHpAtRpm(machine, usableRpm);
+  return {
+    machineId: machine.id,
+    maxRpm: machine.maxRpm,
+    ratedHp: machine.horsepower,
+    usableRpm,
+    rpmIsCapped,
+    effectiveSurfaceSpeedMMin,
+    availableHpAtRpm,
+    powerUtilization: Number((motorPowerHpRequired / Math.max(availableHpAtRpm, 0.01)).toFixed(3)),
+    rpmUtilization: Number((usableRpm / machine.maxRpm).toFixed(3)),
+  };
+}
 
 /**
  * Calcula todos los parámetros de corte para Torneado CNC.
@@ -71,11 +110,15 @@ export function calculateTurningSpeedsFeeds(input: SpeedsFeedsTurningInput): Spe
   }
 
   // 7. Validaciones de Máquina Haas
+  let machine: MachineLimitCheck | undefined;
   if (haasMachine) {
-    if (rpm > haasMachine.maxRpm) {
-      warnings.push(`⚠️ RPM requeridas (${rpm.toLocaleString()}) exceden el límite de la ${haasMachine.name} (Máx: ${haasMachine.maxRpm.toLocaleString()} RPM). Usa programación G96 con límite G50 S${haasMachine.maxRpm}.`);
+    machine = buildMachineCheck(haasMachine, rpm, safeDiameter, motorPowerHpRequired);
+    if (machine.rpmIsCapped) {
+      warnings.push(`⚠️ RPM requeridas (${rpm.toLocaleString()}) exceden el límite de la ${haasMachine.name} (Máx: ${haasMachine.maxRpm.toLocaleString()} RPM). El husillo topará a ${haasMachine.maxRpm.toLocaleString()} RPM y la Vc real será ${machine.effectiveSurfaceSpeedMMin} m/min. Usa programación G96 con límite G50 S${haasMachine.maxRpm}.`);
     }
-    if (motorPowerHpRequired > haasMachine.horsepower * 0.85) {
+    if (machine.availableHpAtRpm < haasMachine.horsepower && motorPowerHpRequired > machine.availableHpAtRpm * 0.85) {
+      warnings.push(`⚠️ A ${machine.usableRpm.toLocaleString()} RPM el husillo de la ${haasMachine.name} está en zona de par constante y solo entrega ~${machine.availableHpAtRpm} HP (par máx. a ${haasMachine.maxTorqueAtRpm} RPM). El corte pide ${motorPowerHpRequired} HP: reduce ap o sube la Vc.`);
+    } else if (motorPowerHpRequired > haasMachine.horsepower * 0.85) {
       warnings.push(`⚠️ Potencia requerida (${motorPowerHpRequired} HP) está al límite o supera el 85% del motor de la ${haasMachine.name} (${haasMachine.horsepower} HP). Reduce la profundidad de corte (ap).`);
     }
   }
@@ -111,6 +154,7 @@ export function calculateTurningSpeedsFeeds(input: SpeedsFeedsTurningInput): Spe
     theoreticalSurfaceRoughnessRaUm,
     theoreticalSurfaceRoughnessRaUin,
     theoreticalSurfaceRoughnessRzUm,
+    machine,
     warnings,
     tips,
   };
@@ -196,14 +240,21 @@ export function calculateMillingSpeedsFeeds(input: SpeedsFeedsMillingInput): Spe
   }
 
   // 7. Validaciones de Máquina Haas
+  let machine: MachineLimitCheck | undefined;
   if (haasMachine) {
-    if (rpm > haasMachine.maxRpm) {
-      warnings.push(`⚠️ RPM calculadas (${rpm.toLocaleString()}) superan el husillo de la ${haasMachine.name} (${haasMachine.maxRpm.toLocaleString()} RPM). Reduce SFM o incrementa el diámetro de fresa.`);
+    machine = buildMachineCheck(haasMachine, rpm, safeDMm, motorPowerHpRequired);
+    if (machine.rpmIsCapped) {
+      warnings.push(`⚠️ RPM calculadas (${rpm.toLocaleString()}) superan el husillo de la ${haasMachine.name} (${haasMachine.maxRpm.toLocaleString()} RPM). A tope de husillo la Vc real baja a ${Math.round(machine.effectiveSurfaceSpeedMMin * 3.28084)} SFM: reduce SFM o incrementa el diámetro de fresa.`);
     }
-    if (motorPowerHpRequired > haasMachine.horsepower * 0.85) {
+    if (machine.availableHpAtRpm < haasMachine.horsepower && motorPowerHpRequired > machine.availableHpAtRpm * 0.85) {
+      warnings.push(`⚠️ A ${machine.usableRpm.toLocaleString()} RPM el husillo de la ${haasMachine.name} está en zona de par constante y solo entrega ~${machine.availableHpAtRpm} HP (par máx. a ${haasMachine.maxTorqueAtRpm} RPM). Reduce ae/ap o sube las RPM.`);
+    } else if (motorPowerHpRequired > haasMachine.horsepower * 0.85) {
       warnings.push(`⚠️ Potencia estimada (${motorPowerHpRequired} HP) supera el 85% de la ${haasMachine.name} (${haasMachine.horsepower} HP). Reduce el ancho de corte (ae) o profundidad (ap).`);
     }
   }
+
+  // Ángulo de contacto radial: θ = arccos(1 − 2·ae/D). 180° = ranurado a todo el diámetro.
+  const engagementAngleDeg = Number(((Math.acos(Math.max(-1, Math.min(1, 1 - 2 * radialRatio))) * 180) / Math.PI).toFixed(1));
 
   // 8. Consejos Técnicos de Fresado
   if (radialChipThinningFactor > 1.1) {
@@ -224,6 +275,8 @@ export function calculateMillingSpeedsFeeds(input: SpeedsFeedsMillingInput): Spe
     netPowerKw,
     netPowerHp,
     motorPowerHpRequired,
+    machine,
+    engagementAngleDeg,
     warnings,
     tips,
   };

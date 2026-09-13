@@ -24,6 +24,8 @@ import {
 } from '../../lib/tooling/blueprintToolingAdvisor';
 import { Input } from '../ui/input';
 import { log } from '../../lib/log';
+import { DataSourceChip } from './DataSourceChip';
+import { BLUEPRINT_ADVISOR_SOURCE } from '../../lib/tooling/sources';
 
 export function BlueprintAdvisorTab(): ReactElement {
   const [drawings, setDrawings] = useState<ToolcribActiveDrawingView[]>([]);
@@ -129,12 +131,14 @@ export function BlueprintAdvisorTab(): ReactElement {
     reader.readAsDataURL(file);
   };
 
-  const filteredDrawings = drawings.filter(
-    (d) =>
-      d.partNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.customer.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredDrawings = drawings.filter((d) => {
+    const q = searchQuery.toLowerCase();
+    return (
+      (d.partNumber ?? '').toLowerCase().includes(q) ||
+      (d.description ?? '').toLowerCase().includes(q) ||
+      (d.customer ?? '').toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="space-y-6">
@@ -153,6 +157,9 @@ export function BlueprintAdvisorTab(): ReactElement {
               <input type="file" accept="image/*,application/pdf" className="hidden" onChange={handleFileUpload} />
             </label>
           </div>
+          <p className="font-mono text-[9px] text-ink-dim mb-2">
+            Subir plano usa Gemini Vision (IA) para extraer material/dureza — sujeto a error de OCR, no sustituye leer el plano.
+          </p>
 
           <div className="relative mb-3">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-dim" />
@@ -220,6 +227,9 @@ export function BlueprintAdvisorTab(): ReactElement {
               <p className="text-xs font-mono text-ink-dim mt-1">
                 Extrayendo especificación de material, dureza, roscas y tolerancias geométricas.
               </p>
+              <p className="font-mono text-[9px] uppercase tracking-widest text-ink-dim mt-3">
+                Lectura por IA sujeta a error de OCR — verifica siempre contra el plano original.
+              </p>
             </div>
           ) : aiError ? (
             <div className="flex-1 flex flex-col items-center justify-center p-12 text-center gap-2">
@@ -245,6 +255,7 @@ export function BlueprintAdvisorTab(): ReactElement {
                     <span className="text-ink font-bold">{toolingPackage.detectedMaterial}</span>
                     <span className="text-ink-dim">· Dureza: <strong className="text-ink">{toolingPackage.hardness}</strong></span>
                   </div>
+                  <DataSourceChip source={BLUEPRINT_ADVISOR_SOURCE} className="mt-2" />
                 </div>
                 {selectedDrawing?.pdfUrl && (
                   <a
@@ -264,7 +275,7 @@ export function BlueprintAdvisorTab(): ReactElement {
                   Operaciones Identificadas en el Plano:
                 </h4>
                 <div className="flex flex-wrap gap-1.5">
-                  {toolingPackage.operations.map((op, i) => (
+                  {(toolingPackage.operations ?? []).map((op, i) => (
                     <span
                       key={i}
                       className="bg-surface-2 border border-line px-2 py-0.5 text-xs font-mono text-ink flex items-center gap-1"
@@ -282,7 +293,7 @@ export function BlueprintAdvisorTab(): ReactElement {
                   Herramientas Recomendadas para Torno Haas ST
                 </h4>
                 <div className="space-y-3">
-                  {toolingPackage.latheTools.map((tool, idx) => (
+                  {(toolingPackage.latheTools ?? []).map((tool, idx) => (
                     <div
                       key={idx}
                       className="bg-surface border-2 border-line p-3 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.5)]"
@@ -333,7 +344,7 @@ export function BlueprintAdvisorTab(): ReactElement {
                   Herramientas Recomendadas para Fresadora Haas VF (CAT40)
                 </h4>
                 <div className="space-y-3">
-                  {toolingPackage.millTools.map((tool, idx) => (
+                  {(toolingPackage.millTools ?? []).map((tool, idx) => (
                     <div
                       key={idx}
                       className="bg-surface border-2 border-line p-3 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.5)]"
@@ -383,7 +394,7 @@ export function BlueprintAdvisorTab(): ReactElement {
                   <Cpu size={12} /> Consejos de Maquinado Haas para este Plano:
                 </h5>
                 <ul className="list-disc list-inside text-ink-dim space-y-0.5 text-[11px]">
-                  {toolingPackage.haasSetupAdvice.map((adv, idx) => (
+                  {(toolingPackage.haasSetupAdvice ?? []).map((adv, idx) => (
                     <li key={idx}>{adv}</li>
                   ))}
                 </ul>

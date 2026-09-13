@@ -17,10 +17,10 @@ function str(v: unknown, fallback: string, maxLen = STR_MAX): string {
   return t.length > maxLen ? t.slice(0, maxLen) : t;
 }
 function num(v: unknown, fallback = 0): number {
-  if (typeof v === 'number' && !Number.isNaN(v)) return v;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string') {
     const p = Number.parseFloat(v);
-    return Number.isNaN(p) ? fallback : p;
+    return Number.isFinite(p) ? p : fallback;
   }
   return fallback;
 }

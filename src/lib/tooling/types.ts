@@ -26,6 +26,8 @@ export interface MaterialSpec {
   recommendedFeedTurningInch?: { desbaste: number; acabado: number };
   hardnessTypical: string;
   chipCharacteristics: string;
+  /** Referencia de donde salen los rangos de Vc/Kc (catálogo o manual). */
+  source?: string;
 }
 
 export type HaasMachineType = 'mill' | 'lathe';
@@ -33,16 +35,41 @@ export type HaasMachineType = 'mill' | 'lathe';
 export interface HaasMachineProfile {
   id: string;
   name: string;
+  /** Modelo corto para chips/badges, ej. 'ST-20', 'VF-2'. */
+  model: string;
   type: HaasMachineType;
   description: string;
   maxRpm: number;
   horsepower: number;
   kw: number;
   maxTorqueNm?: number;
+  /** RPM a las que el husillo entrega el par máximo (curva Haas). */
+  maxTorqueAtRpm?: number;
   taperOrSpindle: string; // ej. 'CAT40', 'A2-6'
   chuckOrTableSize?: string;
   barCapacityInch?: number;
+  /** Diámetro máximo de corte (torno) en pulgadas. */
+  maxCuttingDiaInch?: number;
+  /** Longitud máxima de corte (torno) o recorrido X×Y×Z (fresa), texto legible. */
+  workEnvelope?: string;
+  /** Estaciones de torreta (torno) o capacidad del cambiador (fresa). */
+  toolStations?: number;
+  /**
+   * Tiempo chip-a-chip del cambiador (fresa) en segundos, dato oficial Haas.
+   * Para tornos Haas no publica el índice de torreta: se deja undefined y el
+   * estimador de ciclo usa su aproximación.
+   */
+  toolChangeSec?: number;
+  /** Rápidos G00 en in/min. */
+  rapidsIpm?: number;
   notes: string;
+  /**
+   * Fuente del dato (URL del catálogo oficial) y fecha de verificación.
+   * Los perfiles son de REFERENCIA del catálogo Haas; `inTaller` marca las
+   * máquinas físicas de SMV una vez confirmadas.
+   */
+  source: { url: string; verifiedOn: string };
+  inTaller?: boolean;
 }
 
 export interface SpeedsFeedsTurningInput {
@@ -69,8 +96,35 @@ export interface SpeedsFeedsTurningResult {
   theoreticalSurfaceRoughnessRaUm: number; // Ra en micrómetros
   theoreticalSurfaceRoughnessRaUin: number; // Ra en micro-pulgadas (µin)
   theoreticalSurfaceRoughnessRzUm: number; // Rz aprox 4 * Ra
+  /** Límites reales de la máquina seleccionada (undefined si no hay máquina). */
+  machine?: MachineLimitCheck;
   warnings: string[];
   tips: string[];
+}
+
+/**
+ * Qué tanto exige el corte a la máquina real. Sirve para los gauges de la UI
+ * y para saber si la RPM calculada se puede programar o el husillo la topa.
+ */
+export interface MachineLimitCheck {
+  machineId: string;
+  maxRpm: number;
+  ratedHp: number;
+  /** RPM que realmente girará el husillo: min(calculada, máx. de la máquina). */
+  usableRpm: number;
+  rpmIsCapped: boolean;
+  /** Vc real si el husillo topa (m/min); igual a la Vc pedida si no topa. */
+  effectiveSurfaceSpeedMMin: number;
+  /**
+   * HP disponibles a las RPM de trabajo según la curva del husillo: por debajo
+   * de `maxTorqueAtRpm` el motor está en zona de par constante y NO entrega su
+   * potencia nominal (P = T·n / 9549).
+   */
+  availableHpAtRpm: number;
+  /** motorPowerHpRequired / availableHpAtRpm (0–1+). */
+  powerUtilization: number;
+  /** usableRpm / maxRpm (0–1). */
+  rpmUtilization: number;
 }
 
 export interface SpeedsFeedsMillingInput {
@@ -96,6 +150,10 @@ export interface SpeedsFeedsMillingResult {
   netPowerKw: number;
   netPowerHp: number;
   motorPowerHpRequired: number;
+  /** Límites reales de la máquina seleccionada (undefined si no hay máquina). */
+  machine?: MachineLimitCheck;
+  /** Ángulo de contacto radial θ = arccos(1 − 2·ae/D), en grados (0–180). */
+  engagementAngleDeg: number;
   warnings: string[];
   tips: string[];
 }
@@ -175,6 +233,8 @@ export interface EndmillRecommendation {
   helixAngle: string;
   reasons: string[];
   topBrands: string[];
+  /** Referencia de fuente de esta recomendación (guías de aplicación de fabricantes, no un dato propietario). */
+  source?: string;
 }
 
 // ─── Carbide Grade Cross-Reference ──────────────────────────────────────────
@@ -193,6 +253,8 @@ export interface CarbideGradeEntry {
   kyocera: string;
   seco: string;
   yg1: string;
+  /** Fuente/atribución de la fila (compilación multimarca orientativa — ver `CARBIDE_GRADES_SOURCE`). */
+  source?: string;
 }
 
 // ─── Bóveda de Herramental en Firestore ─────────────────────────────────────
@@ -358,6 +420,17 @@ export interface HaasG76Params {
   finishAllowanceInch?: number;
   startZInch?: number;
   endZInch?: number;
+}
+
+/**
+ * Referencia de fuente/verificación para un conjunto de datos técnicos que no
+ * tiene un campo `source` propio por entrada (ej. tablas completas). Mismo
+ * patrón que `HaasMachineProfile.source`, pero reutilizable a nivel de módulo.
+ */
+export interface DataSourceRef {
+  label: string;
+  url?: string;
+  verifiedOn: string;
 }
 
 export interface TapDrillEntry {

@@ -1,4 +1,7 @@
 import type { CarbideGradeEntry, IsoMaterialGroup } from './types';
+import { SRC_GRADE_MATRIX, CARBIDE_GRADES_SOURCE } from './sources';
+
+export { CARBIDE_GRADES_SOURCE };
 
 export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
   {
@@ -15,6 +18,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'CA5515',
     seco: 'TP1501',
     yg1: 'YG3010',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'P',
@@ -30,6 +34,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'CA5525',
     seco: 'TP2501',
     yg1: 'YG3020',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'P',
@@ -45,6 +50,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'CA5535',
     seco: 'TP3501',
     yg1: 'YG3030',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'M',
@@ -60,6 +66,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'PR1125',
     seco: 'TS2000',
     yg1: 'YG213',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'M',
@@ -75,6 +82,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'PR1135',
     seco: 'TS2500',
     yg1: 'YG214',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'K',
@@ -90,6 +98,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'CA4515',
     seco: 'TK1001',
     yg1: 'YG10',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'N',
@@ -105,6 +114,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'KW10',
     seco: 'HX',
     yg1: 'YG-1 ALU',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'S',
@@ -120,6 +130,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'PR1225',
     seco: 'TS2000',
     yg1: 'YG-S',
+    source: SRC_GRADE_MATRIX,
   },
   {
     isoGroup: 'H',
@@ -135,6 +146,7 @@ export const CARBIDE_GRADES_MATRIX: CarbideGradeEntry[] = [
     kyocera: 'KBN05M',
     seco: 'CBN060K',
     yg1: 'YG-H',
+    source: SRC_GRADE_MATRIX,
   },
 ];
 

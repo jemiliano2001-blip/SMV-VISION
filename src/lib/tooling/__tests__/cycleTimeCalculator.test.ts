@@ -76,6 +76,18 @@ describe('Cycle Time & Machining Cost Estimator (Haas ST & VF)', () => {
       expect(result.totalCycleTimeSec).toBe(174);
       expect(result.machiningCostPerPart).toBeCloseTo((75 / 3600) * 174, 1);
     });
+
+    it('usa toolChangeSec oficial Haas cuando se pasa (VF-2 = 4.5 s)', () => {
+      const result = calculateMillingCycleTime({
+        materialVolumeToRemove: 1,
+        mrr: 10,
+        hourlyRate: 0,
+        toolChanges: 1,
+        toolChangeSec: 4.5,
+      });
+      expect(result.toolChangeTimeSec).toBe(5); // Math.round(4.5)
+      expect(result.machiningCostPerPart).toBe(0);
+    });
   });
 
   describe('G-code generation', () => {

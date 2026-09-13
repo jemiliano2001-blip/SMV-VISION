@@ -21,6 +21,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
+import { DataSourceChip } from './DataSourceChip';
+import { VAULT_DATA_SOURCE } from '../../lib/tooling/sources';
+import { parseInputNumber } from './calculator/formatters';
 
 const CATEGORIES: { value: ToolingCategory; label: string }[] = [
   { value: 'inserto_torneado', label: 'Inserto Torneado' },
@@ -184,11 +187,11 @@ export function ToolingVaultTab(): ReactElement {
       const q = searchQuery.toLowerCase().trim();
       const matchesQuery =
         !q ||
-        item.codigoISO.toLowerCase().includes(q) ||
-        item.descripcion.toLowerCase().includes(q) ||
-        item.marca.toLowerCase().includes(q) ||
-        item.proveedor.toLowerCase().includes(q) ||
-        (item.maquinaAsignada && item.maquinaAsignada.toLowerCase().includes(q));
+        (item.codigoISO ?? '').toLowerCase().includes(q) ||
+        (item.descripcion ?? '').toLowerCase().includes(q) ||
+        (item.marca ?? '').toLowerCase().includes(q) ||
+        (item.proveedor ?? '').toLowerCase().includes(q) ||
+        (item.maquinaAsignada ?? '').toLowerCase().includes(q);
       return matchesCat && matchesQuery;
     });
   }, [items, selectedCategory, searchQuery]);
@@ -196,38 +199,41 @@ export function ToolingVaultTab(): ReactElement {
   return (
     <div className="space-y-4">
       {/* Barra de Filtros y Botón de Nuevo Registro */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-2 border-line bg-surface p-4 shadow-hard">
-        <div className="flex flex-wrap items-center gap-2 flex-1">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar por código ISO, marca, máquina..."
-              className="h-9 pl-9 text-xs font-mono border-2 border-line bg-surface-2"
-            />
+      <div className="flex flex-col gap-3 border-2 border-line bg-surface p-4 shadow-hard">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 flex-1">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Buscar por código ISO, marca, máquina..."
+                className="h-9 pl-9 text-xs font-mono border-2 border-line bg-surface-2"
+              />
+            </div>
+
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="h-9 px-3 border-2 border-line bg-surface-2 text-ink text-xs font-mono font-bold outline-none focus:border-accent"
+            >
+              <option value="all">Todas las Categorías ({items.length})</option>
+              {CATEGORIES.map(cat => (
+                <option key={cat.value} value={cat.value}>
+                  {cat.label} ({items.filter(i => i.categoria === cat.value).length})
+                </option>
+              ))}
+            </select>
           </div>
 
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="h-9 px-3 border-2 border-line bg-surface-2 text-ink text-xs font-mono font-bold outline-none focus:border-accent"
+          <Button
+            onClick={handleOpenAdd}
+            className="bg-accent text-bg px-4 h-9 text-xs font-black uppercase tracking-wider hover:bg-accent/80 transition-colors shadow-hard rounded-none flex items-center gap-2"
           >
-            <option value="all">Todas las Categorías ({items.length})</option>
-            {CATEGORIES.map(cat => (
-              <option key={cat.value} value={cat.value}>
-                {cat.label} ({items.filter(i => i.categoria === cat.value).length})
-              </option>
-            ))}
-          </select>
+            <Plus size={14} /> Registrar Herramienta
+          </Button>
         </div>
-
-        <Button
-          onClick={handleOpenAdd}
-          className="bg-accent text-bg px-4 h-9 text-xs font-black uppercase tracking-wider hover:bg-accent/80 transition-colors shadow-hard rounded-none flex items-center gap-2"
-        >
-          <Plus size={14} /> Registrar Herramienta
-        </Button>
+        <DataSourceChip source={VAULT_DATA_SOURCE} />
       </div>
 
       {error && (
@@ -495,7 +501,7 @@ export function ToolingVaultTab(): ReactElement {
                   type="number"
                   step="0.01"
                   value={precioUnitario}
-                  onChange={(e) => setPrecioUnitario(Number(e.target.value))}
+                  onChange={(e) => setPrecioUnitario(parseInputNumber(e.target.value, precioUnitario))}
                   className="h-8 border-2 border-line bg-surface-2 font-bold text-accent"
                 />
               </div>

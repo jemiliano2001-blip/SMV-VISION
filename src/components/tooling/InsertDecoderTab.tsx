@@ -210,7 +210,7 @@ export function InsertDecoderTab(): ReactElement {
               Portaherramientas y Lamas Compatibles para Torno Haas ST:
             </h4>
             <div className="space-y-1.5">
-              {decodedGroove.compatibleHolders.map((holder, idx) => (
+              {(decodedGroove.compatibleHolders ?? []).map((holder, idx) => (
                 <div key={idx} className="flex items-center justify-between bg-surface-2 border border-line px-3 py-2 text-xs font-mono">
                   <span className="text-ink font-bold">{holder}</span>
                   <a
@@ -242,6 +242,10 @@ export function InsertDecoderTab(): ReactElement {
               points={decodedIso.svgPoints}
               size={180}
               hasHole={decodedIso.fixing.hole}
+              clearanceAngleDegrees={decodedIso.clearance.angleDegrees}
+              clearanceType={decodedIso.clearance.type}
+              noseRadiusMm={decodedIso.noseRadius.radiusMm}
+              noseRadiusIsEstimate={decodedIso.noseRadius.isEstimate}
             />
 
             <div className="border-t-2 border-line pt-3 w-full space-y-2 text-left text-xs font-mono">
@@ -341,7 +345,7 @@ export function InsertDecoderTab(): ReactElement {
                   Portaherramientas Compatibles para Torno Haas:
                 </h4>
                 <div className="space-y-1.5">
-                  {decodedIso.compatibleHolders.map((holder, idx) => (
+                  {(decodedIso.compatibleHolders ?? []).map((holder, idx) => (
                     <div key={idx} className="flex items-center justify-between bg-surface-2 border border-line px-3 py-2 text-xs font-mono">
                       <span className="text-ink font-bold">{holder}</span>
                       <a

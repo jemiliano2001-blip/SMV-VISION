@@ -7,8 +7,10 @@ import {
   Wrench,
 } from 'lucide-react';
 import type { IsoMaterialGroup, EndmillTipGeometry } from '../../lib/tooling/types';
-import { ENDMILL_RECOMMENDATIONS, TIP_GEOMETRY_GUIDE } from '../../lib/tooling/endmillGuide';
+import { ENDMILL_RECOMMENDATIONS, TIP_GEOMETRY_GUIDE, ENDMILL_GUIDE_SOURCE } from '../../lib/tooling/endmillGuide';
 import { getSupplierSearchUrl } from '../../lib/tooling/toolingSuppliers';
+import { DataSourceChip } from './DataSourceChip';
+import { EndmillTipSvg } from './visuals/EndmillTipSvg';
 
 export function EndmillAdvisorTab(): ReactElement {
   const [selectedGroup, setSelectedGroup] = useState<IsoMaterialGroup>('P');
@@ -34,6 +36,8 @@ export function EndmillAdvisorTab(): ReactElement {
             Recomendaciones para centros de maquinado Haas VF y Mini Mill
           </span>
         </div>
+
+        <DataSourceChip source={ENDMILL_GUIDE_SOURCE} />
 
         {/* Botones de Grupo ISO */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
@@ -230,9 +234,12 @@ export function EndmillAdvisorTab(): ReactElement {
             </div>
           </div>
 
-          <div className="border border-line bg-surface-2 p-3 text-xs font-mono">
-            <span className="text-ink-dim block text-[10px] uppercase">Detalle de {tipInfo.name}:</span>
-            <p className="text-ink text-[11px] mt-1">{tipInfo.description}</p>
+          <div className="border border-line bg-surface-2 p-3 text-xs font-mono flex gap-3 items-start">
+            <EndmillTipSvg geometry={selectedTip} size={72} className="shrink-0" />
+            <div>
+              <span className="text-ink-dim block text-[10px] uppercase">Detalle de {tipInfo.name}:</span>
+              <p className="text-ink text-[11px] mt-1">{tipInfo.description}</p>
+            </div>
           </div>
         </div>
       </div>

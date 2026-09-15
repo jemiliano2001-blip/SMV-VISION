@@ -16,6 +16,8 @@ npm run toolcrib:dedupe:execute  # Remove duplicate drawings (writes to Firestor
 npm run toolcrib:edrawings-iso   # ISO + CAD from CAD sources (eDrawings/SolidWorks) — see AGENTS.md
 npm run toolcrib:upload-stls     # Upload standalone exported STLs, match by identifier (not substring)
 npm run toolcrib:audit           # Read-only per-piece report: CAD/ISO/STL coverage in the catalog
+npm run toolcrib:restore-originals          # Restore original vector PDFs from TOOL CRIB (dry-run)
+npm run toolcrib:restore-originals:execute  # Restore original vector PDFs (writes to Storage & Firestore)
 npm test -- matching             # Run a single test file by name pattern
 ```
 

@@ -75,7 +75,7 @@ export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: 
       render?.cancel();
       if (loading) void loading.destroy().catch(() => {});
     };
-  }, [dataUrl, result, maskKey, stamp.soNumber, stamp.cantidad, stamp.fecha, stamp.notas, onReady]);
+  }, [dataUrl, result, maskKey, stamp.soNumber, stamp.cantidad, stamp.fecha, stamp.poNumber, stamp.notas, onReady]);
 
   const point = (event: PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();

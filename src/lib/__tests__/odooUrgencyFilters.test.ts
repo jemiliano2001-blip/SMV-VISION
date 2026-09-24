@@ -23,6 +23,7 @@ function makeMockOrder(overrides: Partial<OdooOrderView>): OdooOrderView {
     invoice_status: 'to invoice',
     state: 'sale',
     toInvoice: true,
+    deliveredQuote: null,
     order_lines: [],
     deliveries: [],
     syncedAtUTC: null,

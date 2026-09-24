@@ -132,6 +132,8 @@ interface SaleOrder {
   notes_text: string;
   invoice_status: string;
   state: string;
+  /** Cotización sin confirmar con remisión entregada ("Entregas sin OC"). */
+  delivered_quote: boolean;
   order_lines: OrderLine[];
   deliveries: Picking[];
 }
@@ -366,6 +368,14 @@ const SALE_ORDER_FIELDS = [
   "partida",
 ];
 
+/** Cotización (borrador/enviada) con al menos una remisión ya entregada. */
+const DELIVERED_QUOTE_DOMAIN = [
+  ["state", "in", ["draft", "sent"]],
+  ["picking_ids.state", "=", "done"],
+];
+/** Tope defensivo: las más recientes primero. */
+const DELIVERED_QUOTES_MAX = 500;
+
 /** Tope de la nota guardada en Firestore (evita documentos gigantes). */
 const NOTES_MAX_CHARS = 2000;
 
@@ -411,6 +421,34 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
     [[domain], { fields, limit: 0, order: "date_order desc" }],
   );
 
+  // Cotizaciones (sin confirmar) con remisión ya entregada: alimentan el panel
+  // "Entregas sin OC". Odoo no las marca "a facturar", así que la consulta de
+  // arriba nunca las trae. Si esta falla, el sync principal sigue.
+  const deliveredQuoteIds = new Set<number>();
+  if (!hasMeta || "picking_ids" in meta) {
+    try {
+      const quoteRows = await executeKw<OdooRow[]>(
+        odoo,
+        "sale.order",
+        "search_read",
+        [[DELIVERED_QUOTE_DOMAIN], {
+          fields,
+          limit: DELIVERED_QUOTES_MAX,
+          order: "date_order desc",
+        }],
+      );
+      const seen = new Set(rows.map((r) => numOf(r["id"])));
+      for (const row of quoteRows) {
+        const id = numOf(row["id"]);
+        deliveredQuoteIds.add(id);
+        if (!seen.has(id)) rows.push(row);
+      }
+      logger.info(`[sync] cotizaciones con entrega sin confirmar: ${quoteRows.length}`);
+    } catch (e) {
+      logger.warn("[sync] no se pudieron leer las cotizaciones con entrega", e);
+    }
+  }
+
   let poFromNote = 0;
   let poConflicts = 0;
   const orders = rows.map((row): SaleOrder => {
@@ -452,6 +490,7 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
       notes_text: notesText,
       invoice_status: strOf(row["invoice_status"]) || "no",
       state: strOf(row["state"]) || "unknown",
+      delivered_quote: deliveredQuoteIds.has(numOf(row["id"])),
       order_lines: [],
       deliveries: [],
     };
@@ -659,6 +698,28 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
     await batch.commit();
   }
 
+  // 1b. Cotizaciones que ya no están "entregadas sin OC" (se confirmaron o se
+  //     cancelaron): bajar la bandera para que salgan del panel. Si se
+  //     confirmaron, el paso 2 igual las reescribe con su estado nuevo.
+  const quoteDocIds = new Set(
+    orders.filter((o) => o.delivered_quote).map((o) => o.name.replace(/\//g, "_")),
+  );
+  const existingQuoteDocs = await db
+    .collection(ODOO_COLLECTION)
+    .where("deliveredQuote", "==", true)
+    .get();
+  const staleQuotes = existingQuoteDocs.docs.filter((d) => !quoteDocIds.has(d.id));
+  for (let i = 0; i < staleQuotes.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    for (const doc of staleQuotes.slice(i, i + BATCH_SIZE)) {
+      batch.update(doc.ref, {
+        deliveredQuote: false,
+        updatedAtUTC: FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+
   // 2. Guardar o actualizar las órdenes activas
   let written = 0;
   for (let i = 0; i < orders.length; i += BATCH_SIZE) {
@@ -688,6 +749,7 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
         invoice_status: order.invoice_status,
         state: order.state,
         toInvoice: isActiveOrder,
+        deliveredQuote: order.delivered_quote,
         order_lines: order.order_lines.map((l) => {
           const productDisplay = isServiceLine(l.product) ?
             l.description || l.product :
@@ -985,9 +1047,12 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
   await connectOdoo(odoo);
   logger.info("✅ Conexión a Odoo exitosa.");
 
-  // 1. Encabezados de órdenes pendientes de factura (todas las compañías).
+  // 1. Encabezados de órdenes pendientes de factura (todas las compañías),
+  //    más las cotizaciones con entrega sin confirmar ("Entregas sin OC").
   const orders = await fetchSaleOrders(odoo);
-  logger.info(`🔍 ${orders.length} órdenes pendientes de factura encontradas.`);
+  // El contador de la UI ("N ÓRDENES") sigue siendo solo las pendientes de factura.
+  const toInvoiceCount = orders.filter((o) => !o.delivered_quote).length;
+  logger.info(`🔍 ${toInvoiceCount} órdenes pendientes de factura encontradas.`);
   if (orders.length === 0) {
     return {
       ordersProcessed: 0,
@@ -1035,7 +1100,7 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
     `archivadas: ${wo.archived}`,
   );
 
-  return { ordersProcessed: orders.length, headersWritten, partners, ...wo };
+  return { ordersProcessed: toInvoiceCount, headersWritten, partners, ...wo };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

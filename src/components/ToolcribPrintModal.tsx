@@ -24,6 +24,8 @@ export interface ToolcribPrintModalProps {
   initialSoNumber?: string;
   /** Prefill desde Órdenes Odoo (cantidad pendiente). */
   initialCantidad?: string;
+  /** Prefill desde Órdenes Odoo (PO del cliente). Si falta, se busca por SO al cargar Odoo. */
+  initialPoNumber?: string;
 }
 
 export function ToolcribPrintModal({
@@ -32,9 +34,11 @@ export function ToolcribPrintModal({
   onSuccess,
   initialSoNumber,
   initialCantidad,
+  initialPoNumber,
 }: ToolcribPrintModalProps) {
   const [soNumber, setSoNumber] = useState('');
   const [cantidad, setCantidad] = useState('');
+  const [poNumber, setPoNumber] = useState('');
   const [notas, setNotas] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +65,7 @@ export function ToolcribPrintModal({
     if (drawing) {
       setSoNumber(initialSoNumber?.trim() ?? '');
       setCantidad(initialCantidad?.trim() ?? '');
+      setPoNumber(initialPoNumber?.trim() ?? '');
       setNotas('');
       setError(null);
       setIsLoadingOrders(true);
@@ -68,6 +73,10 @@ export function ToolcribPrintModal({
         .then((res) => {
           if (!cancelled && res.ok) {
             setOdooOrders(res.value);
+            // Llegó con SO pero sin PO: la tomamos de la orden de Odoo.
+            const so = initialSoNumber?.trim();
+            const po = so ? res.value.find((o) => o.name === so)?.client_order_ref : null;
+            if (po && !initialPoNumber?.trim()) setPoNumber((prev) => prev || po);
           }
         })
         .finally(() => {
@@ -76,13 +85,14 @@ export function ToolcribPrintModal({
     } else {
       setSoNumber('');
       setCantidad('');
+      setPoNumber('');
       setNotas('');
       setOdooOrders([]);
       setMatchingOrders([]);
       setError(null);
     }
     return () => { cancelled = true; generation.current += 1; };
-  }, [drawing, initialSoNumber, initialCantidad]);
+  }, [drawing, initialSoNumber, initialCantidad, initialPoNumber]);
 
   useEffect(() => {
     if (drawing && odooOrders.length > 0) {
@@ -153,6 +163,7 @@ export function ToolcribPrintModal({
         setPreview({ dataUrl, stamp: {
           soNumber: soNumber.trim() || 'N/A',
           cantidad: cantidad.trim(),
+          poNumber: poNumber.trim(),
           fecha,
           notas: notas.trim(),
         } });
@@ -166,6 +177,7 @@ export function ToolcribPrintModal({
       const submittedSoNumber = soNumber.trim() || null;
       setSoNumber('');
       setCantidad('');
+      setPoNumber('');
       setNotas('');
       onSuccess({ soNumber: submittedSoNumber });
       onClose();
@@ -237,11 +249,12 @@ export function ToolcribPrintModal({
                     onClick={() => {
                       setSoNumber(match.order.name);
                       setCantidad(match.qty.toString());
+                      setPoNumber(match.order.client_order_ref ?? '');
                     }}
                     disabled={isProcessing}
                     className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider border-2 border-line bg-surface text-ink hover:border-accent hover:text-accent transition-colors"
                   >
-                    {match.order.name} ({match.qty} pzs)
+                    {match.order.name}{match.order.client_order_ref ? ` · PO ${match.order.client_order_ref}` : ''} ({match.qty} pzs)
                   </button>
                 ))}
               </div>
@@ -264,6 +277,21 @@ export function ToolcribPrintModal({
               value={soNumber}
               onChange={(e) => setSoNumber(e.target.value)}
               placeholder="Ej. 2026/S00781"
+              disabled={isProcessing}
+              className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="print-po-number" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+              Orden de Compra del cliente (PO)
+            </label>
+            <Input
+              id="print-po-number"
+              aria-label="Orden de Compra del cliente (PO)"
+              value={poNumber}
+              onChange={(e) => setPoNumber(e.target.value)}
+              placeholder="Se llena desde Odoo · vacío = sin PO"
               disabled={isProcessing}
               className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />

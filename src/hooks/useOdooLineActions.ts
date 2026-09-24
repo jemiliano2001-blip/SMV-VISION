@@ -21,6 +21,7 @@ export function useOdooLineActions({
   const [printDrawing, setPrintDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [printSoNumber, setPrintSoNumber] = useState('');
   const [printCantidad, setPrintCantidad] = useState('');
+  const [printPoNumber, setPrintPoNumber] = useState('');
   const [lineBusyKey, setLineBusyKey] = useState<string | null>(null);
   const [lineActionError, setLineActionError] = useState<string | null>(null);
   const [sendingKey, setSendingKey] = useState<string | null>(null);
@@ -100,6 +101,7 @@ export function useOdooLineActions({
 
       setPrintSoNumber(order.name);
       setPrintCantidad(String(line.qty_pending));
+      setPrintPoNumber(order.client_order_ref ?? '');
       setPrintDrawing(cadView);
       setLineBusyKey(null);
     },
@@ -208,6 +210,7 @@ export function useOdooLineActions({
     setPrintDrawing,
     printSoNumber,
     printCantidad,
+    printPoNumber,
     ensureCatalogViews,
     resolveLineLink,
     handlePrintLinePlano,

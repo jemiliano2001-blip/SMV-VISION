@@ -5,7 +5,7 @@
  * Extraído de OdooOrdersPanel para mantener separación limpia de responsabilidades (SRP).
  */
 
-import type { OdooOrderView, ProductionStatus } from './firebase/odooOrders';
+import { orderRequester, type OdooOrderView, type ProductionStatus } from './firebase/odooOrders';
 
 /**
  * Genera y descarga el PDF de vista previa de remisión para una orden de Odoo.
@@ -56,7 +56,7 @@ export async function exportDeliverySlip(order: OdooOrderView): Promise<void> {
   doc.setFont('helvetica', 'bold');
   doc.text('REQUISITOR:', pageW / 2 + 10, 130);
   doc.setFont('helvetica', 'normal');
-  doc.text(order.requisitor || 'Sin asignar', pageW / 2 + 90, 130);
+  doc.text(orderRequester(order) || 'Sin asignar', pageW / 2 + 90, 130);
 
   // Table
   const y = 200;
@@ -161,7 +161,7 @@ export async function exportOdooOrdersReportPdf(
     doc.setFontSize(7.5);
     doc.setTextColor(180, 220, 255);
     doc.text(
-      `PO: ${order.client_order_ref || 'N/A'}   REQ: ${order.requisitor || 'Sin asignar'}   FECHA: ${order.date_order?.split(' ')[0] ?? '—'}   PROD: ${statusLabel}`,
+      `PO: ${order.client_order_ref || 'N/A'}   REQ: ${orderRequester(order) || 'Sin asignar'}   FECHA: ${order.date_order?.split(' ')[0] ?? '—'}   PROD: ${statusLabel}`,
       130,
       y + 13,
     );

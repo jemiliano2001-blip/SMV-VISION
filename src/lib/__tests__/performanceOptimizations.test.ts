@@ -60,6 +60,7 @@ describe('Performance & Pure Resolution in Order-Drawing Matching', () => {
     invoice_status: 'to invoice',
     state: 'sale',
     toInvoice: true,
+    deliveredQuote: null,
     order_lines: [
       {
         product: '[90-1012-05] HEX SWAGE BLOCK',

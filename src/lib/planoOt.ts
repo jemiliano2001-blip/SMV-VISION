@@ -10,6 +10,8 @@ export interface PlanoOtStamp {
   soNumber: string;
   cantidad: string;
   fecha: string;
+  /** PO del cliente; se omite del sello si viene vacía. */
+  poNumber?: string;
   notas?: string;
   quantityMask?: PlanoOtMask | null;
 }
@@ -53,6 +55,13 @@ function oneLine(value: string): string {
   return (value ?? '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** Renglón secundario del sello: fecha y, si la hay, la PO del cliente. */
+export function stampDetailLine(stamp: Pick<PlanoOtStamp, 'fecha' | 'poNumber'>): string {
+  const po = oneLine(stamp.poNumber ?? '');
+  const fecha = `FECHA: ${oneLine(stamp.fecha) || '—'}`;
+  return po ? `${fecha}     PO: ${po}` : fecha;
+}
+
 /**
  * Toma el dataURL de un PDF y devuelve los bytes del PDF sellado en la página 1.
  */
@@ -94,7 +103,7 @@ export async function stampPlanoOt(
   const rows = wrapStampText(primary, t => font.widthOfTextAtSize(t, largeSize), usableWidth)
     .map(text => ({ text, size: largeSize, notes: false }));
   for (const [text, notes] of [
-    [`FECHA: ${oneLine(stamp.fecha) || '—'}`, false],
+    [stampDetailLine(stamp), false],
     ...(oneLine(stamp.notas) ? [[`NOTAS: ${oneLine(stamp.notas)}`, true]] : []),
   ] as [string, boolean][]) {
     rows.push(...wrapStampText(text, t => font.widthOfTextAtSize(t, detailSize), usableWidth)

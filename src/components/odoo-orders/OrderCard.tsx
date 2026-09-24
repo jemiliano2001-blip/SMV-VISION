@@ -21,10 +21,13 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table';
-import type {
-  OdooOrderView,
-  OdooOrderLineView,
-  ProductionStatus,
+import {
+  isRequesterFromNotes,
+  odooDatetimeToLocalDate,
+  orderRequester,
+  type OdooOrderView,
+  type OdooOrderLineView,
+  type ProductionStatus,
 } from '../../lib/firebase/odooOrders';
 import type { OrderDrawingLink } from '../../types';
 import type { UseOrderDrawingBridgeResult } from '../../hooks/useOrderDrawingBridge';
@@ -98,17 +101,25 @@ export const OrderCard = memo(function OrderCard({
             <span className="bg-accent text-bg px-2 py-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-widest">
               {order.partner}
             </span>
-            {order.requisitor && (
-              <span className="bg-surface-2 text-ink border border-line/40 px-2 py-0.5 text-[9px] sm:text-[10px] font-mono font-bold flex items-center gap-1 uppercase tracking-wide">
+            {orderRequester(order) && (
+              <span
+                className="bg-surface-2 text-ink border border-line/40 px-2 py-0.5 text-[9px] sm:text-[10px] font-mono font-bold flex items-center gap-1 uppercase tracking-wide"
+                title={isRequesterFromNotes(order) ? 'Tomado de las notas de Odoo (el campo Requisitor está vacío)' : undefined}
+              >
                 <User size={11} className="text-accent" />
-                {order.requisitor}
+                {orderRequester(order)}
+                {isRequesterFromNotes(order) && <span className="opacity-60 normal-case">· notas</span>}
               </span>
             )}
           </div>
           <div className="flex items-center gap-3 sm:gap-4 mt-1 font-mono text-[9px] sm:text-[10px] uppercase tracking-widest flex-wrap">
             {order.client_order_ref ? (
-              <span className="bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 px-1.5 py-0.5 font-bold">
+              <span
+                className="bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 px-1.5 py-0.5 font-bold"
+                title={order.poSource === 'note' ? 'Tomada de la nota de Odoo: el campo "Orden de compra" está vacío' : undefined}
+              >
                 PO: {order.client_order_ref}
+                {order.poSource === 'note' && <span className="opacity-70 normal-case"> · nota</span>}
               </span>
             ) : (
               <span className="opacity-60">PO: N/A</span>
@@ -117,6 +128,11 @@ export const OrderCard = memo(function OrderCard({
               <span className="opacity-80">
                 FECHA: {order.date_order.split(' ')[0]}
                 {ageDays !== null && ` (${formatAgeDays(ageDays)})`}
+              </span>
+            )}
+            {order.commitment_date && (
+              <span className="opacity-80" title="Fecha de entrega prometida en Odoo">
+                ENTREGA: {odooDatetimeToLocalDate(order.commitment_date) ?? order.commitment_date}
               </span>
             )}
           </div>

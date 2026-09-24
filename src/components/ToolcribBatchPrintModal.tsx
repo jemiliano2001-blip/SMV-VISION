@@ -44,6 +44,7 @@ export function ToolcribBatchPrintModal({
   onSuccess,
 }: ToolcribBatchPrintModalProps) {
   const [soNumber, setSoNumber] = useState('');
+  const [poNumber, setPoNumber] = useState('');
   const [notas, setNotas] = useState('');
   const [cantidades, setCantidades] = useState<Record<string, string>>({});
   const [isProcessing, setIsProcessing] = useState(false);
@@ -55,6 +56,7 @@ export function ToolcribBatchPrintModal({
   useEffect(() => {
     if (drawings) {
       setSoNumber('');
+      setPoNumber('');
       setNotas('');
       setCantidades(Object.fromEntries(drawings.map((d) => [d.drawingId, '1'])));
       setError(null);
@@ -86,6 +88,7 @@ export function ToolcribBatchPrintModal({
           stamp: {
             soNumber: soNumber.trim() || 'N/A',
             cantidad: cantidades[drawing.drawingId]?.trim() || '1',
+            poNumber: poNumber.trim(),
             fecha,
             notas: notas.trim(),
           },
@@ -170,6 +173,19 @@ export function ToolcribBatchPrintModal({
                 />
               </div>
               <div>
+                <label htmlFor="batch-print-po-number" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
+                  Orden de Compra (PO)
+                </label>
+                <Input
+                  id="batch-print-po-number"
+                  value={poNumber}
+                  onChange={(e) => setPoNumber(e.target.value)}
+                  placeholder="Opcional"
+                  disabled={isProcessing}
+                  className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
+                />
+              </div>
+              <div className="col-span-2">
                 <label htmlFor="batch-print-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
                   Notas (todas las hojas)
                 </label>

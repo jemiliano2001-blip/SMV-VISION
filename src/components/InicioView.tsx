@@ -25,7 +25,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-import { listEntregasSinOC, listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
+import { listEntregasSinOC, listOrdersToInvoice, orderRequester, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { formatRelativeTime, getOrderAgeDays } from '../lib/age';
 import { useSyncMeta } from '../hooks/useSyncMeta';
@@ -192,7 +192,7 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
   const requisitorChartData = useMemo<BarChartEntry[]>(() => {
     const counts = new Map<string, number>();
     for (const o of orders) {
-      const req = o.requisitor?.trim() || 'Sin requisitor';
+      const req = orderRequester(o) || 'Sin requisitor';
       const pieces = (o.order_lines ?? []).reduce(
         (sum, l) => sum + (Number.isFinite(l.qty_pending) && l.qty_pending > 0 ? l.qty_pending : 0),
         0,

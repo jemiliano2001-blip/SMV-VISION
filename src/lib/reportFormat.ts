@@ -33,6 +33,26 @@ export function cleanPieceName(pieza: string): string {
   return stripped.length > 0 ? stripped : pieza.trim();
 }
 
+/** POs de una orden como lista (el hot stamp consolidado trae una por línea). */
+function poLines(poNumber?: string): string[] {
+  return (poNumber ?? '').split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Celda "SO / PO" del reporte: las SO tal cual (una por línea) y debajo las
+ * PO del cliente con prefijo "PO". Sin PO, solo la SO.
+ */
+export function formatOrdenPoCell(order: Pick<Order, 'orden' | 'poNumber'>): string {
+  const pos = poLines(order.poNumber).map((po) => `PO ${po}`);
+  return [order.orden, ...pos].join('\n');
+}
+
+/** PO(s) en una sola línea para tarjetas y encabezados; 'S/N' si no hay. */
+export function formatPoLabel(poNumber?: string): string {
+  const pos = poLines(poNumber);
+  return pos.length > 0 ? pos.join(' / ') : 'S/N';
+}
+
 /**
  * Agrega el número de parte al nombre mostrado si no está ya contenido en él.
  * Sin esto, piezas distintas con descripción genérica ("Fabricación de pieza",

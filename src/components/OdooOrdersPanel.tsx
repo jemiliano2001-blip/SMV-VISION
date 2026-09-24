@@ -35,7 +35,7 @@ import type { UseOrderDrawingBridgeResult } from '../hooks/useOrderDrawingBridge
 import { makeOrderDrawingLinkKey, parseOdooLineLabels } from '../lib/orderDrawingBridge';
 import { useOdooLineActions } from '../hooks/useOdooLineActions';
 import { useBatchPrintOts } from '../hooks/useBatchPrintOts';
-import { useOdooOrdersFilters } from '../hooks/useOdooOrdersFilters';
+import { requesterKey, useOdooOrdersFilters } from '../hooks/useOdooOrdersFilters';
 import { OrderCard } from './odoo-orders/OrderCard';
 import { formatRelativeTime } from '../lib/age';
 import { log } from '../lib/log';
@@ -517,7 +517,7 @@ export function OdooOrdersPanel({
                 <option value="ALL">TODOS ({filters.searchMatchedOrders.length})</option>
                 {filters.uniqueRequisitores.map((req) => {
                   const count = filters.searchMatchedOrders.filter(
-                    (o) => (o.requisitor || 'Sin Requisitor') === req,
+                    (o) => requesterKey(o) === req,
                   ).length;
                   return (
                     <option key={req} value={req}>
@@ -800,6 +800,7 @@ export function OdooOrdersPanel({
         drawing={lineActions.printDrawing}
         initialSoNumber={lineActions.printSoNumber}
         initialCantidad={lineActions.printCantidad}
+        initialPoNumber={lineActions.printPoNumber}
         onClose={() => {
           lineActions.setPrintDrawing(null);
         }}

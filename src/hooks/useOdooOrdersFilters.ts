@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useState } from 'react';
-import type { OdooOrderView } from '../lib/firebase/odooOrders';
+import { orderRequester, type OdooOrderView } from '../lib/firebase/odooOrders';
 import { getOrderAgeDays } from '../lib/age';
 
 export type UrgencyFilter = 'ALL' | 'OVERDUE' | 'CRITICAL' | 'NORMAL' | 'MISSING_DRAWING';
@@ -21,6 +21,11 @@ export function getOrderUrgencyCategory(
   return 'NORMAL';
 }
 
+/** Llave de agrupación/filtro por ingeniero (requisitor o inferido de las notas). */
+export function requesterKey(order: OdooOrderView): string {
+  return orderRequester(order) || 'Sin Requisitor';
+}
+
 export function useOdooOrdersFilters({
   orders,
   isOrderMissingDrawing,
@@ -36,7 +41,7 @@ export function useOdooOrdersFilters({
   const uniqueRequisitores = useMemo(() => {
     const set = new Set<string>();
     for (const o of orders) {
-      set.add(o.requisitor || 'Sin Requisitor');
+      set.add(requesterKey(o));
     }
     return Array.from(set).sort();
   }, [orders]);
@@ -49,7 +54,8 @@ export function useOdooOrdersFilters({
       const nameMatch = o.name.toLowerCase().includes(term);
       const poMatch = (o.client_order_ref || '').toLowerCase().includes(term);
       const partnerMatch = o.partner.toLowerCase().includes(term);
-      const reqMatch = (o.requisitor || '').toLowerCase().includes(term);
+      const reqMatch = [o.requisitor, o.engineer, o.descripcion, o.notes_text]
+        .some((v) => (v || '').toLowerCase().includes(term));
       const lineMatch = (o.order_lines ?? []).some(
         (l) =>
           (l.product || '').toLowerCase().includes(term) ||
@@ -90,7 +96,7 @@ export function useOdooOrdersFilters({
   const filteredOrders = useMemo(() => {
     return searchMatchedOrders.filter((o) => {
       if (selectedRequisitor !== 'ALL') {
-        if ((o.requisitor || 'Sin Requisitor') !== selectedRequisitor) return false;
+        if (requesterKey(o) !== selectedRequisitor) return false;
       }
 
       if (urgencyFilter === 'OVERDUE') {
@@ -114,7 +120,7 @@ export function useOdooOrdersFilters({
   const groupedByRequisitor = useMemo(() => {
     const groups = new Map<string, OdooOrderView[]>();
     for (const order of filteredOrders) {
-      const reqKey = order.requisitor || 'Sin Requisitor';
+      const reqKey = requesterKey(order);
       if (!groups.has(reqKey)) {
         groups.set(reqKey, []);
       }

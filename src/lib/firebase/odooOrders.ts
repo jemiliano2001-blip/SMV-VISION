@@ -111,6 +111,11 @@ export interface OdooOrderView {
   state: string;
   /** true si la orden está pendiente de facturación (to invoice). */
   toInvoice: boolean;
+  /**
+   * Cotización sin confirmar con remisión entregada, según la última sync.
+   * false = ya se confirmó o canceló; null = doc de antes de que existiera el campo.
+   */
+  deliveredQuote: boolean | null;
   /** Líneas de la orden con producto, descripción y cantidad. */
   order_lines: OdooOrderLineView[];
   /** Entregas (remisiones / stock.picking) asociadas a esta orden. */
@@ -149,6 +154,33 @@ function db(): Firestore | null {
 
 function isAuthed(): boolean {
   return getCurrentUserUid() !== null || isToolcribDebugUnauthAllowed();
+}
+
+/**
+ * Quién pidió la orden, para mostrar y agrupar: el ingeniero resuelto por la
+ * sync (requisitor normalizado, o sacado de las notas) y, en documentos
+ * sincronizados antes de que existiera `engineer`, el requisitor crudo.
+ */
+export function orderRequester(order: Pick<OdooOrderView, 'engineer' | 'requisitor'>): string | null {
+  return order.engineer ?? order.requisitor;
+}
+
+/** True si el ingeniero se infirió de las notas (no viene del campo Requisitor). */
+export function isRequesterFromNotes(order: Pick<OdooOrderView, 'engineerSource'>): boolean {
+  return order.engineerSource === 'note' || order.engineerSource === 'line_note';
+}
+
+/**
+ * Datetime de Odoo ("YYYY-MM-DD HH:mm:ss", siempre UTC) → "YYYY-MM-DD" en la
+ * zona local. Cortar el texto daría el día siguiente para horas después de
+ * las 18:00 en México. Null si no se puede leer.
+ */
+export function odooDatetimeToLocalDate(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(`${value.trim().replace(' ', 'T')}Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 const PO_SOURCES: readonly OdooPoSource[] = ['custom_field', 'origin', 'client_order_ref', 'note'];
@@ -219,6 +251,7 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
     invoice_status: typeof raw['invoice_status'] === 'string' ? raw['invoice_status'] : 'no',
     state: typeof raw['state'] === 'string' ? raw['state'] : 'unknown',
     toInvoice: raw['toInvoice'] === true,
+    deliveredQuote: typeof raw['deliveredQuote'] === 'boolean' ? raw['deliveredQuote'] : null,
     order_lines,
     deliveries: Array.isArray(raw['deliveries']) ? (raw['deliveries'] as any[]) : [],
     syncedAtUTC,
@@ -325,6 +358,8 @@ export async function listEntregasSinOC(options?: {
     snap.forEach((d) => {
       const normalized = normalizeOdooOrder(d.id, d.data() as Record<string, unknown>);
       if (!normalized) return;
+      // La sync bajó la bandera: la cotización ya se confirmó o se canceló en Odoo.
+      if (normalized.deliveredQuote === false) return;
       
       // Solo órdenes de Suprajit (o Bulk Pack, etc., dependiendo del negocio)
       if (!normalized.partner.toUpperCase().includes('SUPRAJIT')) return;

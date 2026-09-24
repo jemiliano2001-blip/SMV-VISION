@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, degrees, rgb } from 'pdf-lib';
-import { createStampedPlanoOtBatch, isValidPlanoOtMask, stampPlanoOt, wrapStampText } from '../planoOt';
+import { createStampedPlanoOtBatch, isValidPlanoOtMask, stampDetailLine, stampPlanoOt, wrapStampText } from '../planoOt';
 
 const stamp = { soNumber: 'SO-18252', cantidad: '25', fecha: '2026-09-10 10:30' };
 async function fixture(rotation = 0, cropped = false) {
@@ -70,5 +70,20 @@ describe('OT de impresión', () => {
     const source = await fixture();
     const bytes = await createStampedPlanoOtBatch([{ pdfDataUrl: source, stamp }, { pdfDataUrl: source, stamp }]);
     expect((await PDFDocument.load(bytes)).getPageCount()).toBe(4);
+  });
+});
+
+describe('PO en el sello de la OT', () => {
+  it('agrega la PO junto a la fecha y la omite si viene vacía', () => {
+    expect(stampDetailLine({ fecha: '2026-09-24 10:00', poNumber: '00089314' }))
+      .toBe('FECHA: 2026-09-24 10:00     PO: 00089314');
+    expect(stampDetailLine({ fecha: '2026-09-24 10:00', poNumber: '  ' })).toBe('FECHA: 2026-09-24 10:00');
+    expect(stampDetailLine({ fecha: '' })).toBe('FECHA: —');
+  });
+
+  it('sella un plano con PO sin cambiar el número de páginas', async () => {
+    const bytes = await stampPlanoOt(await fixture(), { ...stamp, poNumber: '00089314' });
+    const out = await PDFDocument.load(bytes);
+    expect(out.getPageCount()).toBe(2);
   });
 });

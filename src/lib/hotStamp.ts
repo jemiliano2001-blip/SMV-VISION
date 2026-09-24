@@ -152,7 +152,9 @@ export function consolidateHotStamps(orders: Order[], refImage?: string): Order[
   const prioridad: Order['prioridad'] = hot.some((o) => o.prioridad === 'URGENTE')
     ? 'URGENTE'
     : 'Normal';
-  const poNumber = hot.find((o) => o.poNumber)?.poNumber;
+  // Varias SO → varias PO: se conservan todas (una por línea), no solo la primera.
+  const pos = [...new Set(hot.map((o) => o.poNumber?.trim()).filter((p): p is string => !!p))];
+  const poNumber = pos.length > 0 ? pos.join('\n') : undefined;
 
   const synthetic: Order = {
     pieza,

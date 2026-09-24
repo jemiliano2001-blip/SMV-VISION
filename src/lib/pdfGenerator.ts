@@ -20,6 +20,8 @@ import {
   dueDaysOrInfinity,
   withPartNumber,
   cleanPieceName,
+  formatOrdenPoCell,
+  formatPoLabel,
 } from './reportFormat';
 import { formatAgeDays, getOrderAgeDays } from './age';
 import { formatCajetinLine } from './reportViewMeta';
@@ -111,6 +113,7 @@ export async function generateSingleOrderPdf(order: Order): Promise<void> {
   const fields: [string, string][] = [
     ['CANTIDAD', order.cantidad.split(/[\r\n]+/)[0].trim()],
     ['SO / ORDEN', order.orden.replace(/\n/g, ' / ')],
+    ['P.O. CLIENTE', formatPoLabel(order.poNumber)],
     ['FECHA', order.fecha.replace(/\n/g, ' / ')],
     ['PLANO', order.sourcePdfName ?? '—'],
   ];
@@ -248,7 +251,7 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
     '',
     displayName(order),
     formatCantidadCell(order.cantidad),
-    order.orden,
+    formatOrdenPoCell(order),
     formatFechaCell(order.fecha),
     formatEntregaCell(order),
   ]);
@@ -257,7 +260,7 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
   const buildPendienteRows = (orders: Order[]): RowInput[] => orders.map((order) => [
     displayName(order),
     formatCantidadCell(order.cantidad),
-    order.orden,
+    formatOrdenPoCell(order),
     formatFechaCell(order.fecha),
     formatEntregaCell(order),
   ]);
@@ -313,7 +316,7 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
   if (sortedWithBlueprint.length > 0) {
     autoTable(doc, {
       startY: headerY + 40,
-      head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA', 'ENTREGA']],
+      head: [['DIBUJO', 'NOMBRE DE LA PIEZA', 'CANT.', 'SO / PO', 'FECHA', 'ENTREGA']],
       body: buildRows(sortedWithBlueprint),
       theme: 'grid',
       headStyles: sharedHeadStyles,
@@ -382,7 +385,7 @@ export async function generateReportPdf(orders: Order[], options?: ReportPdfOpti
     };
     autoTable(doc, {
       startY: sectionHeaderY + 20,
-      head: [['NOMBRE DE LA PIEZA', 'CANT.', 'SO', 'FECHA', 'ENTREGA']],
+      head: [['NOMBRE DE LA PIEZA', 'CANT.', 'SO / PO', 'FECHA', 'ENTREGA']],
       body: buildPendienteRows(sortedPendientes),
       theme: 'grid',
       headStyles: sharedHeadStyles,
@@ -515,7 +518,7 @@ export async function generateJobTravelersPdf(
     const metaCards = [
       { label: 'ORDEN (SO / OT)', value: ordenStr },
       { label: 'N° DE PARTE', value: order.numero_parte || 'VER PLANO' },
-      { label: 'P.O. / REQ', value: order.poNumber || 'S/N' },
+      { label: 'P.O. CLIENTE', value: formatPoLabel(order.poNumber) },
       { label: 'REVISIÓN PLANO', value: order.matchedDrawingRevision ? `REV ${order.matchedDrawingRevision}` : 'ORIGINAL' },
     ];
 

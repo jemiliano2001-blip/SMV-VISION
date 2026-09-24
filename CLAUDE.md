@@ -35,6 +35,8 @@ npx tsx scripts/toolcribBootstrap.ts --inventory=./inventory.json --credentials=
 
 **Odoo sync** — La Cloud Function V2 es la **única** ruta de sincronización. Fuente: `functions/src/index.ts`. Exporta `syncSuprajitOrders` (schedule cada 30 min) y `triggerOdooSync` (callable, requiere `request.auth`; la usa el botón REFRESCAR de `OdooOrdersPanel`). Ambas llaman a `runSync()`. Escribe `odooSaleOrders`, `workOrders` y `syncMeta/odoo`.
 
+**Campos de Odoo (confirmados en modo debug):** la PO del cliente vive en **`origin`** (la vista la etiqueta "Orden de compra"), NO en `client_order_ref` ("Referencia del cliente", casi siempre vacío). Custom char: `requisitor`, `supervisor`, `descripcion`, `partida`. `commitment_date` = "Fecha de entrega". `note` (html) = "Términos y condiciones", donde escriben el ingeniero (a veces como nombre suelto) y "Orden de compra: X". La lógica pura de resolución vive en `functions/src/odooFields.ts` (`resolvePo`: campo custom → origin → client_order_ref → nota; `resolveEngineer`: requisitor → nota → nota de línea), probada en `src/lib/__tests__/odooFields.test.ts`. En Firestore, `client_order_ref` guarda la PO **ya resuelta** (nombre conservado por compatibilidad) más `poSource` / `poConflict`.
+
 ## Environment variables
 
 Copy `.env.example` to `.env.local`. `VITE_FIREBASE_*` is required for anything to work end-to-end — Gemini calls go through the authenticated `analyzeGemini` Cloud Function (see below), so without Firebase configured the app loads but "Analizar" fails with "Firebase no está configurado". Their absence otherwise only disables the audit trail and Tool Crib library.

@@ -55,7 +55,14 @@ export interface OdooOrderLineView {
   qty_pending: number;
   /** Cantidad de piezas pendientes calculada desde stock.move (traslados). */
   qty_pending_from_pickings?: number;
+  /** "Nota de línea" de Odoo (texto plano); "" si no hay. */
+  note: string;
 }
+
+/** De dónde resolvió la sync la PO (ver functions/src/odooFields.ts → resolvePo). */
+export type OdooPoSource = 'custom_field' | 'origin' | 'client_order_ref' | 'note';
+/** De dónde salió el ingeniero: campo `requisitor`, nota del encabezado o nota de línea. */
+export type OdooEngineerSource = 'field' | 'note' | 'line_note';
 
 /**
  * Forma canónica de una orden de Odoo lista para la UI.
@@ -72,10 +79,26 @@ export interface OdooOrderView {
   partner: string;
   /** Partner normalizado (trim + uppercase) para filtros Firestore. */
   partnerKey: string;
-  /** Referencia del cliente / PO. Null si no tiene. */
+  /**
+   * PO del cliente ya resuelta por la sync (en Odoo vive en `origin`, "Orden de
+   * compra"; respaldo: `client_order_ref` y la nota). Null si no tiene.
+   */
   client_order_ref: string | null;
-  /** Requisitor o Ingeniero solicitante de la orden en Odoo. */
+  poSource: OdooPoSource | null;
+  /** PO escrita en la nota que NO coincide con la del campo (error de captura). */
+  poConflict: string | null;
+  /** Campo `requisitor` de Odoo tal cual. */
   requisitor: string | null;
+  /** Requisitor, o el ingeniero sacado de las notas si el campo viene vacío. */
+  engineer: string | null;
+  engineerSource: OdooEngineerSource | null;
+  supervisor: string | null;
+  descripcion: string | null;
+  partida: string | null;
+  /** Fecha de entrega prometida al cliente (`commitment_date`, "YYYY-MM-DD HH:mm:ss" UTC). */
+  commitment_date: string | null;
+  /** Nota de la orden ("Términos y condiciones") en texto plano. */
+  notes_text: string;
   /**
    * Estado de facturación en Odoo:
    *   'to invoice' → A facturar (pendiente)
@@ -128,6 +151,18 @@ function isAuthed(): boolean {
   return getCurrentUserUid() !== null || isToolcribDebugUnauthAllowed();
 }
 
+const PO_SOURCES: readonly OdooPoSource[] = ['custom_field', 'origin', 'client_order_ref', 'note'];
+const ENGINEER_SOURCES: readonly OdooEngineerSource[] = ['field', 'note', 'line_note'];
+
+/** String no vacío (trim) o null. */
+function optionalText(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+}
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[]): T | null {
+  return typeof v === 'string' && (allowed as readonly string[]).includes(v) ? (v as T) : null;
+}
+
 /** Normaliza un documento crudo de Firestore al tipo OdooOrderView. */
 function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrderView | null {
   if (typeof raw['name'] !== 'string') return null;
@@ -148,6 +183,7 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
         qty_delivered,
         qty_pending: qty_pending_from_pickings !== undefined ? qty_pending_from_pickings : Math.max(0, qty - qty_delivered),
         qty_pending_from_pickings,
+        note: typeof l['note'] === 'string' ? l['note'] : '',
       };
     });
 
@@ -170,7 +206,16 @@ function normalizeOdooOrder(id: string, raw: Record<string, unknown>): OdooOrder
             typeof raw['partner'] === 'string' ? raw['partner'] : 'Sin cliente',
           ),
     client_order_ref: typeof raw['client_order_ref'] === 'string' ? raw['client_order_ref'] : null,
-    requisitor: typeof raw['requisitor'] === 'string' && raw['requisitor'].trim() !== '' ? raw['requisitor'].trim() : null,
+    poSource: oneOf(raw['poSource'], PO_SOURCES),
+    poConflict: optionalText(raw['poConflict']),
+    requisitor: optionalText(raw['requisitor']),
+    engineer: optionalText(raw['engineer']),
+    engineerSource: oneOf(raw['engineerSource'], ENGINEER_SOURCES),
+    supervisor: optionalText(raw['supervisor']),
+    descripcion: optionalText(raw['descripcion']),
+    partida: optionalText(raw['partida']),
+    commitment_date: optionalText(raw['commitment_date']),
+    notes_text: typeof raw['notes_text'] === 'string' ? raw['notes_text'] : '',
     invoice_status: typeof raw['invoice_status'] === 'string' ? raw['invoice_status'] : 'no',
     state: typeof raw['state'] === 'string' ? raw['state'] : 'unknown',
     toInvoice: raw['toInvoice'] === true,

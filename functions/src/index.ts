@@ -38,6 +38,16 @@ import * as logger from "firebase-functions/logger";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue, type Firestore } from "firebase-admin/firestore";
 import Odoo = require("odoo-xmlrpc");
+import {
+  detectFieldsByLabel,
+  htmlToText,
+  odooText,
+  resolveEngineer,
+  resolvePo,
+  type EngineerSource,
+  type OdooFieldMeta,
+  type PoSource,
+} from "./odooFields";
 
 if (getApps().length === 0) {
   initializeApp();
@@ -96,6 +106,8 @@ interface OrderLine {
   qty: number;
   qty_delivered: number;
   qty_pending_from_pickings: number;
+  /** "Nota de línea" (campo custom detectado por etiqueta); "" si no hay. */
+  note: string;
 }
 
 interface SaleOrder {
@@ -103,8 +115,21 @@ interface SaleOrder {
   name: string;
   date_order: string | false;
   partner: string;
+  /** PO resuelta (ver resolvePo). Conserva el nombre por compatibilidad con la app. */
   client_order_ref: string | null;
+  po_source: PoSource | null;
+  po_conflict: string | null;
   requisitor: string | null;
+  /** Requisitor, o el ingeniero sacado de las notas si el campo viene vacío. */
+  engineer: string | null;
+  engineer_source: EngineerSource | null;
+  supervisor: string | null;
+  descripcion: string | null;
+  partida: string | null;
+  /** Fecha de entrega prometida al cliente (`commitment_date`). */
+  commitment_date: string | null;
+  /** `note` (Términos y condiciones) convertido de HTML a texto. */
+  notes_text: string;
   invoice_status: string;
   state: string;
   order_lines: OrderLine[];
@@ -298,70 +323,82 @@ function toError(err: unknown): Error {
 //  Consultas a Odoo
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
-  // 1. Detectar campos disponibles en sale.order para incluir campos personalizados de Orden de Compra / PO
-  let availableFields: Record<string, { string?: string; type?: string }> = {};
+/** Lee `fields_get` de un modelo; {} si falla (el sync sigue con campos por defecto). */
+async function fetchFieldsMeta(
+  odoo: OdooClient,
+  model: string,
+): Promise<Record<string, OdooFieldMeta>> {
   try {
-    availableFields = await executeKw<Record<string, { string?: string; type?: string }>>(
+    return await executeKw<Record<string, OdooFieldMeta>>(
       odoo,
-      "sale.order",
+      model,
       "fields_get",
       [[], { attributes: ["string", "type"] }],
     );
   } catch (e) {
-    logger.warn("[sync] fields_get en sale.order falló, usando campos por defecto", e);
+    logger.warn(`[sync] fields_get en ${model} falló, usando campos por defecto`, e);
+    return {};
   }
+}
 
-  const candidatePoFields = [
-    "client_order_ref",
-    "x_studio_orden_de_compra",
-    "x_orden_compra",
-    "x_orden_de_compra",
-    "orden_compra",
-    "x_studio_po",
-    "x_po",
-    "x_purchase_order",
-    "purchase_order",
-    "po_number",
-    "x_po_number",
-    "x_studio_oc",
-    "x_oc",
-    "oc",
-  ];
+/**
+ * Campos de sale.order que leemos. Nombres confirmados en el Odoo de SMV con
+ * modo debug (2026-09-24):
+ *   origin          → "Orden de compra" (la PO del cliente vive AQUÍ;
+ *                     client_order_ref = "Referencia del cliente", casi siempre vacío)
+ *   requisitor, supervisor, descripcion, partida → char custom
+ *   commitment_date → "Fecha de entrega"
+ *   note            → "Términos y condiciones" (html; ahí escriben ingeniero / OC)
+ */
+const SALE_ORDER_FIELDS = [
+  "name",
+  "date_order",
+  "partner_id",
+  "invoice_status",
+  "state",
+  "origin",
+  "client_order_ref",
+  "note",
+  "commitment_date",
+  "requisitor",
+  "supervisor",
+  "descripcion",
+  "partida",
+];
 
-  const detectedPoFields = new Set<string>();
-  const hasFieldsMeta = Object.keys(availableFields).length > 0;
-  for (const name of candidatePoFields) {
-    if (!hasFieldsMeta || name in availableFields) {
-      detectedPoFields.add(name);
+/** Tope de la nota guardada en Firestore (evita documentos gigantes). */
+const NOTES_MAX_CHARS = 2000;
+
+function datetimeOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
+  const meta = await fetchFieldsMeta(odoo, "sale.order");
+  const hasMeta = Object.keys(meta).length > 0;
+
+  // Si algún día crean en Studio un campo etiquetado "Orden de compra", tiene
+  // prioridad sobre origin. origin/client_order_ref se leen explícitamente.
+  const customPoFields = hasMeta ?
+    detectFieldsByLabel(meta, [
+      "orden de compra",
+      "orden compra",
+      "purchase order",
+      "orden de trabajo cliente",
+    ]).filter((f) => f !== "origin" && f !== "client_order_ref") :
+    [];
+
+  if (hasMeta) {
+    const missing = SALE_ORDER_FIELDS.filter((f) => !(f in meta));
+    if (missing.length > 0) {
+      logger.warn(`[sync] sale.order no tiene los campos: ${missing.join(", ")}`);
     }
   }
-  if (hasFieldsMeta) {
-    for (const [name, meta] of Object.entries(availableFields)) {
-      const label = (meta.string || "").toLowerCase();
-      if (
-        label.includes("orden de compra") ||
-        label.includes("orden compra") ||
-        label.includes("purchase order") ||
-        label.includes("orden de trabajo cliente")
-      ) {
-        detectedPoFields.add(name);
-      }
-    }
-  }
-
-  const baseFields = [
-    "name",
-    "date_order",
-    "partner_id",
-    "invoice_status",
-    "state",
-    "requisitor",
-  ];
-
-  const fields = hasFieldsMeta ?
-    Array.from(new Set([...baseFields.filter((f) => f in availableFields || !f.startsWith("x_")), ...detectedPoFields])) :
-    ["name", "date_order", "partner_id", "client_order_ref", "invoice_status", "state", "requisitor"];
+  // Un campo inexistente tumba el search_read completo: con metadatos pedimos
+  // solo los que existen; sin ellos, la lista confirmada.
+  const fields = hasMeta ?
+    [...SALE_ORDER_FIELDS.filter((f) => f in meta), ...customPoFields] :
+    SALE_ORDER_FIELDS;
 
   const domain = [
     ["invoice_status", "in", ["to invoice", "upselling"]],
@@ -374,44 +411,58 @@ async function fetchSaleOrders(odoo: OdooClient): Promise<SaleOrder[]> {
     [[domain], { fields, limit: 0, order: "date_order desc" }],
   );
 
-  return rows.map((row) => {
-    let poVal: string | null = null;
-    for (const f of detectedPoFields) {
-      const v = row[f];
-      if (typeof v === "string" && v.trim() !== "") {
-        poVal = v.trim();
-        break;
-      } else if (typeof v === "number") {
-        poVal = String(v);
-        break;
-      }
-    }
-
-    if (!poVal) {
-      const ref = row["client_order_ref"];
-      if (typeof ref === "string" && ref.trim() !== "") {
-        poVal = ref.trim();
-      } else if (typeof ref === "number") {
-        poVal = String(ref);
-      }
-    }
-
-    const req = row["requisitor"];
+  let poFromNote = 0;
+  let poConflicts = 0;
+  const orders = rows.map((row): SaleOrder => {
+    const name = strOf(row["name"]);
+    const notesText = htmlToText(odooText(row["note"])).slice(0, NOTES_MAX_CHARS);
+    const requisitor = odooText(row["requisitor"]) || null;
+    const po = resolvePo({
+      orderName: name,
+      customFieldValues: customPoFields.map((f) => odooText(row[f])),
+      origin: odooText(row["origin"]),
+      clientOrderRef: odooText(row["client_order_ref"]),
+      noteText: notesText,
+    });
+    if (po.source === "note") poFromNote++;
+    if (po.conflict) poConflicts++;
+    // Las notas de línea todavía no se leen aquí: runSync completa el
+    // ingeniero con ellas si el encabezado no trae nada.
+    const engineer = resolveEngineer({
+      fieldValues: requisitor ? [requisitor] : [],
+      noteText: notesText,
+    });
     return {
       id: numOf(row["id"]),
-      name: strOf(row["name"]),
+      name,
       date_order: typeof row["date_order"] === "string" ?
         row["date_order"] :
         false,
       partner: many2oneName(row["partner_id"]) || "Sin cliente",
-      client_order_ref: poVal,
-      requisitor: typeof req === "string" && req.trim() !== "" ? req.trim() : null,
+      client_order_ref: po.value,
+      po_source: po.source,
+      po_conflict: po.conflict,
+      requisitor,
+      engineer: engineer.value,
+      engineer_source: engineer.source,
+      supervisor: odooText(row["supervisor"]) || null,
+      descripcion: odooText(row["descripcion"]) || null,
+      partida: odooText(row["partida"]) || null,
+      commitment_date: datetimeOrNull(row["commitment_date"]),
+      notes_text: notesText,
       invoice_status: strOf(row["invoice_status"]) || "no",
       state: strOf(row["state"]) || "unknown",
       order_lines: [],
       deliveries: [],
     };
   });
+
+  const withPo = orders.filter((o) => o.client_order_ref).length;
+  logger.info(
+    `[sync] PO resuelta en ${withPo}/${orders.length} órdenes ` +
+    `(desde nota: ${poFromNote}, nota≠campo: ${poConflicts})`,
+  );
+  return orders;
 }
 
 async function fetchOrderLines(
@@ -420,6 +471,14 @@ async function fetchOrderLines(
 ): Promise<Map<number, OrderLine[]>> {
   const map = new Map<number, OrderLine[]>();
   if (orderIds.length === 0) return map;
+
+  // "Nota de línea" es un campo custom cuyo nombre técnico aún no confirmamos:
+  // se detecta por etiqueta. Si no aparece, las líneas quedan con note "".
+  const lineMeta = await fetchFieldsMeta(odoo, "sale.order.line");
+  const noteFields = detectFieldsByLabel(lineMeta, ["nota de linea", "nota linea"]);
+  logger.info(
+    `[sync] notas de línea: ${noteFields.length > 0 ? noteFields.join(", ") : "ningún campo detectado"}`,
+  );
 
   const CHUNK = 100;
   for (let i = 0; i < orderIds.length; i += CHUNK) {
@@ -431,6 +490,7 @@ async function fetchOrderLines(
       "name",
       "product_uom_qty",
       "qty_delivered",
+      ...noteFields,
     ];
     const rows = await executeKw<OdooRow[]>(
       odoo,
@@ -448,6 +508,13 @@ async function fetchOrderLines(
         qty: numOf(row["product_uom_qty"]),
         qty_delivered: numOf(row["qty_delivered"]),
         qty_pending_from_pickings: 0,
+        note: noteFields
+          .map((f) => {
+            const text = odooText(row[f]);
+            return lineMeta[f]?.type === "html" ? htmlToText(text) : text;
+          })
+          .filter(Boolean)
+          .join("\n"),
       };
       const arr = map.get(orderId);
       if (arr) arr.push(line);
@@ -608,7 +675,16 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
         partner: order.partner,
         partnerKey: normalizePartnerKey(order.partner),
         client_order_ref: order.client_order_ref,
+        poSource: order.po_source,
+        poConflict: order.po_conflict,
         requisitor: order.requisitor,
+        engineer: order.engineer,
+        engineerSource: order.engineer_source,
+        supervisor: order.supervisor,
+        descripcion: order.descripcion,
+        partida: order.partida,
+        commitment_date: order.commitment_date,
+        notes_text: order.notes_text,
         invoice_status: order.invoice_status,
         state: order.state,
         toInvoice: isActiveOrder,
@@ -623,6 +699,7 @@ async function upsertSaleOrders(db: Firestore, orders: SaleOrder[]): Promise<num
             qty: l.qty,
             qty_delivered: l.qty_delivered,
             qty_pending_from_pickings: l.qty_pending_from_pickings,
+            note: l.note,
           };
         }),
         deliveries: order.deliveries.map((d) => ({
@@ -778,6 +855,9 @@ async function upsertWorkOrders(
           id: existingId,
           payload: {
             cantidad: String(line.qty_pending_from_pickings),
+            // Corrige OTs creadas cuando la PO se leía del campo equivocado.
+            // Solo si Odoo trae PO: nunca borramos una que ya estaba.
+            ...(order.client_order_ref ? { poNumber: order.client_order_ref } : {}),
             odooSource: true,
             odooOrderId,
             updatedAtUTC: FieldValue.serverTimestamp(),
@@ -936,6 +1016,11 @@ export async function runSync(db: Firestore, cfg: OdooConfig): Promise<SyncResul
     order.order_lines = linesMap.get(order.id) ?? [];
     order.deliveries = pickingsMap.get(order.name) ?? [];
     computePendingQuantities(order);
+    if (!order.engineer) {
+      const fromLines = resolveEngineer({ lineNotes: order.order_lines.map((l) => l.note) });
+      order.engineer = fromLines.value;
+      order.engineer_source = fromLines.source;
+    }
   }
 
   // 4 + 5. Escribir encabezados y órdenes de trabajo.

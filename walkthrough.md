@@ -67,18 +67,70 @@
 - Las lecturas remotas fallaron en el entorno debug, por lo que no se verificaron datos reales, Gemini, escritura Firestore, impresión física ni producción.
 - Sin commit, push ni despliegue.
 
-# Auditor�a post-fase Herramental CNC (Fases 1�3) � 2026-09-11
+# Auditor�a post-fase Herramental CNC (Fases 1�3) � 2026-09-11
 
 - Null-safety: parseInputNumber en inputs de ThreadingAdvisorTab y precio de ToolingVaultTab (antes Number('') ? NaN / Infinity en TPI).
 - 	oolingValidators.num ahora usa Number.isFinite (rechaza Infinity/NaN).
-- B�squeda defensiva con `?? ''` en Blueprint Advisor y B�veda; arrays opcionales con `?? []` en holders/paquete de herramientas.
-- Cronograma G76: acceso seguro a infeedScheduleMm[i] / percent; TPI con piso anti divisi�n por cero.
-- Comentario incorrecto en ormatters.ts (estado can�nico) corregido.
-- UI: tablas de machuelos/b�veda ya ten�an overflow-x-auto; vault th/td = 7 columnas alineadas; sin print:hidden desalineado en tooling.
+- B�squeda defensiva con `?? ''` en Blueprint Advisor y B�veda; arrays opcionales con `?? []` en holders/paquete de herramientas.
+- Cronograma G76: acceso seguro a infeedScheduleMm[i] / percent; TPI con piso anti divisi�n por cero.
+- Comentario incorrecto en ormatters.ts (estado can�nico) corregido.
+- UI: tablas de machuelos/b�veda ya ten�an overflow-x-auto; vault th/td = 7 columnas alineadas; sin print:hidden desalineado en tooling.
 
-## Validaci�n
+## Validaci�n
 
 - `npm test`: 34 archivos, 358 pruebas aprobadas.
 - `npm run lint`: aprobado (tsc --noEmit).
 - `npm run build`: aprobado; advertencia conocida de chunks >800 kB.
 - Sin commit, push ni despliegue.
+
+# Encabezado Slim de OT y Ficha de Pizarrón (Auditoría Post-Fase) - 2026-09-28
+
+- **Encabezado Slim Ultra-Compacto**: Se redujo la altura del sello de OT en el plano de taller de ~135-150 pt a ~40-48 pt, recuperando la escala del dibujo técnico de ~78% al ~93%. Ofrece selector visual de estilo (slim vs classic) en modal individual y de lote.
+- **Ficha de Pizarrón (Viajera Media Carta x2)**: Generación de hoja complementaria con 2 tarjetas (Media Carta): Tarjeta 1 (Pizarrón / Kanban) y Tarjeta 2 (Viajera de Piso), miniatura vectorial del plano original (con máscara blanca si aplica), datos de impacto (SO, CANTIDAD, PO, CLIENTE) y tabla checklist con 6 procesos del taller con casillas y firmas.
+- **Soporte de Modos de Impresión**: oth (Ficha pizarrón pág 1 + Plano de taller pág 2), lueprint (solo plano slim) y oard_ticket (solo ficha pizarrón).
+- **Navegación Multi-Página en Preview**: PlanoOtPreview.tsx ahora incluye controles de paginación (← Ant / Sig →) con etiquetas semánticas para previsualizar todas las páginas generadas antes de imprimir.
+- **Null-Safety y Programación Defensiva (Auditoría)**:
+  - Sanitización WinAnsi (sanitizeWinAnsi): Reemplazo automático de comillas tipográficas (“ ”), apóstrofes curvados (‘ ’), guiones largos (—), viñetas (•), checks (✓) y emojis para evitar errores de codificación en pdf-lib al procesar notas libres o descripciones de Odoo.
+  - Sanitización de descargas (cleanFilename): Eliminación de plecas /, dos puntos :, comillas y caracteres ilegales en nombres de archivo descargables (plano-ot-2026-S01991.pdf).
+  - Arrays opcionales con order.order_lines ?? [] en useBatchPrintOts.ts y ToolcribPrintModal.tsx.
+  - Protección de notas excesivas: rechazo controlado si las notas encogen el plano por debajo de escala 0.85 o superan 300 caracteres en modo Slim.
+
+## Validación Técnica
+
+- npm test: 37 archivos, 392 pruebas aprobadas (100% de éxito, 18 pruebas en planoOt.test.ts).
+- npm run lint: Aprobado sin errores (tsc --noEmit, 0 errores).
+- npm run build: Compilación de producción limpia en 30.36s (Vite v6.4.3). Chunks divididos correctamente.
+- Sin commit, push ni despliegue.
+
+# Piezas en Par, Dos Hojas y Planos Complementarios de OT - 2026-09-28
+
+- **Módulo de Planos Complementarios (src/lib/companionDrawings.ts)**:
+  - Detección automática y precisa de piezas del taller que se venden en pares o requieren múltiples hojas de planos técnicos:
+    - 90-1012-06: Vinculación automática con Hoja 2 (90-1012-06-2).
+    - 90-1012-05: Detección de pares por mitad chica (1012-05-CHICO) y mitad grande (1012-05-GRANDE).
+    - 90-4150-06: Detección de pares de gavilanes (4150-06-CORTO / -A y 4150-06-LARGO / -B).
+    - 143272 (Navajas Artos): Detección de cuchillas complementarias en juegos de corte.
+  - Reglas heurísticas de normalización para piezas futuras basadas en sufijos de SolidWorks (-2, HOJA 2, _2, -A/-B, CHICO/GRANDE, CORTO/LARGO, COMPLEMENTO) y aislamiento de raíces de piezas.
+- **Tipado y Puente de Dibujos (src/types.ts, src/lib/orderDrawingBridge.ts)**:
+  - OrderDrawingLink extendido con companionDrawings?: OrderDrawingSnapshot[].
+  - Resolución determinista en esolveOrderDrawingLink y en asignación manual pplyManualDrawingToLink.
+  - Función utilitaria getAllCadDrawingSnapshotsForPrint(link) que recopila el plano CAD base junto con todos sus complementos ordenados.
+- **Generación Multi-Página de Sets de OT (src/lib/planoOt.ts)**:
+  - createStampedPlanoOtSet(items: PlanoOtSetItem[], baseStamp: PlanoOtStamp):
+    - Página 1: Ficha de pizarrón / viajera que indica el juego completo ([JUEGO X PLANOS: Incluye ...]), evitando duplicar fichas innecesarias para cada componente secundario.
+    - Páginas 2+: Planos técnicos individuales estampados con el encabezado Slim ultra-compacto, identificando el componente exacto (COMPONENTE: ...).
+  - openStampedPlanoOtSet: Descarga o visualización directa de juegos completos en una sola acción con nombres de archivo sanitizados.
+- **Interacción y Modal de Impresión (src/components/ToolcribPrintModal.tsx, src/components/PlanoOtPreview.tsx)**:
+  - Detección reactiva en el modal al seleccionar cualquier plano de Biblioteca u Órdenes: muestra banner informativo 📎 Juego de planos detectado (X hojas) y checkbox ☑ Imprimir juego completo (X hojas) (activo por defecto).
+  - Descarga y procesamiento concurrente protegido de los PDFs del juego completo.
+  - El visor PlanoOtPreview soporta navegación multi-hoja (← Ant / Sig →) visualizando tanto la ficha de pizarrón como cada plano del set.
+  - Botón principal de acción adaptativo: Imprimir Juego (X Planos) o Imprimir OT.
+- **Impresión por Lotes (src/hooks/useBatchPrintOts.ts)**:
+  - Integración transparente con getAllCadDrawingSnapshotsForPrint: las órdenes en lote que contengan complementos imprimen automáticamente todas sus hojas en secuencia con su respectivo sello.
+
+## Validación Técnica
+
+- npm test: 38 suites, 403 pruebas aprobadas (100% de éxito, 9 pruebas específicas en companionDrawings.test.ts, 19 en planoOt.test.ts).
+- npm run lint: Aprobado sin errores (tsc --noEmit, 0 errores).
+- npm run build: Compilación de producción limpia en 10.68s con Vite v6.4.3.
+- Sin commit, push ni despliegue a producción sin autorización.

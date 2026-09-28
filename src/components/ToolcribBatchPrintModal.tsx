@@ -22,7 +22,7 @@ import {
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
-import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
+import { openStampedPlanoOtBatch, type BatchPlanoOtItem, type PlanoOtPrintMode, type PlanoOtHeaderStyle } from '../lib/planoOt';
 import { log } from '../lib/log';
 import type { ToolcribActiveDrawingView } from '../types';
 
@@ -47,6 +47,8 @@ export function ToolcribBatchPrintModal({
   const [poNumber, setPoNumber] = useState('');
   const [notas, setNotas] = useState('');
   const [cantidades, setCantidades] = useState<Record<string, string>>({});
+  const [batchPrintMode, setBatchPrintMode] = useState<PlanoOtPrintMode>('both');
+  const [headerStyle, setHeaderStyle] = useState<PlanoOtHeaderStyle>('slim');
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +93,11 @@ export function ToolcribBatchPrintModal({
             poNumber: poNumber.trim(),
             fecha,
             notas: notas.trim(),
+            partNumber: drawing.partNumber,
+            customer: drawing.customer,
+            piezaDescripcion: drawing.description,
+            mode: batchPrintMode,
+            headerStyle,
           },
           partNumber: drawing.partNumber,
           revision: drawing.revision,
@@ -200,6 +207,82 @@ export function ToolcribBatchPrintModal({
               </div>
             </div>
 
+            <div className="pt-1 border-t border-line/60 space-y-2">
+              <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim">
+                Formato de Impresión del Lote
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBatchPrintMode('both')}
+                  disabled={isProcessing}
+                  className={`p-2.5 text-left border-2 transition-all flex flex-col gap-1 rounded-none ${
+                    batchPrintMode === 'both'
+                      ? 'border-accent bg-accent/10 shadow-hard-accent text-accent'
+                      : 'border-line bg-surface-2 text-ink hover:border-accent/40'
+                  }`}
+                >
+                  <span className="font-mono text-[10px] font-black uppercase flex items-center gap-1.5">
+                    📦 Ambos (Recomendado)
+                  </span>
+                  <span className="text-[9px] text-ink-dim leading-tight">
+                    Ficha pizarrón + plano de taller por cada pieza
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBatchPrintMode('blueprint')}
+                  disabled={isProcessing}
+                  className={`p-2.5 text-left border-2 transition-all flex flex-col gap-1 rounded-none ${
+                    batchPrintMode === 'blueprint'
+                      ? 'border-accent bg-accent/10 shadow-hard-accent text-accent'
+                      : 'border-line bg-surface-2 text-ink hover:border-accent/40'
+                  }`}
+                >
+                  <span className="font-mono text-[10px] font-black uppercase flex items-center gap-1.5">
+                    📐 Solo Planos (Slim)
+                  </span>
+                  <span className="text-[9px] text-ink-dim leading-tight">
+                    Planos técnicos a escala (~93%) con encabezado compacto
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBatchPrintMode('board_ticket')}
+                  disabled={isProcessing}
+                  className={`p-2.5 text-left border-2 transition-all flex flex-col gap-1 rounded-none ${
+                    batchPrintMode === 'board_ticket'
+                      ? 'border-accent bg-accent/10 shadow-hard-accent text-accent'
+                      : 'border-line bg-surface-2 text-ink hover:border-accent/40'
+                  }`}
+                >
+                  <span className="font-mono text-[10px] font-black uppercase flex items-center gap-1.5">
+                    📋 Solo Fichas Pizarrón
+                  </span>
+                  <span className="text-[9px] text-ink-dim leading-tight">
+                    Tarjetas media carta de control para pizarrón
+                  </span>
+                </button>
+              </div>
+
+              {batchPrintMode !== 'board_ticket' && (
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[9px] font-mono text-ink-dim">
+                    Encabezado en planos: <strong className="text-ink uppercase">{headerStyle === 'slim' ? 'Ultra-Compacto Slim (~93% escala)' : 'Clásico Grande (~78% escala)'}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setHeaderStyle((prev) => (prev === 'slim' ? 'classic' : 'slim'))}
+                    className="text-[9px] font-mono text-accent hover:underline uppercase tracking-wider"
+                  >
+                    Cambiar a {headerStyle === 'slim' ? 'Clásico' : 'Slim'}
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1.5">
                 Cantidad por pieza
@@ -252,7 +335,11 @@ export function ToolcribBatchPrintModal({
               ) : (
                 <>
                   <Printer size={13} />
-                  Imprimir Lote
+                  {batchPrintMode === 'both'
+                    ? 'Imprimir Lote (Fichas + Planos)'
+                    : batchPrintMode === 'board_ticket'
+                    ? 'Imprimir Lote (Fichas)'
+                    : 'Imprimir Lote (Planos Slim)'}
                 </>
               )}
             </Button>

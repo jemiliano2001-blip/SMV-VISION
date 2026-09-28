@@ -1,11 +1,21 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Printer, Loader2, AlertCircle, Sparkles, X } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
+import { Printer, Loader2, AlertCircle, Sparkles, X, Files } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { openStampedPlanoOt, type PlanoOtMask, type PlanoOtStamp } from '../lib/planoOt';
+import {
+  openStampedPlanoOt,
+  openStampedPlanoOtSet,
+  type PlanoOtMask,
+  type PlanoOtStamp,
+  type PlanoOtPrintMode,
+  type PlanoOtHeaderStyle,
+  type PlanoOtSetItem,
+} from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
+import { listActiveDrawingViews } from '../lib/firebase/toolcrib';
+import { findCompanionDrawings, type CompanionInfo } from '../lib/companionDrawings';
 import {
   extractLibrarySignals,
   extractOrderSignals,
@@ -26,6 +36,8 @@ export interface ToolcribPrintModalProps {
   initialCantidad?: string;
   /** Prefill desde Órdenes Odoo (PO del cliente). Si falta, se busca por SO al cargar Odoo. */
   initialPoNumber?: string;
+  /** Catálogo activo opcional para resolución rápida de planos complementarios. */
+  catalogViews?: readonly ToolcribActiveDrawingView[];
 }
 
 export function ToolcribPrintModal({
@@ -35,17 +47,23 @@ export function ToolcribPrintModal({
   initialSoNumber,
   initialCantidad,
   initialPoNumber,
+  catalogViews,
 }: ToolcribPrintModalProps) {
   const [soNumber, setSoNumber] = useState('');
   const [cantidad, setCantidad] = useState('');
   const [poNumber, setPoNumber] = useState('');
   const [notas, setNotas] = useState('');
+  const [printMode, setPrintMode] = useState<PlanoOtPrintMode>('both');
+  const [headerStyle, setHeaderStyle] = useState<PlanoOtHeaderStyle>('slim');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ dataUrl: string; stamp: PlanoOtStamp } | null>(null);
   const [mask, setMask] = useState<PlanoOtMask | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
   const [skipMask, setSkipMask] = useState(false);
+  const [catalog, setCatalog] = useState<readonly ToolcribActiveDrawingView[]>(catalogViews ?? []);
+  const [includeCompanions, setIncludeCompanions] = useState(true);
+  const [setItems, setSetItems] = useState<PlanoOtSetItem[] | null>(null);
   const generation = useRef(0);
 
   const [odooOrders, setOdooOrders] = useState<OdooOrderView[]>([]);
@@ -55,6 +73,25 @@ export function ToolcribPrintModal({
   const isOpen = drawing !== null;
 
   useEffect(() => {
+    if (catalogViews && catalogViews.length > 0) {
+      setCatalog(catalogViews);
+      return;
+    }
+    if (drawing && catalog.length === 0) {
+      let cancelled = false;
+      listActiveDrawingViews().then((res) => {
+        if (!cancelled && res.ok) setCatalog(res.value);
+      });
+      return () => { cancelled = true; };
+    }
+  }, [drawing, catalogViews, catalog.length]);
+
+  const companions: CompanionInfo[] = useMemo(() => {
+    if (!drawing || catalog.length === 0) return [];
+    return findCompanionDrawings(drawing, catalog);
+  }, [drawing, catalog]);
+
+  useEffect(() => {
     generation.current += 1;
     let cancelled = false;
     setIsProcessing(false);
@@ -62,6 +99,8 @@ export function ToolcribPrintModal({
     setMask(null);
     setSkipMask(false);
     setPreviewReady(false);
+    setIncludeCompanions(true);
+    setSetItems(null);
     if (drawing) {
       setSoNumber(initialSoNumber?.trim() ?? '');
       setCantidad(initialCantidad?.trim() ?? '');
@@ -102,7 +141,7 @@ export function ToolcribPrintModal({
       for (const order of odooOrders) {
         let bestQty = 0;
         let bestScore = 0;
-        for (const line of order.order_lines) {
+        for (const line of order.order_lines ?? []) {
           if (line.qty_pending <= 0) continue;
           const productLabel = line.product.includes('] ')
             ? line.product.split('] ').slice(1).join('] ')
@@ -160,18 +199,63 @@ export function ToolcribPrintModal({
         const now = new Date();
         const fecha = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-        setPreview({ dataUrl, stamp: {
+        const baseStamp: PlanoOtStamp = {
           soNumber: soNumber.trim() || 'N/A',
           cantidad: cantidad.trim(),
           poNumber: poNumber.trim(),
           fecha,
           notas: notas.trim(),
-        } });
+          partNumber: drawing.partNumber,
+          customer: drawing.customer,
+          piezaDescripcion: drawing.description,
+          mode: printMode,
+          headerStyle,
+        };
+
+        let preparedSet: PlanoOtSetItem[] | null = null;
+        if (includeCompanions && companions.length > 0) {
+          const compItems: PlanoOtSetItem[] = [];
+          for (const comp of companions) {
+            if (!comp.drawing.pdfUrl) continue;
+            try {
+              const compDataUrl = await fetchPdfAsDataUrl(comp.drawing.pdfUrl);
+              compItems.push({
+                pdfDataUrl: compDataUrl,
+                partNumber: comp.drawing.partNumber,
+                revision: comp.drawing.revision,
+                description: comp.drawing.description,
+                isCompanion: true,
+                companionLabel: comp.label,
+              });
+            } catch (err) {
+              console.warn('[ToolcribPrintModal] no se pudo descargar companero', comp.drawing.partNumber, err);
+            }
+          }
+
+          if (compItems.length > 0) {
+            preparedSet = [
+              {
+                pdfDataUrl: dataUrl,
+                partNumber: drawing.partNumber,
+                revision: drawing.revision,
+                description: drawing.description,
+              },
+              ...compItems,
+            ];
+          }
+        }
+
+        setSetItems(preparedSet);
+        setPreview({ dataUrl, stamp: baseStamp });
         setPreviewReady(false);
         return;
       }
 
-      await openStampedPlanoOt(preview.dataUrl, { ...preview.stamp, quantityMask: mask });
+      if (setItems && setItems.length > 1) {
+        await openStampedPlanoOtSet(setItems, { ...preview.stamp, quantityMask: mask });
+      } else {
+        await openStampedPlanoOt(preview.dataUrl, { ...preview.stamp, quantityMask: mask });
+      }
       if (generation.current !== currentGeneration) return;
 
       const submittedSoNumber = soNumber.trim() || null;
@@ -228,7 +312,7 @@ export function ToolcribPrintModal({
 
           {preview ? <>
             <Suspense fallback={<p role="status">Cargando vista previa…</p>}>
-              <PlanoOtPreview dataUrl={preview.dataUrl} stamp={preview.stamp} mask={mask}
+              <PlanoOtPreview dataUrl={preview.dataUrl} stamp={preview.stamp} mask={mask} setItems={setItems}
                 onMaskChange={next => { setMask(next); setSkipMask(false); }} onReady={setPreviewReady} />
             </Suspense>
             {!mask && <label className="flex gap-2 items-center text-sm">
@@ -236,6 +320,30 @@ export function ToolcribPrintModal({
               Este plano no necesita ocultar una cantidad original.
             </label>}
           </> : <>
+          {companions.length > 0 && (
+            <div className="bg-accent/10 border-2 border-accent/40 p-3 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[10px] font-black uppercase text-accent flex items-center gap-1.5">
+                  <Files size={13} className="text-accent" /> Juego de planos detectado ({companions.length + 1} hojas)
+                </span>
+                <label className="flex items-center gap-2 text-[10px] font-mono font-bold cursor-pointer text-ink">
+                  <input
+                    type="checkbox"
+                    checked={includeCompanions}
+                    onChange={(e) => setIncludeCompanions(e.target.checked)}
+                    disabled={isProcessing}
+                    className="size-3.5 accent-accent"
+                  />
+                  Imprimir juego completo
+                </label>
+              </div>
+              <p className="text-[10px] font-mono text-ink-dim leading-tight">
+                Pieza base: <strong>{drawing?.partNumber}</strong> · Incluye:{' '}
+                {companions.map((c) => `${c.drawing.partNumber} (${c.label})`).join(', ')}
+              </p>
+            </div>
+          )}
+
           {matchingOrders.length > 0 && (
             <div className="space-y-2 bg-surface-2 p-3 border-2 border-line">
               <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-ink-dim flex items-center gap-1.5">
@@ -329,6 +437,82 @@ export function ToolcribPrintModal({
               className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
           </div>
+
+          <div className="pt-1 border-t border-line/60 space-y-2">
+            <label className="block text-[10px] font-black uppercase tracking-widest text-ink-dim">
+              Formato de Impresión
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setPrintMode('both')}
+                disabled={isProcessing}
+                className={`p-2.5 text-left border-2 transition-all flex flex-col gap-1 rounded-none ${
+                  printMode === 'both'
+                    ? 'border-accent bg-accent/10 shadow-hard-accent text-accent'
+                    : 'border-line bg-surface-2 text-ink hover:border-accent/40'
+                }`}
+              >
+                <span className="font-mono text-[10px] font-black uppercase flex items-center gap-1.5">
+                  📦 Ambos (Recomendado)
+                </span>
+                <span className="text-[9px] text-ink-dim leading-tight">
+                  Ficha pizarrón (pág 1) + plano de taller (pág 2)
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPrintMode('blueprint')}
+                disabled={isProcessing}
+                className={`p-2.5 text-left border-2 transition-all flex flex-col gap-1 rounded-none ${
+                  printMode === 'blueprint'
+                    ? 'border-accent bg-accent/10 shadow-hard-accent text-accent'
+                    : 'border-line bg-surface-2 text-ink hover:border-accent/40'
+                }`}
+              >
+                <span className="font-mono text-[10px] font-black uppercase flex items-center gap-1.5">
+                  📐 Solo Plano (Slim)
+                </span>
+                <span className="text-[9px] text-ink-dim leading-tight">
+                  Plano técnico a escala (~93%) con encabezado compacto
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPrintMode('board_ticket')}
+                disabled={isProcessing}
+                className={`p-2.5 text-left border-2 transition-all flex flex-col gap-1 rounded-none ${
+                  printMode === 'board_ticket'
+                    ? 'border-accent bg-accent/10 shadow-hard-accent text-accent'
+                    : 'border-line bg-surface-2 text-ink hover:border-accent/40'
+                }`}
+              >
+                <span className="font-mono text-[10px] font-black uppercase flex items-center gap-1.5">
+                  📋 Solo Ficha Pizarrón
+                </span>
+                <span className="text-[9px] text-ink-dim leading-tight">
+                  2 tarjetas media carta (Pizarrón + Viajera de piso)
+                </span>
+              </button>
+            </div>
+
+            {printMode !== 'board_ticket' && (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[9px] font-mono text-ink-dim">
+                  Encabezado en plano: <strong className="text-ink uppercase">{headerStyle === 'slim' ? 'Ultra-Compacto Slim (~93% escala)' : 'Clásico Grande (~78% escala)'}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setHeaderStyle((prev) => (prev === 'slim' ? 'classic' : 'slim'))}
+                  className="text-[9px] font-mono text-accent hover:underline uppercase tracking-wider"
+                >
+                  Cambiar a {headerStyle === 'slim' ? 'Clásico' : 'Slim'}
+                </button>
+              </div>
+            )}
+          </div>
           </>}
 
           <DialogFooter className="pt-2 flex justify-end gap-2 border-t-2 border-line mt-4">
@@ -354,7 +538,15 @@ export function ToolcribPrintModal({
               ) : (
                 <>
                   <Printer size={13} />
-                  {preview ? 'Imprimir OT' : 'Vista previa'}
+                  {preview
+                    ? setItems && setItems.length > 1
+                      ? `Imprimir Juego (${setItems.length} Planos)`
+                      : printMode === 'both'
+                      ? 'Imprimir (Ficha + Plano)'
+                      : printMode === 'board_ticket'
+                      ? 'Imprimir Ficha Pizarrón'
+                      : 'Imprimir Plano (Slim)'
+                    : 'Vista previa'}
                 </>
               )}
             </Button>

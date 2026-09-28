@@ -15,6 +15,7 @@ import {
 } from './matching';
 import { normalizeAliasKey } from './aliasKey';
 import { canonicalPartNumber, pickPreferredDrawing } from './toolcribCatalog';
+import { findCompanionDrawings } from './companionDrawings';
 import type {
   OrderDrawingLink,
   OrderDrawingSnapshot,
@@ -147,6 +148,8 @@ export function resolveOrderDrawingLink(
 
         const cadSnap = cadView ? snapshotFromView(cadView) : null;
         const reportSnap = isoView ? snapshotFromView(isoView) : cadSnap;
+        const companions = cadView ? findCompanionDrawings(cadView, library) : [];
+        const companionDrawings = companions.length > 0 ? companions.map((c) => snapshotFromView(c.drawing)) : undefined;
 
         return {
           key,
@@ -159,6 +162,7 @@ export function resolveOrderDrawingLink(
           qtyPending: input.qtyPending,
           cadDrawing: cadSnap,
           reportDrawing: reportSnap,
+          companionDrawings,
           matchScore: 100,
           matchedAt,
           status: 'manual',
@@ -183,6 +187,9 @@ export function resolveOrderDrawingLink(
     reportOk ? reportMatch.score : 0,
   );
 
+  const companions = cadOk && cadMatch.view ? findCompanionDrawings(cadMatch.view, library) : [];
+  const companionDrawings = companions.length > 0 ? companions.map((c) => snapshotFromView(c.drawing)) : undefined;
+
   return {
     key,
     orderId: input.orderId,
@@ -194,6 +201,7 @@ export function resolveOrderDrawingLink(
     qtyPending: input.qtyPending,
     cadDrawing: cadOk && cadMatch.view ? snapshotFromView(cadMatch.view) : null,
     reportDrawing: reportOk && reportMatch.view ? snapshotFromView(reportMatch.view) : null,
+    companionDrawings,
     matchScore,
     matchedAt,
     status: cadOk || reportOk ? 'linked' : 'no_match',
@@ -208,6 +216,7 @@ export function applyManualDrawingToLink(
   base: OrderDrawingLink,
   view: ToolcribActiveDrawingView,
   matchedAt: string = new Date().toISOString(),
+  library?: readonly ToolcribActiveDrawingView[],
 ): OrderDrawingLink {
   const snap = snapshotFromView(view);
   const isIso = isIsoDrawingView(view);
@@ -222,10 +231,16 @@ export function applyManualDrawingToLink(
     };
   }
 
+  const companions = library ? findCompanionDrawings(view, library) : [];
+  const companionDrawings = companions.length > 0
+    ? companions.map((c) => snapshotFromView(c.drawing))
+    : base.companionDrawings;
+
   return {
     ...base,
     cadDrawing: snap,
     reportDrawing: base.reportDrawing ?? snap,
+    companionDrawings,
     matchScore: 100,
     matchedAt,
     status: 'manual',
@@ -267,6 +282,22 @@ export function getCadDrawingSnapshot(
   link: OrderDrawingLink,
 ): OrderDrawingSnapshot | null {
   return link.cadDrawing;
+}
+
+/** Todos los planos CAD para imprimir la OT (plano base + hojas secundarias o complementos). */
+export function getAllCadDrawingSnapshotsForPrint(
+  link: OrderDrawingLink,
+): OrderDrawingSnapshot[] {
+  const result: OrderDrawingSnapshot[] = [];
+  if (link.cadDrawing) result.push(link.cadDrawing);
+  if (link.companionDrawings && link.companionDrawings.length > 0) {
+    for (const comp of link.companionDrawings) {
+      if (!result.some((r) => r.drawingId === comp.drawingId)) {
+        result.push(comp);
+      }
+    }
+  }
+  return result;
 }
 
 /**

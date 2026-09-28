@@ -246,6 +246,8 @@ export interface OrderDrawingLink {
    * Puede ser ISO o CAD si no hay ISO con score suficiente.
    */
   reportDrawing: OrderDrawingSnapshot | null;
+  /** Planos complementarios detectados (ej. Hoja 2, Par Chico/Grande, Complemento). */
+  companionDrawings?: OrderDrawingSnapshot[];
   matchScore: number;
   matchedAt: string;
   status: OrderDrawingLinkStatus;

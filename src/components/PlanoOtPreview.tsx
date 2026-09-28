@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { stampPlanoOt, type PlanoOtMask, type PlanoOtStamp } from '../lib/planoOt';
+import {
+  stampPlanoOt,
+  createStampedPlanoOtSet,
+  type PlanoOtMask,
+  type PlanoOtStamp,
+  type PlanoOtSetItem,
+} from '../lib/planoOt';
 
 interface Props {
   dataUrl: string;
@@ -9,9 +15,10 @@ interface Props {
   mask: PlanoOtMask | null;
   onMaskChange: (mask: PlanoOtMask | null) => void;
   onReady: (ready: boolean) => void;
+  setItems?: PlanoOtSetItem[] | null;
 }
 
-export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: Props) {
+export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady, setItems }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const startRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const [zoom, setZoom] = useState(100);
@@ -19,9 +26,10 @@ export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const [pageCount, setPageCount] = useState(1);
+  const [activePage, setActivePage] = useState(1);
   const [draft, setDraft] = useState<PlanoOtMask | null>(null);
   // La selección no cambia el canvas fuente: solo su cubierta. El resultado
-  // usa exactamente stampPlanoOt, igual que el botón de impresión.
+  // usa exactamente stampPlanoOt (o createStampedPlanoOtSet), igual que el botón de impresión.
   const maskKey = result ? JSON.stringify(mask) : '';
   useEffect(() => {
     let cancelled = false;
@@ -35,14 +43,19 @@ export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: 
         const pdfjs = await import('pdfjs-dist');
         if (cancelled) return;
         pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
-        const bytes = result ? await stampPlanoOt(dataUrl, { ...stamp, quantityMask: mask }) : null;
+        const bytes = result
+          ? setItems && setItems.length > 1
+            ? await createStampedPlanoOtSet(setItems, { ...stamp, quantityMask: mask })
+            : await stampPlanoOt(dataUrl, { ...stamp, quantityMask: mask })
+          : null;
         if (cancelled) return;
         const task = pdfjs.getDocument({ ...(bytes ? { data: bytes } : { url: dataUrl }), wasmUrl: '/pdfjs-wasm/' });
         loading = task;
         const pdf = await task.promise;
         if (cancelled) return;
         setPageCount(pdf.numPages);
-        const page = await pdf.getPage(1);
+        const targetPage = result ? Math.min(Math.max(1, activePage), pdf.numPages) : 1;
+        const page = await pdf.getPage(targetPage);
         if (cancelled) return;
         const base = page.getViewport({ scale: 1 });
         const viewport = page.getViewport({ scale: Math.min(2400 / base.width, 3200 / base.height) });
@@ -75,7 +88,7 @@ export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: 
       render?.cancel();
       if (loading) void loading.destroy().catch(() => {});
     };
-  }, [dataUrl, result, maskKey, stamp.soNumber, stamp.cantidad, stamp.fecha, stamp.poNumber, stamp.notas, onReady]);
+  }, [dataUrl, result, activePage, maskKey, stamp.soNumber, stamp.cantidad, stamp.fecha, stamp.poNumber, stamp.notas, stamp.mode, stamp.headerStyle, setItems, onReady]);
 
   const point = (event: PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -95,10 +108,14 @@ export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: 
   return (
     <section className="space-y-3 min-w-0" aria-label="Vista previa de la OT">
       <p id="ot-selection-help" className="text-sm text-ink">
-        {result ? 'Así saldrá la primera página al imprimir.' : 'Arrastra un recuadro sobre el número de Quantity que quieres ocultar. Se cubrirá de blanco; deja fuera las cotas y la etiqueta.'}
+        {result
+          ? stamp.mode === 'both' && pageCount > 1
+            ? 'Vista previa del PDF de impresión (Ficha para pizarrón y Plano de taller).'
+            : 'Así saldrá la primera página al imprimir.'
+          : 'Arrastra un recuadro sobre el número de Quantity que quieres ocultar en el plano. Se cubrirá de blanco.'}
       </p>
       <div className="flex flex-wrap gap-2 items-center">
-        <Button type="button" variant="outline" onClick={() => { onReady(false); setResult(!result); }} disabled={!ready}>
+        <Button type="button" variant="outline" onClick={() => { onReady(false); setResult(!result); setActivePage(1); }} disabled={!ready}>
           {result ? 'Editar recuadro' : 'Ver resultado'}
         </Button>
         <Button type="button" variant="outline" disabled={!mask || result} onClick={() => onMaskChange(null)}>Quitar recuadro</Button>
@@ -107,9 +124,37 @@ export function PlanoOtPreview({ dataUrl, stamp, mask, onMaskChange, onReady }: 
             {[100, 150, 200, 300].map(value => <option key={value} value={value}>{value}%</option>)}
           </select>
         </label>
-        <span className="text-xs text-ink-dim">Página 1 de {pageCount}</span>
+        {result && pageCount > 1 ? (
+          <div className="flex items-center gap-1 border-2 border-line px-2 py-1 bg-surface-2 ml-auto">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={activePage <= 1}
+              onClick={() => { onReady(false); setActivePage(p => Math.max(1, p - 1)); }}
+              className="h-6 px-1.5 text-[10px] font-mono font-bold"
+            >
+              ← Ant
+            </Button>
+            <span className="text-[10px] font-mono font-black uppercase px-1 text-ink">
+              Pág {activePage}/{pageCount} {stamp.mode === 'both' ? (activePage === 1 ? '(Ficha Pizarrón)' : '(Plano Taller)') : ''}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={activePage >= pageCount}
+              onClick={() => { onReady(false); setActivePage(p => Math.min(pageCount, p + 1)); }}
+              className="h-6 px-1.5 text-[10px] font-mono font-bold"
+            >
+              Sig →
+            </Button>
+          </div>
+        ) : (
+          <span className="text-xs text-ink-dim ml-auto">Página 1 de {pageCount}</span>
+        )}
       </div>
-      {pageCount > 1 && <p className="text-sm text-ink-dim">El encabezado y el recuadro se aplican solo a la página 1. Las demás se imprimen sin cambios.</p>}
+      {pageCount > 1 && !result && <p className="text-sm text-ink-dim">El encabezado y el recuadro se aplican a la página 1 del plano. Las demás se imprimen sin cambios.</p>}
       {error && <p role="alert" className="text-danger">{error}</p>}
       {!ready && !error && <p role="status">Preparando vista previa…</p>}
       <div className="overflow-auto max-h-[52vh] border-2 border-line bg-surface-2">

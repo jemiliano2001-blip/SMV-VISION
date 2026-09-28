@@ -798,6 +798,7 @@ export function OdooOrdersPanel({
 
       <ToolcribPrintModal
         drawing={lineActions.printDrawing}
+        catalogViews={catalog.views}
         initialSoNumber={lineActions.printSoNumber}
         initialCantidad={lineActions.printCantidad}
         initialPoNumber={lineActions.printPoNumber}

@@ -3,7 +3,7 @@ import type { OdooOrderView, OdooOrderLineView } from '../lib/firebase/odooOrder
 import type { ToolcribActiveDrawingView, OrderDrawingLink } from '../types';
 import type { UseOrderDrawingBridgeResult } from './useOrderDrawingBridge';
 import { recordToolcribPrintLogFireAndForget } from '../lib/firebase/toolcrib';
-import { makeOrderDrawingLinkKey } from '../lib/orderDrawingBridge';
+import { makeOrderDrawingLinkKey, getAllCadDrawingSnapshotsForPrint } from '../lib/orderDrawingBridge';
 import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { log } from '../lib/log';
@@ -51,7 +51,8 @@ export function useBatchPrintOts({
   const toggleSelectAllInOrder = useCallback((order: OdooOrderView) => {
     setSelectedLines((prev) => {
       const next = new Set(prev);
-      const orderLineKeys = order.order_lines
+      const lines = order.order_lines ?? [];
+      const orderLineKeys = lines
         .map((l, idx) => ({ l, key: makeOrderDrawingLinkKey(order.id, idx) }))
         .filter(({ l }) => l.qty_pending > 0)
         .map(({ key }) => key);
@@ -87,8 +88,9 @@ export function useBatchPrintOts({
 
       let processedCount = 0;
       for (const order of orders) {
-        for (let idx = 0; idx < order.order_lines.length; idx++) {
-          const line = order.order_lines[idx];
+        const lines = order.order_lines ?? [];
+        for (let idx = 0; idx < lines.length; idx++) {
+          const line = lines[idx];
           const lineKey = makeOrderDrawingLinkKey(order.id, idx);
           if (!selectedLines.has(lineKey) || line.qty_pending <= 0) continue;
 
@@ -96,35 +98,52 @@ export function useBatchPrintOts({
           setBatchPrintStatus(`Descargando plano ${processedCount} de ${selectedLines.size}…`);
 
           const link = resolveLineLink(order, line, idx, library);
-          const cadView = bridge.getCadViewForPrint(link);
-          if (!cadView || !cadView.pdfUrl) {
+          const cadSnapshots = getAllCadDrawingSnapshotsForPrint(link);
+          if (cadSnapshots.length === 0) {
             log.warn(`[batch-print] Sin plano accesible para ${line.product}`);
             continue;
           }
 
-          try {
-            const pdfDataUrl = await fetchPdfAsDataUrl(cadView.pdfUrl);
-            items.push({
-              pdfDataUrl,
-              stamp: {
-                soNumber: order.name,
-                cantidad: String(line.qty_pending),
-                fecha,
-                notas: line.description ? line.description.slice(0, 80) : undefined,
-              },
-              partNumber: cadView.partNumber,
-              revision: cadView.revision,
-            });
+          for (let sIdx = 0; sIdx < cadSnapshots.length; sIdx++) {
+            const cadSnap = cadSnapshots[sIdx];
+            if (!cadSnap.pdfUrl) continue;
 
-            // Log de impresión audit trail
-            recordToolcribPrintLogFireAndForget({
-              drawingId: cadView.drawingId,
-              partId: cadView.partId,
-              copies: 1,
-              orderRef: order.name,
-            });
-          } catch (err) {
-            log.warn(`[batch-print] Error descargando ${cadView.partNumber}`, err);
+            try {
+              const pdfDataUrl = await fetchPdfAsDataUrl(cadSnap.pdfUrl);
+              const isPrimary = sIdx === 0;
+              const isMultiple = cadSnapshots.length > 1;
+              const sheetSuffix = isMultiple ? ` [Plano ${sIdx + 1}/${cadSnapshots.length}]` : '';
+
+              items.push({
+                pdfDataUrl,
+                stamp: {
+                  soNumber: order.name,
+                  cantidad: String(line.qty_pending),
+                  poNumber: order.client_order_ref ?? '',
+                  fecha,
+                  notas: ((line.description ? line.description.slice(0, 60) : '') + sheetSuffix).trim(),
+                  partNumber: cadSnap.partNumber,
+                  customer: cadSnap.customer,
+                  piezaDescripcion: isMultiple
+                    ? `${cadSnap.description || ''} · Juego ${sIdx + 1} de ${cadSnapshots.length}`.trim()
+                    : cadSnap.description,
+                  headerStyle: 'slim',
+                  mode: isPrimary ? 'both' : 'blueprint',
+                },
+                partNumber: cadSnap.partNumber,
+                revision: cadSnap.revision,
+              });
+
+              // Log de impresión audit trail
+              recordToolcribPrintLogFireAndForget({
+                drawingId: cadSnap.drawingId,
+                partId: cadSnap.partId,
+                copies: 1,
+                orderRef: order.name,
+              });
+            } catch (err) {
+              log.warn(`[batch-print] Error descargando ${cadSnap.partNumber}`, err);
+            }
           }
         }
       }

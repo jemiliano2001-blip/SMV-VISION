@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyManualDrawingToLink,
+  getAllCadDrawingSnapshotsForPrint,
   getCadDrawingSnapshot,
   getReportDrawingSnapshot,
   makeOrderDrawingLinkKey,
@@ -369,3 +370,45 @@ describe('resolveOrderDrawingLink · revisión preferida en alias', () => {
     expect(link.cadDrawing?.drawingId).toBe('cad-con-pdf');
   });
 });
+
+describe('Resolución de Planos Complementarios en OrderDrawingBridge', () => {
+  it('resuelve companionDrawings para piezas de dos hojas como 90-1012-06', () => {
+    const cadHoja1 = makeView({
+      drawingId: 'cad-06-1',
+      partNumber: '90-1012-06',
+      description: 'PUNZON DE CORTE',
+    });
+    const cadHoja2 = makeView({
+      drawingId: 'cad-06-2',
+      partNumber: '90-1012-06-2',
+      description: 'HOJA 2 COMPONENTE',
+    });
+    const iso06 = makeView({
+      drawingId: 'iso-06',
+      partNumber: '90-1012-06.ISO',
+    });
+
+    const link = resolveOrderDrawingLink(
+      {
+        orderId: 'SO-101',
+        lineIndex: 0,
+        soNumber: '2026/S0100',
+        poNumber: 'PO-99',
+        pieza: 'PUNZON DE CORTE 90-1012-06',
+        numeroParte: '90-1012-06',
+        qtyPending: 10,
+      },
+      [cadHoja1, cadHoja2, iso06],
+    );
+
+    expect(link.cadDrawing?.partNumber).toBe('90-1012-06');
+    expect(link.companionDrawings).toBeDefined();
+    expect(link.companionDrawings).toHaveLength(1);
+    expect(link.companionDrawings![0].partNumber).toBe('90-1012-06-2');
+
+    const allPrints = getAllCadDrawingSnapshotsForPrint(link);
+    expect(allPrints).toHaveLength(2);
+    expect(allPrints.map((p) => p.partNumber)).toEqual(['90-1012-06', '90-1012-06-2']);
+  });
+});
+

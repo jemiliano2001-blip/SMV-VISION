@@ -1183,6 +1183,7 @@ export function ToolcribLibraryPanel({
       />
       <ToolcribPrintModal
         drawing={printDrawing}
+        catalogViews={views}
         onClose={() => setPrintDrawing(null)}
         onSuccess={({ soNumber }) => {
           if (printDrawing) {

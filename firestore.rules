@@ -15,8 +15,12 @@ service cloud.firestore {
     // La validación de forma vive en validators TS; las reglas garantizan
     // identidad y superficie de escritura.
 
+    // La base (default) de smv-brain la comparte el Dashboard, que exige la autenticación
+    // ANÓNIMA habilitada (TV pública). Un anónimo no es usuario de Vision: sin esto podía leer
+    // OTs y planos y crear/editar/borrar compras (probado en tests/firestore-rules.emulator.test.ts).
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null
+          && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
     // ── Escritas solo por Admin SDK (sync Odoo / Cloud Function) ──────────
@@ -83,6 +87,39 @@ service cloud.firestore {
     // ── Memoria de alias de piezas (puente orden-plano) ───────────────────
     match /partAliases/{aliasId} {
       allow read, create, update, delete: if isSignedIn();
+    }
+
+    // ── Dashboard (Visual Factory TV) — misma base (default) ──────────────
+    // Copia FIEL de visual-factory-tv-dashboard/firestore.rules: las dos apps despliegan reglas
+    // a esta base y la última gana. Si cambias algo aquí, cámbialo también allá.
+    function dashIsVerifiedAdmin() {
+      return request.auth != null
+          && request.auth.token.firebase.sign_in_provider != 'anonymous'
+          && request.auth.token.email_verified == true
+          && request.auth.token.admin == true;
+    }
+    function dashIsValidCompanyConfig() {
+      let allowedFields = ['company_name', 'delivery_schedule', 'updatedAt'];
+      return request.resource.data.keys().hasOnly(allowedFields)
+          && request.resource.data.keys().hasAll(allowedFields)
+          && request.resource.data.company_name is string
+          && request.resource.data.company_name.size() >= 1
+          && request.resource.data.company_name.size() <= 100
+          && request.resource.data.delivery_schedule is string
+          && request.resource.data.delivery_schedule.size() >= 1
+          && request.resource.data.delivery_schedule.size() <= 500
+          && request.resource.data.updatedAt is timestamp;
+    }
+    match /company_configs/{configId} {
+      allow read: if request.auth != null; // la TV anónima la lee
+      allow create, update: if dashIsVerifiedAdmin() && dashIsValidCompanyConfig();
+      allow delete: if dashIsVerifiedAdmin();
+    }
+    match /work_orders/{orderId} {
+      allow read, write: if false;
+    }
+    match /work_orders_history/{historyId} {
+      allow read, write: if false;
     }
 
     // ── Todo lo demás: denegado ────────────────────────────────────────────

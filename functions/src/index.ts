@@ -48,6 +48,7 @@ import {
   type OdooFieldMeta,
   type PoSource,
 } from "./odooFields";
+import { isVisionUser } from "./authGuard";
 
 if (getApps().length === 0) {
   initializeApp();
@@ -1157,10 +1158,10 @@ export const triggerOdooSync = onCall(
     invoker: "public",
   },
   async (request: CallableRequest<unknown>) => {
-    if (!request.auth) {
+    if (!isVisionUser(request.auth)) {
       throw new HttpsError(
         "unauthenticated",
-        "Debe estar autenticado para sincronizar Odoo.",
+        "Debe iniciar sesión con su cuenta de Vision para sincronizar Odoo.",
       );
     }
 

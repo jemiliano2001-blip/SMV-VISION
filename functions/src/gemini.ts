@@ -27,6 +27,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import * as logger from "firebase-functions/logger";
 import { GoogleGenAI, type GenerateContentParameters } from "@google/genai";
+import { isVisionUser } from "./authGuard";
 
 const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 
@@ -47,8 +48,8 @@ export const analyzeGemini = onCall(
     concurrency: 40,
   },
   async (request) => {
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Debe estar autenticado para usar Gemini.");
+    if (!isVisionUser(request.auth)) {
+      throw new HttpsError("unauthenticated", "Debe iniciar sesión con su cuenta de Vision para usar Gemini.");
     }
 
     if (!isGenerateContentParameters(request.data)) {

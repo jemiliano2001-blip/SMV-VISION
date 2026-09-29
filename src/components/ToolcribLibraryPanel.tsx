@@ -41,6 +41,9 @@ import { knownRuleGroupKey } from '../lib/companionDrawings';
 import { findSavedSetForPart, MAX_SET_MEMBERS, setPartKey, type ToolcribSet } from '../lib/toolcribSets';
 import { suggestSets, type SetSuggestion } from '../lib/toolcribSetSuggestions';
 import { ToolcribSetModal } from './ToolcribSetModal';
+import { listPartNotes } from '../lib/firebase/partNotes';
+import type { PartNote } from '../lib/partNotes';
+import { ToolcribNotesModal } from './ToolcribNotesModal';
 import { ToolcribSetSuggestions } from './ToolcribSetSuggestions';
 import type { ToolcribActiveDrawingView } from '../types';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
@@ -344,6 +347,22 @@ export function ToolcribLibraryPanel({
   useEffect(() => {
     void loadSets();
   }, [loadSets]);
+
+  const [partNotes, setPartNotes] = useState<ReadonlyMap<string, PartNote[]>>(new Map());
+  const [notesTarget, setNotesTarget] = useState<string | null>(null);
+
+  const loadPartNotes = useCallback(async () => {
+    const res = await listPartNotes();
+    if (res.ok === false) {
+      log.warn('[toolcrib] listPartNotes falló — sin notas permanentes', res.reason);
+      return;
+    }
+    setPartNotes(res.value);
+  }, []);
+
+  useEffect(() => {
+    void loadPartNotes();
+  }, [loadPartNotes]);
   const [sortKey, setSortKey] = useState<ToolcribSortKey>('partNumber');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(new Set());
@@ -1099,6 +1118,8 @@ export function ToolcribLibraryPanel({
                   onAlias={setAliasTarget}
                   setInfo={setInfoFor(group)}
                   onLinkSet={openSetDraftFor}
+                  noteCount={partNotes.get(setPartKey(group.partNumber))?.length ?? 0}
+                  onNotes={setNotesTarget}
                 />
               ))
             )}
@@ -1353,6 +1374,13 @@ export function ToolcribLibraryPanel({
         onSuccess={handleBatchPrintSuccess}
       />
 
+      <ToolcribNotesModal
+        partNumber={notesTarget}
+        notes={notesTarget ? partNotes.get(setPartKey(notesTarget)) ?? [] : []}
+        onClose={() => setNotesTarget(null)}
+        onSaved={() => void loadPartNotes()}
+      />
+
       <ToolcribAliasModal
         target={aliasTarget}
         onClose={() => setAliasTarget(null)}
@@ -1386,6 +1414,8 @@ interface PartGroupRowProps {
   onAlias: (target: ToolcribAliasTarget) => void;
   setInfo: { label: string; title: string } | null;
   onLinkSet: (group: ToolcribPartGroup) => void;
+  noteCount: number;
+  onNotes: (partNumber: string) => void;
 }
 
 const PartGroupRow = memo(function PartGroupRow({
@@ -1410,6 +1440,8 @@ const PartGroupRow = memo(function PartGroupRow({
   onAlias,
   setInfo,
   onLinkSet,
+  noteCount,
+  onNotes,
 }: PartGroupRowProps): ReactElement {
   const printView = printDrawingForGroup(group);
   const previewView = previewDrawingForGroup(group);
@@ -1489,6 +1521,11 @@ const PartGroupRow = memo(function PartGroupRow({
                 className="bg-accent/10 text-accent border-2 border-accent/40 hover:bg-accent/20 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-none transition-colors"
               >
                 {setInfo.label}
+              </button>
+            )}
+            {noteCount > 0 && (
+              <button type="button" onClick={() => onNotes(group.partNumber)} title={`${noteCount} nota(s) permanente(s)`} aria-label={`Ver notas de ${group.partNumber}`} className="border-2 border-warn/50 text-warn text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-none hover:bg-warn/10">
+                📝 {noteCount}
               </button>
             )}
           </div>
@@ -1703,6 +1740,13 @@ const PartGroupRow = memo(function PartGroupRow({
               >
                 <Files size={12} className="mr-1.5" />
                 {setInfo ? 'Editar juego' : 'Vincular como juego'}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onNotes(group.partNumber)}
+                className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5"
+              >
+                <Tag size={12} className="mr-1.5" />
+                {noteCount > 0 ? 'Editar notas' : 'Agregar notas'}
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-line my-1" />
               {group.cad && (

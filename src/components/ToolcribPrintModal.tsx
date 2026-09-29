@@ -23,8 +23,10 @@ import {
   scorePieceMatch,
 } from '../lib/matching';
 import { ensureActiveSets } from '../lib/firebase/toolcribSets';
-import { baseQuantityFactor, getActiveSets } from '../lib/toolcribSets';
+import { baseQuantityFactor, getActiveSets, setPartKey } from '../lib/toolcribSets';
 import { buildSeparatePrintJobs, type SetPrintJob, type SetPrintPiece } from '../lib/setPrintJobs';
+import { listPartNotes } from '../lib/firebase/partNotes';
+import { composeOtNotes, QUICK_NOTE_CHIPS, type PartNote } from '../lib/partNotes';
 import type { ToolcribActiveDrawingView } from '../types';
 
 const PlanoOtPreview = lazy(() => import('./PlanoOtPreview').then(module => ({ default: module.PlanoOtPreview })));
@@ -71,6 +73,8 @@ export function ToolcribPrintModal({
   // El setter lo usará el preset de juego (Task 10).
   const [juegoMode] = useState<'separadas' | 'unificado'>('separadas');
   const [pendingJobs, setPendingJobs] = useState<{ job: SetPrintJob; printed: boolean }[] | null>(null);
+  const [allNotes, setAllNotes] = useState<ReadonlyMap<string, PartNote[]>>(new Map());
+  const [enabledNoteIds, setEnabledNoteIds] = useState<ReadonlySet<string>>(new Set());
   const generation = useRef(0);
 
   const [odooOrders, setOdooOrders] = useState<OdooOrderView[]>([]);
@@ -101,6 +105,21 @@ export function ToolcribPrintModal({
     });
     return () => { cancelled = true; };
   }, [drawing]);
+
+  useEffect(() => {
+    if (!drawing) return;
+    let cancelled = false;
+    void listPartNotes().then((res) => {
+      if (cancelled || res.ok === false) return;
+      setAllNotes(res.value);
+      const own = res.value.get(setPartKey(drawing.partNumber)) ?? [];
+      setEnabledNoteIds(new Set(own.filter((n) => n.imprimirEnOT).map((n) => n.id)));
+    });
+    return () => { cancelled = true; };
+  }, [drawing]);
+
+  const ownNotes = drawing ? allNotes.get(setPartKey(drawing.partNumber)) ?? [] : [];
+  const ownNoteTexts = () => ownNotes.filter((n) => enabledNoteIds.has(n.id)).map((n) => n.texto);
 
   const companions: CompanionInfo[] = useMemo(() => {
     if (!drawing || catalog.length === 0) return [];
@@ -224,7 +243,7 @@ export function ToolcribPrintModal({
           cantidad: cantidad.trim(),
           poNumber: poNumber.trim(),
           fecha,
-          notas: notas.trim(),
+          notas: composeOtNotes(ownNoteTexts(), notas.trim()),
           partNumber: drawing.partNumber,
           customer: drawing.customer,
           piezaDescripcion: drawing.description,
@@ -285,7 +304,10 @@ export function ToolcribPrintModal({
           customer: item.customer,
           companionLabel: index === 0 ? undefined : item.companionLabel,
           cantidadPorJuego: item.cantidadPorJuego ?? 1,
-          permanentNotes: [],
+          permanentNotes:
+            index === 0
+              ? ownNoteTexts()
+              : (allNotes.get(setPartKey(item.partNumber)) ?? []).filter((n) => n.imprimirEnOT).map((n) => n.texto),
         }));
         const jobs = buildSeparatePrintJobs(pieces, { ...preview.stamp, quantityMask: mask }, juegos, notas.trim());
         await openStampedPlanoOt(jobs[0].piece.pdfDataUrl, jobs[0].stamp);
@@ -505,6 +527,24 @@ export function ToolcribPrintModal({
             />
           </div>
 
+          {ownNotes.length > 0 && (
+            <div className="space-y-1 border-2 border-warn/40 bg-warn/10 p-2" role="group" aria-label="Notas permanentes de la pieza">
+              <p className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Notas permanentes</p>
+              {ownNotes.map((note) => (
+                <label key={note.id} className="flex items-start gap-2 text-[11px] font-mono cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enabledNoteIds.has(note.id)}
+                    onChange={(e) => setEnabledNoteIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(note.id); else next.delete(note.id); return next; })}
+                    disabled={isProcessing}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <span>{note.texto}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
           <div>
             <label htmlFor="print-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Notas Adicionales (Aparecerán en el PDF)
@@ -518,6 +558,19 @@ export function ToolcribPrintModal({
               disabled={isProcessing}
               className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {QUICK_NOTE_CHIPS.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setNotas((prev) => (prev.trim() ? `${prev.trim()} · ${chip}` : chip))}
+                  className="px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider border-2 border-line bg-surface text-ink-dim hover:border-accent hover:text-accent transition-colors"
+                >
+                  + {chip}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="pt-1 border-t border-line/60 space-y-2">

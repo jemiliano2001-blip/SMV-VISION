@@ -782,6 +782,9 @@ export interface PlanoOtSetItem {
   partNumber: string;
   revision?: string;
   description?: string;
+  customer?: string;
+  /** Piezas de este plano por cada juego pedido (1 por defecto). */
+  cantidadPorJuego?: number;
   isCompanion?: boolean;
   companionLabel?: string;
 }

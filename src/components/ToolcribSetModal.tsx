@@ -74,6 +74,10 @@ export function ToolcribSetModal({ open, initialMembers, initialSet, catalogPart
       setError('Un juego necesita al menos 2 piezas.');
       return;
     }
+    if (miembros.some((m) => !Number.isInteger(m.cantidadPorJuego) || m.cantidadPorJuego < 1 || m.cantidadPorJuego > 99)) {
+      setError('Piezas por juego debe ser un entero de 1 a 99.');
+      return;
+    }
     setBusy(true);
     setError(null);
     const res = await saveSet({

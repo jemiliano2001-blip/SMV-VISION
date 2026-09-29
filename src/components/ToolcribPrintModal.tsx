@@ -188,7 +188,9 @@ export function ToolcribPrintModal({
 
   const handleOpenChange = (open: boolean) => {
     if (!open && !isProcessing) {
-      onClose();
+      // Con piezas pendientes ya se imprimió la primera OT: cerrar equivale a terminar (registra la impresión).
+      if (pendingJobs) handleFinishSet();
+      else onClose();
     }
   };
 
@@ -355,7 +357,7 @@ export function ToolcribPrintModal({
           <Button
             variant="outline"
             size="icon"
-            onClick={onClose}
+            onClick={() => (pendingJobs ? handleFinishSet() : onClose())}
             disabled={isProcessing}
             aria-label="Cerrar impresión de OT"
             className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
@@ -379,7 +381,7 @@ export function ToolcribPrintModal({
                 <Files size={13} /> Juego: una OT por pieza
               </p>
               {pendingJobs.map((entry, index) => (
-                <div key={entry.job.piece.partNumber} className="flex items-center justify-between gap-2 border-2 border-line bg-surface-2 p-2">
+                <div key={`${entry.job.piece.partNumber}-${index}`} className="flex items-center justify-between gap-2 border-2 border-line bg-surface-2 p-2">
                   <span className="font-mono text-xs">
                     <strong>{entry.job.piece.partNumber}</strong>{entry.job.piece.companionLabel ? ` · ${entry.job.piece.companionLabel}` : ''} · {entry.job.stamp.cantidad} pzs
                   </span>

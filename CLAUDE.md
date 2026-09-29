@@ -122,6 +122,7 @@ Key modules:
 - `src/lib/invoiceEmail.ts` — Plantillas de correo de solicitud de factura.
 - `src/lib/planoOt.ts` — Usado por `ToolcribPrintModal`.
 - `src/hooks/useSyncMeta.ts` — Suscripción al doc `syncMeta/odoo` (chip de estado).
+- Impresión de juegos: por defecto una OT por pieza (`buildSeparatePrintJobs` en `src/lib/setPrintJobs.ts`); presets en localStorage (`src/lib/printPresets.ts`).
 
 ### Firestore collections
 
@@ -134,6 +135,8 @@ Key modules:
 | `odooSaleOrders` | Odoo sale orders synced by Cloud Function — read-only from the app |
 | `syncMeta` | Single doc `odoo` with last-sync status (`lastSyncAt`, `ordersProcessed`, `status`, `errorMessage?`), written by Cloud Function on every run (success and failure); read by the status chip in `OdooOrdersPanel` |
 | `purchases` | Purchase catalog items (`nombre`, `tipo`, `sku`, `proveedor`, `link`, `notas`), managed by `ComprasPanel` |
+| `toolcribSets` | Juegos (pares/hojas/complementos) guardados por el operador (`nombre`, `tipo`, `miembros[{partNumber, rol, orden, cantidadPorJuego}]`); ganan sobre `KNOWN_RULES` de `companionDrawings.ts` |
+| `toolcribPartNotes` | Notas permanentes por pieza (`partNumber`, `notas[{id, texto, imprimirEnOT}]`) |
 
 Security rules (`firestore.rules`): least-privilege per collection with default deny. `odooSaleOrders` / `syncMeta` / `workOrders` are read-only from the client (written only by the Admin SDK, which bypasses rules). `toolcribPrintLogs` and `analysisRuns` are create-only and immutable, with the auth uid enforced in rules (`printedByUid` / `userUid` / `createdByUid` must equal `request.auth.uid`). `purchases` is full CRUD for any signed-in user. Data *shape* validation lives in TypeScript validators; rules enforce identity and write surface.
 

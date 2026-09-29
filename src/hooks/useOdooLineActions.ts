@@ -4,6 +4,7 @@ import type { OrderDrawingLink, ToolcribActiveDrawingView } from '../types';
 import type { UseToolcribCatalogResult } from './useToolcribCatalog';
 import type { UseOrderDrawingBridgeResult } from './useOrderDrawingBridge';
 import { makeOrderDrawingLinkKey, parseOdooLineLabels } from '../lib/orderDrawingBridge';
+import { ensureActiveSets } from '../lib/firebase/toolcribSets';
 
 export interface UseOdooLineActionsOptions {
   catalog: UseToolcribCatalogResult;
@@ -35,6 +36,8 @@ export function useOdooLineActions({
   }, [catalog.errorReason]);
 
   const ensureCatalogViews = useCallback(async (): Promise<readonly ToolcribActiveDrawingView[] | null> => {
+    // Los juegos guardados deben estar cargados antes de resolver complementos.
+    await ensureActiveSets();
     if (catalog.status === 'ready') {
       return catalog.views;
     }

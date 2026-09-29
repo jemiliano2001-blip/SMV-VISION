@@ -89,6 +89,14 @@ service cloud.firestore {
       allow read, create, update, delete: if isSignedIn();
     }
 
+    // ── Juegos (pares/hojas/complementos) y notas permanentes por pieza ───
+    match /toolcribSets/{setId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+    match /toolcribPartNotes/{noteId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
     // ── Dashboard (Visual Factory TV) — misma base (default) ──────────────
     // Copia FIEL de visual-factory-tv-dashboard/firestore.rules: las dos apps despliegan reglas
     // a esta base y la última gana. Si cambias algo aquí, cámbialo también allá.

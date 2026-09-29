@@ -59,12 +59,18 @@ describeWithEmulator("reglas Firestore de Vision en la base compartida con el Da
     await assertFails(anonimo().doc("purchases/c-1").delete())
     await assertFails(anonimo().doc("toolingPurchases/t-1").set({ x: 1 }))
     await assertFails(anonimo().doc("partAliases/a-1").set({ x: 1 }))
+    await assertFails(anonimo().doc("toolcribSets/s-1").set({ nombre: "X" }))
+    await assertFails(anonimo().doc("toolcribPartNotes/N-1").set({ notas: [] }))
   })
 
   it("un usuario real de Vision sigue trabajando igual", async () => {
     await assertSucceeds(usuario().doc("workOrders/ot-1").get())
     await assertSucceeds(usuario().doc("purchases/nueva").set({ proveedor: "X" }))
     await assertFails(usuario().doc("workOrders/ot-1").set({ pieza: "no" }))
+    await assertSucceeds(usuario().doc("toolcribSets/s-1").set({ nombre: "Juego" }))
+    await assertSucceeds(usuario().doc("toolcribSets/s-1").get())
+    await assertSucceeds(usuario().doc("toolcribPartNotes/N-1").set({ notas: [] }))
+    await assertSucceeds(usuario().doc("toolcribPartNotes/N-1").delete())
   })
 
   it("sin sesión no hay nada", async () => {

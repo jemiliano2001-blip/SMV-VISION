@@ -57,10 +57,8 @@ let lastLoadAt = 0;
 let inflight: Promise<readonly ToolcribSet[]> | null = null;
 
 /** Carga los juegos al almacén en memoria (caché de 60 s). Nunca lanza. */
-export function ensureActiveSets(force = false): Promise<readonly ToolcribSet[]> {
-  if (!force && Date.now() - lastLoadAt < CACHE_TTL_MS) return Promise.resolve(getActiveSets());
-  if (inflight) return inflight;
-  inflight = listSets()
+function loadActiveSets(): Promise<readonly ToolcribSet[]> {
+  return listSets()
     .then((res) => {
       if (res.ok === true) {
         setActiveSets(res.value);
@@ -68,11 +66,22 @@ export function ensureActiveSets(force = false): Promise<readonly ToolcribSet[]>
       }
       return getActiveSets();
     })
-    .catch(() => getActiveSets())
-    .finally(() => {
-      inflight = null;
-    });
-  return inflight;
+    .catch(() => getActiveSets());
+}
+
+/**
+ * Un llamado forzado nunca reutiliza una lectura ya en vuelo (podría ser anterior
+ * a la escritura): espera a que termine y encadena una lectura nueva.
+ */
+export function ensureActiveSets(force = false): Promise<readonly ToolcribSet[]> {
+  if (!force && Date.now() - lastLoadAt < CACHE_TTL_MS) return Promise.resolve(getActiveSets());
+  if (inflight && !force) return inflight;
+  const start = inflight ? inflight.then(loadActiveSets, loadActiveSets) : loadActiveSets();
+  const current: Promise<readonly ToolcribSet[]> = start.finally(() => {
+    if (inflight === current) inflight = null;
+  });
+  inflight = current;
+  return current;
 }
 
 export async function saveSet(input: {

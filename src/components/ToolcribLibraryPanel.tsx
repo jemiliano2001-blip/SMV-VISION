@@ -26,6 +26,7 @@ import {
   Box,
   MoreHorizontal,
   Tag,
+  Files,
 } from 'lucide-react';
 
 import {
@@ -35,6 +36,12 @@ import {
   inactivatePart,
 } from '../lib/firebase/toolcrib';
 import { listPartAliases, type PartAliasDoc } from '../lib/firebase/aliases';
+import { ensureActiveSets } from '../lib/firebase/toolcribSets';
+import { knownRuleGroupKey } from '../lib/companionDrawings';
+import { findSavedSetForPart, MAX_SET_MEMBERS, setPartKey, type ToolcribSet } from '../lib/toolcribSets';
+import { suggestSets, type SetSuggestion } from '../lib/toolcribSetSuggestions';
+import { ToolcribSetModal } from './ToolcribSetModal';
+import { ToolcribSetSuggestions } from './ToolcribSetSuggestions';
 import type { ToolcribActiveDrawingView } from '../types';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { formatRelativeTime } from '../lib/age';
@@ -325,6 +332,18 @@ export function ToolcribLibraryPanel({
   const [stlDrawing, setStlDrawing] = useState<ToolcribActiveDrawingView | null>(null);
   const [aliases, setAliases] = useState<PartAliasDoc[]>([]);
   const [aliasTarget, setAliasTarget] = useState<ToolcribAliasTarget | null>(null);
+  const [savedSets, setSavedSets] = useState<readonly ToolcribSet[]>([]);
+  const [onlySets, setOnlySets] = useState(false);
+  const [dismissedRoots, setDismissedRoots] = useState<ReadonlySet<string>>(new Set());
+  const [setDraft, setSetDraft] = useState<{ members: string[]; set: ToolcribSet | null } | null>(null);
+
+  const loadSets = useCallback(async (force = false) => {
+    setSavedSets(await ensureActiveSets(force));
+  }, []);
+
+  useEffect(() => {
+    void loadSets();
+  }, [loadSets]);
   const [sortKey, setSortKey] = useState<ToolcribSortKey>('partNumber');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(new Set());
@@ -375,7 +394,7 @@ export function ToolcribLibraryPanel({
 
   useEffect(() => {
     setVisibleLimit(50);
-  }, [deferredSearchTerm, selectedFamily, selectedAsset, sortKey, sortDirection]);
+  }, [deferredSearchTerm, selectedFamily, selectedAsset, onlySets, sortKey, sortDirection]);
 
   // Listener a nivel window (no depende de dónde viva el foco) — antes el
   // cierre con Escape dejaba de funcionar en cuanto el usuario clickeaba
@@ -530,9 +549,50 @@ export function ToolcribLibraryPanel({
 
   const hasQuery = deferredSearchTerm.trim().length > 0;
 
+  const isGroupInSet = useCallback(
+    (group: ToolcribPartGroup) =>
+      findSavedSetForPart(group.partNumber, savedSets) !== null || knownRuleGroupKey(group.partNumber) !== null,
+    [savedSets],
+  );
+
+  const setSuggestions = useMemo(
+    () => suggestSets(views, savedSets).filter((s) => !dismissedRoots.has(s.root)),
+    [views, savedSets, dismissedRoots],
+  );
+
+  const setInfoFor = useCallback(
+    (group: ToolcribPartGroup): { label: string; title: string } | null => {
+      const saved = findSavedSetForPart(group.partNumber, savedSets);
+      if (saved) {
+        const key = setPartKey(group.partNumber);
+        const index = saved.miembros.findIndex((m) => m.partNumber === key) + 1;
+        const others = saved.miembros.filter((m) => m.partNumber !== key).map((m) => m.partNumber).join(', ');
+        return { label: `${saved.tipo === 'hoja' ? 'HOJA' : 'PAR'} ${index}/${saved.miembros.length}`, title: `${saved.nombre} · con ${others}. Clic para editar.` };
+      }
+      return knownRuleGroupKey(group.partNumber)
+        ? { label: 'JUEGO', title: 'Juego detectado por regla del taller. Clic para guardarlo y personalizarlo.' }
+        : null;
+    },
+    [savedSets],
+  );
+
+  const openSetDraftFor = useCallback(
+    (group: ToolcribPartGroup) => {
+      const saved = findSavedSetForPart(group.partNumber, savedSets);
+      setSetDraft({ members: saved ? saved.miembros.map((m) => m.partNumber) : [setPartKey(group.partNumber)], set: saved });
+    },
+    [savedSets],
+  );
+
+  const acceptSuggestion = useCallback((s: SetSuggestion) => {
+    setSetDraft({ members: s.partNumbers.slice(0, MAX_SET_MEMBERS), set: null });
+  }, []);
+
   const filteredGroups = useMemo(() => {
     const passesFilters = (group: ToolcribPartGroup) =>
-      matchesFamilyGroup(group, selectedFamily) && matchesAssetFilter(group, selectedAsset);
+      matchesFamilyGroup(group, selectedFamily) &&
+      matchesAssetFilter(group, selectedAsset) &&
+      (!onlySets || isGroupInSet(group));
 
     if (!hasQuery) {
       // Sin búsqueda activa, el orden lo decide la columna elegida (por
@@ -562,6 +622,8 @@ export function ToolcribLibraryPanel({
     groups,
     selectedFamily,
     selectedAsset,
+    onlySets,
+    isGroupInSet,
     excludeIsoForPrint,
     sortKey,
     sortDirection,
@@ -703,10 +765,11 @@ export function ToolcribLibraryPanel({
 
   const totalCount = groups.length;
   const visibleCount = filteredGroups.length;
-  const hasNarrowingFilters = selectedFamily !== 'all' || selectedAsset !== 'all';
+  const hasNarrowingFilters = selectedFamily !== 'all' || selectedAsset !== 'all' || onlySets;
   const resetFilters = useCallback(() => {
     setSelectedFamily('all');
     setSelectedAsset('all');
+    setOnlySets(false);
   }, []);
   const isEmpty = status === 'ready' && totalCount === 0;
   const listOpen = isPage || isOpen;
@@ -853,6 +916,14 @@ export function ToolcribLibraryPanel({
             />
           );
         })}
+        <button
+          type="button"
+          aria-pressed={onlySets}
+          onClick={() => setOnlySets((prev) => !prev)}
+          className={`px-2 py-1 border-2 text-[10px] font-mono font-bold uppercase tracking-wider transition-colors ${onlySets ? 'border-accent bg-accent/10 text-accent' : 'border-line text-ink-dim hover:border-accent/40'}`}
+        >
+          Solo pares / juegos
+        </button>
       </div>
     </div>
   );
@@ -901,6 +972,11 @@ export function ToolcribLibraryPanel({
         Mostrando {visibleCount} de {totalCount} piezas
         {views.length !== totalCount ? ` · ${views.length} archivos` : ''}.
       </p>
+      <ToolcribSetSuggestions
+        suggestions={setSuggestions}
+        onAccept={acceptSuggestion}
+        onDismiss={(s) => setDismissedRoots((prev) => new Set(prev).add(s.root))}
+      />
       <div
         className={cn(
           'border-2 border-line overflow-auto rounded-none bg-surface',
@@ -1021,6 +1097,8 @@ export function ToolcribLibraryPanel({
                   onInactivate={handleInactivate}
                   onUseForPending={onUseForPendingOrder}
                   onAlias={setAliasTarget}
+                  setInfo={setInfoFor(group)}
+                  onLinkSet={openSetDraftFor}
                 />
               ))
             )}
@@ -1181,6 +1259,14 @@ export function ToolcribLibraryPanel({
         initialCustomer={updateDrawing?.customer}
         initialDescription={updateDrawing?.description}
       />
+      <ToolcribSetModal
+        open={setDraft !== null}
+        initialMembers={setDraft?.members ?? []}
+        initialSet={setDraft?.set ?? null}
+        catalogParts={groups.map((g) => g.partNumber)}
+        onClose={() => setSetDraft(null)}
+        onSaved={() => void loadSets(true)}
+      />
       <ToolcribPrintModal
         drawing={printDrawing}
         catalogViews={views}
@@ -1298,6 +1384,8 @@ interface PartGroupRowProps {
   onInactivate: (view: ToolcribActiveDrawingView) => void;
   onUseForPending?: (view: ToolcribActiveDrawingView) => void;
   onAlias: (target: ToolcribAliasTarget) => void;
+  setInfo: { label: string; title: string } | null;
+  onLinkSet: (group: ToolcribPartGroup) => void;
 }
 
 const PartGroupRow = memo(function PartGroupRow({
@@ -1320,6 +1408,8 @@ const PartGroupRow = memo(function PartGroupRow({
   onInactivate,
   onUseForPending,
   onAlias,
+  setInfo,
+  onLinkSet,
 }: PartGroupRowProps): ReactElement {
   const printView = printDrawingForGroup(group);
   const previewView = previewDrawingForGroup(group);
@@ -1390,6 +1480,16 @@ const PartGroupRow = memo(function PartGroupRow({
             )}
             {!group.cad && (
               <span className="text-[9px] font-mono text-ink-dim border border-line/60 px-1 py-0.2">sin CAD</span>
+            )}
+            {setInfo && (
+              <button
+                type="button"
+                onClick={() => onLinkSet(group)}
+                title={setInfo.title}
+                className="bg-accent/10 text-accent border-2 border-accent/40 hover:bg-accent/20 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-none transition-colors"
+              >
+                {setInfo.label}
+              </button>
             )}
           </div>
           {printStat && printStat.count > 0 && pendingView && (
@@ -1597,6 +1697,13 @@ const PartGroupRow = memo(function PartGroupRow({
                   Agregar alias de taller
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem
+                onClick={() => onLinkSet(group)}
+                className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5"
+              >
+                <Files size={12} className="mr-1.5" />
+                {setInfo ? 'Editar juego' : 'Vincular como juego'}
+              </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-line my-1" />
               {group.cad && (
                 <DropdownMenuItem

@@ -6,7 +6,7 @@
 import type { ToolcribActiveDrawingView } from '../types';
 import type { CompanionInfo, CompanionType } from './companionDrawings';
 import { isIsoDrawingView } from './matching';
-import { canonicalPartNumber } from './toolcribCatalog';
+import { canonicalPartNumber, pickPreferredDrawing } from './toolcribCatalog';
 
 export type ToolcribSetType = 'par' | 'hoja' | 'complemento' | 'variante';
 
@@ -94,8 +94,8 @@ export function companionsFromSet(
   const companions: CompanionInfo[] = [];
   for (const member of set.miembros) {
     if (member.partNumber === baseKey) continue;
-    const view = library.find(
-      (candidate) => !isIsoDrawingView(candidate) && setPartKey(candidate.partNumber) === member.partNumber,
+    const view = pickPreferredDrawing(
+      library.filter((candidate) => !isIsoDrawingView(candidate) && setPartKey(candidate.partNumber) === member.partNumber),
     );
     if (!view) continue;
     companions.push({

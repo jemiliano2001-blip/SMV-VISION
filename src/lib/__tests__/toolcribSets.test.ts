@@ -61,6 +61,14 @@ describe('toolcribSets — búsqueda y compañeros', () => {
     expect(companions[0].cantidadPorJuego).toBe(2);
   });
 
+  it('con varias revisiones activas del hermano elige la preferida (la más reciente)', () => {
+    const old = makeView('1012-05-GRANDE', { drawingId: 'old', revision: '1', effectiveFromUTC: '2025-01-01T00:00:00Z' });
+    const recent = makeView('1012-05-GRANDE', { drawingId: 'new', revision: '2', effectiveFromUTC: '2026-06-01T00:00:00Z' });
+    const companions = companionsFromSet('1012-05-CHICO', [makeView('1012-05-CHICO'), old, recent], [par]);
+    expect(companions).toHaveLength(1);
+    expect(companions[0].drawing.drawingId).toBe('new');
+  });
+
   it('con juego guardado pero hermano ausente del catálogo devuelve [] (no cae a reglas)', () => {
     expect(companionsFromSet('1012-05-CHICO', [makeView('1012-05-CHICO')], [par])).toEqual([]);
   });

@@ -284,6 +284,26 @@ export function getCadDrawingSnapshot(
   return link.cadDrawing;
 }
 
+/**
+ * Recalcula los complementos de un link ya resuelto contra el catálogo y los
+ * juegos guardados actuales. Un link cacheado pudo resolverse con reglas fijas
+ * antes de que cargaran (o se guardaran) los juegos. Sin CAD en el catálogo, no cambia.
+ */
+export function refreshLinkCompanions(
+  link: OrderDrawingLink,
+  library: readonly ToolcribActiveDrawingView[],
+): OrderDrawingLink {
+  const cadId = link.cadDrawing?.drawingId;
+  if (!cadId) return link;
+  const cadView = library.find((v) => v.drawingId === cadId);
+  if (!cadView) return link;
+  const companions = findCompanionDrawings(cadView, library);
+  return {
+    ...link,
+    companionDrawings: companions.length > 0 ? companions.map((c) => snapshotFromView(c.drawing)) : undefined,
+  };
+}
+
 /** Todos los planos CAD para imprimir la OT (plano base + hojas secundarias o complementos). */
 export function getAllCadDrawingSnapshotsForPrint(
   link: OrderDrawingLink,

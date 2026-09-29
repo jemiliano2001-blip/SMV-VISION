@@ -3,8 +3,9 @@ import type { OdooOrderView, OdooOrderLineView } from '../lib/firebase/odooOrder
 import type { ToolcribActiveDrawingView, OrderDrawingLink } from '../types';
 import type { UseOrderDrawingBridgeResult } from './useOrderDrawingBridge';
 import { recordToolcribPrintLogFireAndForget } from '../lib/firebase/toolcrib';
-import { makeOrderDrawingLinkKey, getAllCadDrawingSnapshotsForPrint } from '../lib/orderDrawingBridge';
+import { makeOrderDrawingLinkKey, getAllCadDrawingSnapshotsForPrint, refreshLinkCompanions } from '../lib/orderDrawingBridge';
 import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
+import { ensureActiveSets } from '../lib/firebase/toolcribSets';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { log } from '../lib/log';
 
@@ -74,6 +75,7 @@ export function useBatchPrintOts({
     setBatchPrintStatus(`Preparando catálogo para ${selectedLines.size} OTs…`);
 
     try {
+      await ensureActiveSets();
       const library = await ensureCatalogViews();
       if (!library) {
         onError('No se pudo cargar el catálogo de planos.');
@@ -97,7 +99,7 @@ export function useBatchPrintOts({
           processedCount += 1;
           setBatchPrintStatus(`Descargando plano ${processedCount} de ${selectedLines.size}…`);
 
-          const link = resolveLineLink(order, line, idx, library);
+          const link = refreshLinkCompanions(resolveLineLink(order, line, idx, library), library);
           const cadSnapshots = getAllCadDrawingSnapshotsForPrint(link);
           if (cadSnapshots.length === 0) {
             log.warn(`[batch-print] Sin plano accesible para ${line.product}`);

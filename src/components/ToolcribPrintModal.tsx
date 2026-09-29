@@ -22,6 +22,12 @@ import {
   MIN_BLUEPRINT_MATCH_SCORE,
   scorePieceMatch,
 } from '../lib/matching';
+import { ensureActiveSets } from '../lib/firebase/toolcribSets';
+import { baseQuantityFactor, getActiveSets, setPartKey } from '../lib/toolcribSets';
+import { buildSeparatePrintJobs, type SetPrintJob, type SetPrintPiece } from '../lib/setPrintJobs';
+import { listPartNotes } from '../lib/firebase/partNotes';
+import { composeOtNotes, QUICK_NOTE_CHIPS, type PartNote } from '../lib/partNotes';
+import { deletePreset, loadPresets, savePreset, type PrintPreset } from '../lib/printPresets';
 import type { ToolcribActiveDrawingView } from '../types';
 
 const PlanoOtPreview = lazy(() => import('./PlanoOtPreview').then(module => ({ default: module.PlanoOtPreview })));
@@ -64,6 +70,18 @@ export function ToolcribPrintModal({
   const [catalog, setCatalog] = useState<readonly ToolcribActiveDrawingView[]>(catalogViews ?? []);
   const [includeCompanions, setIncludeCompanions] = useState(true);
   const [setItems, setSetItems] = useState<PlanoOtSetItem[] | null>(null);
+  const [setsTick, setSetsTick] = useState(0);
+  const [juegoMode, setJuegoMode] = useState<'separadas' | 'unificado'>('separadas');
+  const [presets, setPresets] = useState<PrintPreset[]>(() => loadPresets());
+  const [presetId, setPresetId] = useState('builtin-estandar');
+  const [incluirNotasPermanentes, setIncluirNotasPermanentes] = useState(true);
+  const [presetName, setPresetName] = useState('');
+  // Ref: el efecto de notas lee el preset vigente sin re-sembrar los checkboxes al cambiarlo.
+  const incluirNotasRef = useRef(true);
+  incluirNotasRef.current = incluirNotasPermanentes;
+  const [pendingJobs, setPendingJobs] = useState<{ job: SetPrintJob; printed: boolean }[] | null>(null);
+  const [allNotes, setAllNotes] = useState<ReadonlyMap<string, PartNote[]>>(new Map());
+  const [enabledNoteIds, setEnabledNoteIds] = useState<ReadonlySet<string>>(new Set());
   const generation = useRef(0);
 
   const [odooOrders, setOdooOrders] = useState<OdooOrderView[]>([]);
@@ -86,10 +104,63 @@ export function ToolcribPrintModal({
     }
   }, [drawing, catalogViews, catalog.length]);
 
+  useEffect(() => {
+    if (!drawing) return;
+    let cancelled = false;
+    void ensureActiveSets().then(() => {
+      if (!cancelled) setSetsTick((tick) => tick + 1);
+    });
+    return () => { cancelled = true; };
+  }, [drawing]);
+
+  useEffect(() => {
+    if (!drawing) return;
+    let cancelled = false;
+    void listPartNotes().then((res) => {
+      if (cancelled || res.ok === false) return;
+      setAllNotes(res.value);
+      const own = res.value.get(setPartKey(drawing.partNumber)) ?? [];
+      setEnabledNoteIds(new Set(incluirNotasRef.current ? own.filter((n) => n.imprimirEnOT).map((n) => n.id) : []));
+    });
+    return () => { cancelled = true; };
+  }, [drawing]);
+
+  const ownNotes = drawing ? allNotes.get(setPartKey(drawing.partNumber)) ?? [] : [];
+  const ownNoteTexts = () => ownNotes.filter((n) => enabledNoteIds.has(n.id)).map((n) => n.texto);
+
+  const applyPreset = (id: string) => {
+    setPresetId(id);
+    const preset = presets.find((p) => p.id === id);
+    if (!preset) return;
+    setPrintMode(preset.modo);
+    setHeaderStyle(preset.headerStyle);
+    setJuegoMode(preset.juego);
+    setIncluirNotasPermanentes(preset.incluirNotasPermanentes);
+    // Las notas permanentes marcadas por defecto siguen al preset.
+    setEnabledNoteIds(new Set(preset.incluirNotasPermanentes ? ownNotes.filter((n) => n.imprimirEnOT).map((n) => n.id) : []));
+  };
+
+  const handleSavePreset = () => {
+    const nombre = presetName.trim();
+    if (!nombre) return;
+    const next = savePreset({ nombre, modo: printMode, headerStyle, incluirNotasPermanentes, juego: juegoMode });
+    setPresets(next);
+    setPresetId(next[next.length - 1]?.id ?? presetId);
+    setPresetName('');
+  };
+
+  const handleDeletePreset = () => {
+    const current = presets.find((p) => p.id === presetId);
+    if (!current || current.builtin) return;
+    setPresets(deletePreset(current.id));
+    applyPreset('builtin-estandar');
+  };
+
   const companions: CompanionInfo[] = useMemo(() => {
     if (!drawing || catalog.length === 0) return [];
-    return findCompanionDrawings(drawing, catalog);
-  }, [drawing, catalog]);
+    return findCompanionDrawings(drawing, catalog, getActiveSets());
+    // setsTick fuerza el recálculo cuando terminan de cargar los juegos guardados.
+  }, [drawing, catalog, setsTick]);
 
   useEffect(() => {
     generation.current += 1;
@@ -101,6 +172,7 @@ export function ToolcribPrintModal({
     setPreviewReady(false);
     setIncludeCompanions(true);
     setSetItems(null);
+    setPendingJobs(null);
     if (drawing) {
       setSoNumber(initialSoNumber?.trim() ?? '');
       setCantidad(initialCantidad?.trim() ?? '');
@@ -170,7 +242,9 @@ export function ToolcribPrintModal({
 
   const handleOpenChange = (open: boolean) => {
     if (!open && !isProcessing) {
-      onClose();
+      // Con piezas pendientes ya se imprimió la primera OT: cerrar equivale a terminar (registra la impresión).
+      if (pendingJobs) handleFinishSet();
+      else onClose();
     }
   };
 
@@ -183,8 +257,8 @@ export function ToolcribPrintModal({
       return;
     }
     if (preview && (!previewReady || (!mask && !skipMask))) return;
-    if (!Number.isFinite(Number(cantidad)) || Number(cantidad) <= 0) {
-      setError('Escribe una cantidad de piezas mayor que cero.');
+    if (!Number.isInteger(Number(cantidad)) || Number(cantidad) <= 0) {
+      setError('Escribe una cantidad entera mayor que cero.');
       return;
     }
 
@@ -204,7 +278,7 @@ export function ToolcribPrintModal({
           cantidad: cantidad.trim(),
           poNumber: poNumber.trim(),
           fecha,
-          notas: notas.trim(),
+          notas: composeOtNotes(ownNoteTexts(), notas.trim()),
           partNumber: drawing.partNumber,
           customer: drawing.customer,
           piezaDescripcion: drawing.description,
@@ -226,6 +300,8 @@ export function ToolcribPrintModal({
                 description: comp.drawing.description,
                 isCompanion: true,
                 companionLabel: comp.label,
+                customer: comp.drawing.customer,
+                cantidadPorJuego: comp.cantidadPorJuego ?? 1,
               });
             } catch (err) {
               console.warn('[ToolcribPrintModal] no se pudo descargar companero', comp.drawing.partNumber, err);
@@ -239,6 +315,8 @@ export function ToolcribPrintModal({
                 partNumber: drawing.partNumber,
                 revision: drawing.revision,
                 description: drawing.description,
+                customer: drawing.customer,
+                cantidadPorJuego: baseQuantityFactor(drawing.partNumber, getActiveSets()),
               },
               ...compItems,
             ];
@@ -248,6 +326,30 @@ export function ToolcribPrintModal({
         setSetItems(preparedSet);
         setPreview({ dataUrl, stamp: baseStamp });
         setPreviewReady(false);
+        return;
+      }
+
+      if (setItems && setItems.length > 1 && juegoMode === 'separadas') {
+        const juegos = Number(cantidad);
+        const pieces: SetPrintPiece[] = setItems.map((item, index) => ({
+          pdfDataUrl: item.pdfDataUrl,
+          partNumber: item.partNumber,
+          revision: item.revision,
+          description: item.description,
+          customer: item.customer,
+          companionLabel: index === 0 ? undefined : item.companionLabel,
+          cantidadPorJuego: item.cantidadPorJuego ?? 1,
+          permanentNotes:
+            index === 0
+              ? ownNoteTexts()
+              : incluirNotasPermanentes
+                ? (allNotes.get(setPartKey(item.partNumber)) ?? []).filter((n) => n.imprimirEnOT).map((n) => n.texto)
+                : [],
+        }));
+        const jobs = buildSeparatePrintJobs(pieces, { ...preview.stamp, quantityMask: mask }, juegos, notas.trim());
+        await openStampedPlanoOt(jobs[0].piece.pdfDataUrl, jobs[0].stamp);
+        if (generation.current !== currentGeneration) return;
+        setPendingJobs(jobs.map((job, index) => ({ job, printed: index === 0 })));
         return;
       }
 
@@ -272,6 +374,28 @@ export function ToolcribPrintModal({
     }
   };
 
+  const handlePrintPending = async (index: number) => {
+    if (!pendingJobs) return;
+    setError(null);
+    try {
+      await openStampedPlanoOt(pendingJobs[index].job.piece.pdfDataUrl, pendingJobs[index].job.stamp);
+      setPendingJobs((prev) => prev && prev.map((entry, i) => (i === index ? { ...entry, printed: true } : entry)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al imprimir esta pieza.');
+    }
+  };
+
+  const handleFinishSet = () => {
+    const submittedSoNumber = soNumber.trim() || null;
+    setSoNumber('');
+    setCantidad('');
+    setPoNumber('');
+    setNotas('');
+    setPendingJobs(null);
+    onSuccess({ soNumber: submittedSoNumber });
+    onClose();
+  };
+
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent showCloseButton={false} className={`${preview ? 'sm:max-w-5xl' : 'sm:max-w-lg'} max-h-[94dvh] bg-surface border-2 border-line p-0 overflow-hidden shadow-hard-accent text-ink rounded-none flex flex-col`}>
@@ -292,7 +416,7 @@ export function ToolcribPrintModal({
           <Button
             variant="outline"
             size="icon"
-            onClick={onClose}
+            onClick={() => (pendingJobs ? handleFinishSet() : onClose())}
             disabled={isProcessing}
             aria-label="Cerrar impresión de OT"
             className="min-h-11 min-w-11 rounded-lg border border-white/40 bg-transparent text-white hover:bg-accent hover:border-accent transition-colors"
@@ -310,7 +434,23 @@ export function ToolcribPrintModal({
             </div>
           )}
 
-          {preview ? <>
+          {pendingJobs ? (
+            <div className="space-y-3" role="region" aria-label="Piezas del juego">
+              <p className="text-[10px] font-mono font-black uppercase text-accent flex items-center gap-1.5">
+                <Files size={13} /> Juego: una OT por pieza
+              </p>
+              {pendingJobs.map((entry, index) => (
+                <div key={`${entry.job.piece.partNumber}-${index}`} className="flex items-center justify-between gap-2 border-2 border-line bg-surface-2 p-2">
+                  <span className="font-mono text-xs">
+                    <strong>{entry.job.piece.partNumber}</strong>{entry.job.piece.companionLabel ? ` · ${entry.job.piece.companionLabel}` : ''} · {entry.job.stamp.cantidad} pzs
+                  </span>
+                  <Button type="button" variant="outline" onClick={() => void handlePrintPending(index)} className="rounded-none border-2 border-line h-8 text-[10px] font-black uppercase">
+                    {entry.printed ? 'Reimprimir' : 'Imprimir'}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : preview ? <>
             <Suspense fallback={<p role="status">Cargando vista previa…</p>}>
               <PlanoOtPreview dataUrl={preview.dataUrl} stamp={preview.stamp} mask={mask} setItems={setItems}
                 onMaskChange={next => { setMask(next); setSkipMask(false); }} onReady={setPreviewReady} />
@@ -320,6 +460,32 @@ export function ToolcribPrintModal({
               Este plano no necesita ocultar una cantidad original.
             </label>}
           </> : <>
+          <div className="space-y-1.5 border-2 border-line bg-surface-2 p-2" role="group" aria-label="Presets de impresión">
+            <div className="flex items-center gap-2">
+              <label htmlFor="print-preset" className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Preset</label>
+              <select id="print-preset" value={presetId} onChange={(e) => applyPreset(e.target.value)} disabled={isProcessing} className="flex-1 h-8 border-2 border-line bg-surface text-[11px] font-mono px-2 rounded-none">
+                {presets.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+              {!presets.find((p) => p.id === presetId)?.builtin && (
+                <button type="button" onClick={handleDeletePreset} className="text-[9px] font-mono text-danger hover:underline uppercase">Borrar</button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input aria-label="Nombre del nuevo preset" value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="Guardar la configuración actual como…" disabled={isProcessing} className="rounded-none border-2 border-line bg-surface h-8 text-[11px] font-mono" />
+              <button type="button" onClick={handleSavePreset} disabled={!presetName.trim() || isProcessing} className="px-2 h-8 border-2 border-line text-[10px] font-black uppercase hover:border-accent hover:text-accent disabled:opacity-40">Guardar</button>
+            </div>
+            {companions.length > 0 && (
+              <div className="flex items-center gap-2 text-[10px] font-mono">
+                <span className="font-black uppercase tracking-widest text-ink-dim">Juego</span>
+                {(['separadas', 'unificado'] as const).map((mode) => (
+                  <button key={mode} type="button" aria-pressed={juegoMode === mode} onClick={() => setJuegoMode(mode)} disabled={isProcessing} className={`px-2 py-0.5 border-2 uppercase font-bold ${juegoMode === mode ? 'border-accent bg-accent/10 text-accent' : 'border-line text-ink-dim'}`}>
+                    {mode === 'separadas' ? 'Una OT por pieza' : 'Un solo PDF'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {companions.length > 0 && (
             <div className="bg-accent/10 border-2 border-accent/40 p-3 space-y-1.5">
               <div className="flex items-center justify-between">
@@ -341,6 +507,7 @@ export function ToolcribPrintModal({
                 Pieza base: <strong>{drawing?.partNumber}</strong> · Incluye:{' '}
                 {companions.map((c) => `${c.drawing.partNumber} (${c.label})`).join(', ')}
               </p>
+              <p className="text-[9px] font-mono text-ink-dim">Cantidad = juegos pedidos; cada pieza se multiplica por sus piezas por juego.</p>
             </div>
           )}
 
@@ -423,6 +590,24 @@ export function ToolcribPrintModal({
             />
           </div>
 
+          {ownNotes.length > 0 && (
+            <div className="space-y-1 border-2 border-warn/40 bg-warn/10 p-2" role="group" aria-label="Notas permanentes de la pieza">
+              <p className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Notas permanentes</p>
+              {ownNotes.map((note) => (
+                <label key={note.id} className="flex items-start gap-2 text-[11px] font-mono cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enabledNoteIds.has(note.id)}
+                    onChange={(e) => setEnabledNoteIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(note.id); else next.delete(note.id); return next; })}
+                    disabled={isProcessing}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <span>{note.texto}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
           <div>
             <label htmlFor="print-notes" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">
               Notas Adicionales (Aparecerán en el PDF)
@@ -436,6 +621,19 @@ export function ToolcribPrintModal({
               disabled={isProcessing}
               className="w-full border-2 border-line bg-surface-2 text-ink h-9 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent rounded-none shadow-none"
             />
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {QUICK_NOTE_CHIPS.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setNotas((prev) => (prev.trim() ? `${prev.trim()} · ${chip}` : chip))}
+                  className="px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider border-2 border-line bg-surface text-ink-dim hover:border-accent hover:text-accent transition-colors"
+                >
+                  + {chip}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="pt-1 border-t border-line/60 space-y-2">
@@ -516,6 +714,11 @@ export function ToolcribPrintModal({
           </>}
 
           <DialogFooter className="pt-2 flex justify-end gap-2 border-t-2 border-line mt-4">
+            {pendingJobs ? (
+              <Button type="button" onClick={handleFinishSet} className="bg-accent text-bg px-6 h-9 text-[10px] font-black uppercase tracking-widest rounded-none">
+                Terminar
+              </Button>
+            ) : (<>
             {preview && <Button type="button" variant="outline" disabled={isProcessing} onClick={() => { setPreview(null); setPreviewReady(false); }}>Volver a datos</Button>}
             <Button
               type="button"
@@ -540,7 +743,9 @@ export function ToolcribPrintModal({
                   <Printer size={13} />
                   {preview
                     ? setItems && setItems.length > 1
-                      ? `Imprimir Juego (${setItems.length} Planos)`
+                      ? juegoMode === 'separadas'
+                        ? `Imprimir ${setItems.length} OTs (una por pieza)`
+                        : `Imprimir Juego (${setItems.length} Planos)`
                       : printMode === 'both'
                       ? 'Imprimir (Ficha + Plano)'
                       : printMode === 'board_ticket'
@@ -550,6 +755,7 @@ export function ToolcribPrintModal({
                 </>
               )}
             </Button>
+            </>)}
           </DialogFooter>
         </form>
       </DialogContent>

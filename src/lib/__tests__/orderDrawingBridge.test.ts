@@ -6,11 +6,13 @@ import {
   getReportDrawingSnapshot,
   makeOrderDrawingLinkKey,
   parseOdooLineLabels,
+  refreshLinkCompanions,
   resolveOrderDrawingLink,
   selectAliasDrawingId,
   snapshotFromView,
 } from '../orderDrawingBridge';
 import type { ToolcribActiveDrawingView } from '../../types';
+import { setActiveSets } from '../toolcribSets';
 
 function makeView(
   overrides: Partial<ToolcribActiveDrawingView> & Pick<ToolcribActiveDrawingView, 'drawingId' | 'partNumber'>,
@@ -412,3 +414,37 @@ describe('Resolución de Planos Complementarios en OrderDrawingBridge', () => {
   });
 });
 
+describe('refreshLinkCompanions', () => {
+  it('recalcula los complementos con los juegos guardados que cargaron despues del link', () => {
+    const cadHoja1 = makeView({ drawingId: 'cad-06-1', partNumber: '90-1012-06', description: 'PUNZON DE CORTE' });
+    const cadHoja2 = makeView({ drawingId: 'cad-06-2', partNumber: '90-1012-06-2', description: 'HOJA 2 COMPONENTE' });
+    const otra = makeView({ drawingId: 'cad-otra', partNumber: 'ZZ-9999-01', description: 'OTRA PIEZA' });
+    const library = [cadHoja1, cadHoja2, otra];
+
+    setActiveSets([]);
+    const link = resolveOrderDrawingLink(
+      { orderId: 'SO-1', lineIndex: 0, soNumber: 'S1', poNumber: 'P1', pieza: 'PUNZON DE CORTE 90-1012-06', numeroParte: '90-1012-06', qtyPending: 1 },
+      library,
+    );
+    expect(link.companionDrawings?.map((c) => c.partNumber)).toEqual(['90-1012-06-2']);
+
+    setActiveSets([
+      {
+        id: 's1',
+        nombre: 'Juego',
+        tipo: 'par',
+        miembros: [
+          { partNumber: '90-1012-06', rol: 'Base', orden: 1, cantidadPorJuego: 1 },
+          { partNumber: 'ZZ-9999-01', rol: 'Otra', orden: 2, cantidadPorJuego: 1 },
+        ],
+      },
+    ]);
+    try {
+      const refreshed = refreshLinkCompanions(link, library);
+      expect(refreshed.companionDrawings?.map((c) => c.partNumber)).toEqual(['ZZ-9999-01']);
+      expect(refreshLinkCompanions({ ...link, cadDrawing: null }, library).companionDrawings).toEqual(link.companionDrawings);
+    } finally {
+      setActiveSets([]);
+    }
+  });
+});

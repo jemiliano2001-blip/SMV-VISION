@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, Trash2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
@@ -13,17 +13,23 @@ export interface ToolcribNotesModalProps {
   onSaved: () => void;
 }
 
+let noteIdCounter = 0;
+
 export function ToolcribNotesModal({ partNumber, notes, onClose, onSaved }: ToolcribNotesModalProps) {
   const [draft, setDraft] = useState<PartNote[]>([]);
   const [texto, setTexto] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // El borrador se siembra solo al abrir para una pieza (cambia partNumber). Depender de `notes`
+  // lo reiniciaría en cada render del padre (`?? []` crea un arreglo nuevo) y borraría lo escrito.
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
   useEffect(() => {
-    setDraft(notes.map((n) => ({ ...n })));
+    setDraft(notesRef.current.map((n) => ({ ...n })));
     setTexto('');
     setError(null);
-  }, [partNumber, notes]);
+  }, [partNumber]);
 
   const add = () => {
     const value = texto.trim();
@@ -33,7 +39,7 @@ export function ToolcribNotesModal({ partNumber, notes, onClose, onSaved }: Tool
       return;
     }
     setError(null);
-    setDraft((prev) => [...prev, { id: `n${Date.now().toString(36)}`, texto: value.slice(0, MAX_NOTE_LENGTH), imprimirEnOT: true }]);
+    setDraft((prev) => [...prev, { id: `n${Date.now().toString(36)}${(noteIdCounter++).toString(36)}`, texto: value.slice(0, MAX_NOTE_LENGTH), imprimirEnOT: true }]);
     setTexto('');
   };
 

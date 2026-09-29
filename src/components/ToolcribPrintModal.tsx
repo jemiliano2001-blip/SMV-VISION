@@ -27,6 +27,7 @@ import { baseQuantityFactor, getActiveSets, setPartKey } from '../lib/toolcribSe
 import { buildSeparatePrintJobs, type SetPrintJob, type SetPrintPiece } from '../lib/setPrintJobs';
 import { listPartNotes } from '../lib/firebase/partNotes';
 import { composeOtNotes, QUICK_NOTE_CHIPS, type PartNote } from '../lib/partNotes';
+import { deletePreset, loadPresets, savePreset, type PrintPreset } from '../lib/printPresets';
 import type { ToolcribActiveDrawingView } from '../types';
 
 const PlanoOtPreview = lazy(() => import('./PlanoOtPreview').then(module => ({ default: module.PlanoOtPreview })));
@@ -70,8 +71,14 @@ export function ToolcribPrintModal({
   const [includeCompanions, setIncludeCompanions] = useState(true);
   const [setItems, setSetItems] = useState<PlanoOtSetItem[] | null>(null);
   const [setsTick, setSetsTick] = useState(0);
-  // El setter lo usará el preset de juego (Task 10).
-  const [juegoMode] = useState<'separadas' | 'unificado'>('separadas');
+  const [juegoMode, setJuegoMode] = useState<'separadas' | 'unificado'>('separadas');
+  const [presets, setPresets] = useState<PrintPreset[]>(() => loadPresets());
+  const [presetId, setPresetId] = useState('builtin-estandar');
+  const [incluirNotasPermanentes, setIncluirNotasPermanentes] = useState(true);
+  const [presetName, setPresetName] = useState('');
+  // Ref: el efecto de notas lee el preset vigente sin re-sembrar los checkboxes al cambiarlo.
+  const incluirNotasRef = useRef(true);
+  incluirNotasRef.current = incluirNotasPermanentes;
   const [pendingJobs, setPendingJobs] = useState<{ job: SetPrintJob; printed: boolean }[] | null>(null);
   const [allNotes, setAllNotes] = useState<ReadonlyMap<string, PartNote[]>>(new Map());
   const [enabledNoteIds, setEnabledNoteIds] = useState<ReadonlySet<string>>(new Set());
@@ -113,13 +120,41 @@ export function ToolcribPrintModal({
       if (cancelled || res.ok === false) return;
       setAllNotes(res.value);
       const own = res.value.get(setPartKey(drawing.partNumber)) ?? [];
-      setEnabledNoteIds(new Set(own.filter((n) => n.imprimirEnOT).map((n) => n.id)));
+      setEnabledNoteIds(new Set(incluirNotasRef.current ? own.filter((n) => n.imprimirEnOT).map((n) => n.id) : []));
     });
     return () => { cancelled = true; };
   }, [drawing]);
 
   const ownNotes = drawing ? allNotes.get(setPartKey(drawing.partNumber)) ?? [] : [];
   const ownNoteTexts = () => ownNotes.filter((n) => enabledNoteIds.has(n.id)).map((n) => n.texto);
+
+  const applyPreset = (id: string) => {
+    setPresetId(id);
+    const preset = presets.find((p) => p.id === id);
+    if (!preset) return;
+    setPrintMode(preset.modo);
+    setHeaderStyle(preset.headerStyle);
+    setJuegoMode(preset.juego);
+    setIncluirNotasPermanentes(preset.incluirNotasPermanentes);
+    // Las notas permanentes marcadas por defecto siguen al preset.
+    setEnabledNoteIds(new Set(preset.incluirNotasPermanentes ? ownNotes.filter((n) => n.imprimirEnOT).map((n) => n.id) : []));
+  };
+
+  const handleSavePreset = () => {
+    const nombre = presetName.trim();
+    if (!nombre) return;
+    const next = savePreset({ nombre, modo: printMode, headerStyle, incluirNotasPermanentes, juego: juegoMode });
+    setPresets(next);
+    setPresetId(next[next.length - 1]?.id ?? presetId);
+    setPresetName('');
+  };
+
+  const handleDeletePreset = () => {
+    const current = presets.find((p) => p.id === presetId);
+    if (!current || current.builtin) return;
+    setPresets(deletePreset(current.id));
+    applyPreset('builtin-estandar');
+  };
 
   const companions: CompanionInfo[] = useMemo(() => {
     if (!drawing || catalog.length === 0) return [];
@@ -423,6 +458,32 @@ export function ToolcribPrintModal({
               Este plano no necesita ocultar una cantidad original.
             </label>}
           </> : <>
+          <div className="space-y-1.5 border-2 border-line bg-surface-2 p-2" role="group" aria-label="Presets de impresión">
+            <div className="flex items-center gap-2">
+              <label htmlFor="print-preset" className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Preset</label>
+              <select id="print-preset" value={presetId} onChange={(e) => applyPreset(e.target.value)} disabled={isProcessing} className="flex-1 h-8 border-2 border-line bg-surface text-[11px] font-mono px-2 rounded-none">
+                {presets.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+              {!presets.find((p) => p.id === presetId)?.builtin && (
+                <button type="button" onClick={handleDeletePreset} className="text-[9px] font-mono text-danger hover:underline uppercase">Borrar</button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input aria-label="Nombre del nuevo preset" value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="Guardar la configuración actual como…" disabled={isProcessing} className="rounded-none border-2 border-line bg-surface h-8 text-[11px] font-mono" />
+              <button type="button" onClick={handleSavePreset} disabled={!presetName.trim() || isProcessing} className="px-2 h-8 border-2 border-line text-[10px] font-black uppercase hover:border-accent hover:text-accent disabled:opacity-40">Guardar</button>
+            </div>
+            {companions.length > 0 && (
+              <div className="flex items-center gap-2 text-[10px] font-mono">
+                <span className="font-black uppercase tracking-widest text-ink-dim">Juego</span>
+                {(['separadas', 'unificado'] as const).map((mode) => (
+                  <button key={mode} type="button" aria-pressed={juegoMode === mode} onClick={() => setJuegoMode(mode)} disabled={isProcessing} className={`px-2 py-0.5 border-2 uppercase font-bold ${juegoMode === mode ? 'border-accent bg-accent/10 text-accent' : 'border-line text-ink-dim'}`}>
+                    {mode === 'separadas' ? 'Una OT por pieza' : 'Un solo PDF'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {companions.length > 0 && (
             <div className="bg-accent/10 border-2 border-accent/40 p-3 space-y-1.5">
               <div className="flex items-center justify-between">

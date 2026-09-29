@@ -19,6 +19,8 @@ export interface CompanionInfo {
   type: CompanionType;
   label: string;
   order: number;
+  /** Piezas de este plano por cada juego pedido (solo juegos guardados; por defecto 1). */
+  cantidadPorJuego?: number;
 }
 
 /** Reglas explícitas de emparejamiento para piezas conocidas del taller. */

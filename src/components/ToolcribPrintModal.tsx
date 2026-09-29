@@ -22,6 +22,9 @@ import {
   MIN_BLUEPRINT_MATCH_SCORE,
   scorePieceMatch,
 } from '../lib/matching';
+import { ensureActiveSets } from '../lib/firebase/toolcribSets';
+import { baseQuantityFactor, getActiveSets } from '../lib/toolcribSets';
+import { buildSeparatePrintJobs, type SetPrintJob, type SetPrintPiece } from '../lib/setPrintJobs';
 import type { ToolcribActiveDrawingView } from '../types';
 
 const PlanoOtPreview = lazy(() => import('./PlanoOtPreview').then(module => ({ default: module.PlanoOtPreview })));
@@ -64,6 +67,10 @@ export function ToolcribPrintModal({
   const [catalog, setCatalog] = useState<readonly ToolcribActiveDrawingView[]>(catalogViews ?? []);
   const [includeCompanions, setIncludeCompanions] = useState(true);
   const [setItems, setSetItems] = useState<PlanoOtSetItem[] | null>(null);
+  const [setsTick, setSetsTick] = useState(0);
+  // El setter lo usará el preset de juego (Task 10).
+  const [juegoMode] = useState<'separadas' | 'unificado'>('separadas');
+  const [pendingJobs, setPendingJobs] = useState<{ job: SetPrintJob; printed: boolean }[] | null>(null);
   const generation = useRef(0);
 
   const [odooOrders, setOdooOrders] = useState<OdooOrderView[]>([]);
@@ -86,10 +93,20 @@ export function ToolcribPrintModal({
     }
   }, [drawing, catalogViews, catalog.length]);
 
+  useEffect(() => {
+    if (!drawing) return;
+    let cancelled = false;
+    void ensureActiveSets().then(() => {
+      if (!cancelled) setSetsTick((tick) => tick + 1);
+    });
+    return () => { cancelled = true; };
+  }, [drawing]);
+
   const companions: CompanionInfo[] = useMemo(() => {
     if (!drawing || catalog.length === 0) return [];
-    return findCompanionDrawings(drawing, catalog);
-  }, [drawing, catalog]);
+    return findCompanionDrawings(drawing, catalog, getActiveSets());
+    // setsTick fuerza el recálculo cuando terminan de cargar los juegos guardados.
+  }, [drawing, catalog, setsTick]);
 
   useEffect(() => {
     generation.current += 1;
@@ -101,6 +118,7 @@ export function ToolcribPrintModal({
     setPreviewReady(false);
     setIncludeCompanions(true);
     setSetItems(null);
+    setPendingJobs(null);
     if (drawing) {
       setSoNumber(initialSoNumber?.trim() ?? '');
       setCantidad(initialCantidad?.trim() ?? '');
@@ -226,6 +244,8 @@ export function ToolcribPrintModal({
                 description: comp.drawing.description,
                 isCompanion: true,
                 companionLabel: comp.label,
+                customer: comp.drawing.customer,
+                cantidadPorJuego: comp.cantidadPorJuego ?? 1,
               });
             } catch (err) {
               console.warn('[ToolcribPrintModal] no se pudo descargar companero', comp.drawing.partNumber, err);
@@ -239,6 +259,8 @@ export function ToolcribPrintModal({
                 partNumber: drawing.partNumber,
                 revision: drawing.revision,
                 description: drawing.description,
+                customer: drawing.customer,
+                cantidadPorJuego: baseQuantityFactor(drawing.partNumber, getActiveSets()),
               },
               ...compItems,
             ];
@@ -248,6 +270,25 @@ export function ToolcribPrintModal({
         setSetItems(preparedSet);
         setPreview({ dataUrl, stamp: baseStamp });
         setPreviewReady(false);
+        return;
+      }
+
+      if (setItems && setItems.length > 1 && juegoMode === 'separadas') {
+        const juegos = Number(cantidad);
+        const pieces: SetPrintPiece[] = setItems.map((item, index) => ({
+          pdfDataUrl: item.pdfDataUrl,
+          partNumber: item.partNumber,
+          revision: item.revision,
+          description: item.description,
+          customer: item.customer,
+          companionLabel: index === 0 ? undefined : item.companionLabel,
+          cantidadPorJuego: item.cantidadPorJuego ?? 1,
+          permanentNotes: [],
+        }));
+        const jobs = buildSeparatePrintJobs(pieces, { ...preview.stamp, quantityMask: mask }, juegos, notas.trim());
+        await openStampedPlanoOt(jobs[0].piece.pdfDataUrl, jobs[0].stamp);
+        if (generation.current !== currentGeneration) return;
+        setPendingJobs(jobs.map((job, index) => ({ job, printed: index === 0 })));
         return;
       }
 
@@ -270,6 +311,28 @@ export function ToolcribPrintModal({
     } finally {
       if (generation.current === currentGeneration) setIsProcessing(false);
     }
+  };
+
+  const handlePrintPending = async (index: number) => {
+    if (!pendingJobs) return;
+    setError(null);
+    try {
+      await openStampedPlanoOt(pendingJobs[index].job.piece.pdfDataUrl, pendingJobs[index].job.stamp);
+      setPendingJobs((prev) => prev && prev.map((entry, i) => (i === index ? { ...entry, printed: true } : entry)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al imprimir esta pieza.');
+    }
+  };
+
+  const handleFinishSet = () => {
+    const submittedSoNumber = soNumber.trim() || null;
+    setSoNumber('');
+    setCantidad('');
+    setPoNumber('');
+    setNotas('');
+    setPendingJobs(null);
+    onSuccess({ soNumber: submittedSoNumber });
+    onClose();
   };
 
   return (
@@ -310,7 +373,23 @@ export function ToolcribPrintModal({
             </div>
           )}
 
-          {preview ? <>
+          {pendingJobs ? (
+            <div className="space-y-3" role="region" aria-label="Piezas del juego">
+              <p className="text-[10px] font-mono font-black uppercase text-accent flex items-center gap-1.5">
+                <Files size={13} /> Juego: una OT por pieza
+              </p>
+              {pendingJobs.map((entry, index) => (
+                <div key={entry.job.piece.partNumber} className="flex items-center justify-between gap-2 border-2 border-line bg-surface-2 p-2">
+                  <span className="font-mono text-xs">
+                    <strong>{entry.job.piece.partNumber}</strong>{entry.job.piece.companionLabel ? ` · ${entry.job.piece.companionLabel}` : ''} · {entry.job.stamp.cantidad} pzs
+                  </span>
+                  <Button type="button" variant="outline" onClick={() => void handlePrintPending(index)} className="rounded-none border-2 border-line h-8 text-[10px] font-black uppercase">
+                    {entry.printed ? 'Reimprimir' : 'Imprimir'}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : preview ? <>
             <Suspense fallback={<p role="status">Cargando vista previa…</p>}>
               <PlanoOtPreview dataUrl={preview.dataUrl} stamp={preview.stamp} mask={mask} setItems={setItems}
                 onMaskChange={next => { setMask(next); setSkipMask(false); }} onReady={setPreviewReady} />
@@ -341,6 +420,7 @@ export function ToolcribPrintModal({
                 Pieza base: <strong>{drawing?.partNumber}</strong> · Incluye:{' '}
                 {companions.map((c) => `${c.drawing.partNumber} (${c.label})`).join(', ')}
               </p>
+              <p className="text-[9px] font-mono text-ink-dim">Cantidad = juegos pedidos; cada pieza se multiplica por sus piezas por juego.</p>
             </div>
           )}
 
@@ -516,6 +596,11 @@ export function ToolcribPrintModal({
           </>}
 
           <DialogFooter className="pt-2 flex justify-end gap-2 border-t-2 border-line mt-4">
+            {pendingJobs ? (
+              <Button type="button" onClick={handleFinishSet} className="bg-accent text-bg px-6 h-9 text-[10px] font-black uppercase tracking-widest rounded-none">
+                Terminar
+              </Button>
+            ) : (<>
             {preview && <Button type="button" variant="outline" disabled={isProcessing} onClick={() => { setPreview(null); setPreviewReady(false); }}>Volver a datos</Button>}
             <Button
               type="button"
@@ -540,7 +625,9 @@ export function ToolcribPrintModal({
                   <Printer size={13} />
                   {preview
                     ? setItems && setItems.length > 1
-                      ? `Imprimir Juego (${setItems.length} Planos)`
+                      ? juegoMode === 'separadas'
+                        ? `Imprimir ${setItems.length} OTs (una por pieza)`
+                        : `Imprimir Juego (${setItems.length} Planos)`
                       : printMode === 'both'
                       ? 'Imprimir (Ficha + Plano)'
                       : printMode === 'board_ticket'
@@ -550,6 +637,7 @@ export function ToolcribPrintModal({
                 </>
               )}
             </Button>
+            </>)}
           </DialogFooter>
         </form>
       </DialogContent>

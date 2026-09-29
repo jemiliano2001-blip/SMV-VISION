@@ -5,6 +5,7 @@ import type { UseOrderDrawingBridgeResult } from './useOrderDrawingBridge';
 import { recordToolcribPrintLogFireAndForget } from '../lib/firebase/toolcrib';
 import { makeOrderDrawingLinkKey, getAllCadDrawingSnapshotsForPrint } from '../lib/orderDrawingBridge';
 import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
+import { ensureActiveSets } from '../lib/firebase/toolcribSets';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
 import { log } from '../lib/log';
 
@@ -74,6 +75,7 @@ export function useBatchPrintOts({
     setBatchPrintStatus(`Preparando catálogo para ${selectedLines.size} OTs…`);
 
     try {
+      await ensureActiveSets();
       const library = await ensureCatalogViews();
       if (!library) {
         onError('No se pudo cargar el catálogo de planos.');

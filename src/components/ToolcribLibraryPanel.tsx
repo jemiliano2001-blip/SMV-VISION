@@ -37,7 +37,7 @@ import {
 } from '../lib/firebase/toolcrib';
 import { listPartAliases, type PartAliasDoc } from '../lib/firebase/aliases';
 import { ensureActiveSets } from '../lib/firebase/toolcribSets';
-import { knownRuleGroupKey } from '../lib/companionDrawings';
+import { findCompanionDrawings, knownRuleGroupKey } from '../lib/companionDrawings';
 import { findSavedSetForPart, MAX_SET_MEMBERS, setPartKey, type ToolcribSet } from '../lib/toolcribSets';
 import { suggestSets, type SetSuggestion } from '../lib/toolcribSetSuggestions';
 import { ToolcribSetModal } from './ToolcribSetModal';
@@ -598,9 +598,16 @@ export function ToolcribLibraryPanel({
   const openSetDraftFor = useCallback(
     (group: ToolcribPartGroup) => {
       const saved = findSavedSetForPart(group.partNumber, savedSets);
-      setSetDraft({ members: saved ? saved.miembros.map((m) => m.partNumber) : [setPartKey(group.partNumber)], set: saved });
+      // Sin juego guardado, siembra los hermanos que ya detectan las reglas fijas.
+      const seed = saved
+        ? saved.miembros.map((m) => m.partNumber)
+        : [
+            setPartKey(group.partNumber),
+            ...findCompanionDrawings(group.cad ?? group.partNumber, views, []).map((c) => setPartKey(c.drawing.partNumber)),
+          ];
+      setSetDraft({ members: [...new Set(seed)].slice(0, MAX_SET_MEMBERS), set: saved });
     },
-    [savedSets],
+    [savedSets, views],
   );
 
   const acceptSuggestion = useCallback((s: SetSuggestion) => {

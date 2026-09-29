@@ -4,7 +4,9 @@ import {
   extractBasePartRoot,
   findCompanionDrawings,
   formatCompanionsSummary,
+  knownRuleGroupKey,
 } from '../companionDrawings';
+import type { ToolcribSet } from '../toolcribSets';
 
 function makeView(partial: Partial<ToolcribActiveDrawingView> & { partNumber: string }): ToolcribActiveDrawingView {
   return {
@@ -115,5 +117,53 @@ describe('companionDrawings - Detección para piezas del taller', () => {
     const companions = findCompanionDrawings('90-1012-06', library);
     const summary = formatCompanionsSummary('90-1012-06', companions);
     expect(summary).toBe('2 planos: 90-1012-06 + 90-1012-06-2 (Hoja 2 (Componente secundario))');
+  });
+});
+
+describe('companionDrawings — juegos guardados y reglas fijas', () => {
+  const library = [
+    makeView({ partNumber: 'ZZ-100-IZQ' }),
+    makeView({ partNumber: 'ZZ-100-DER' }),
+    makeView({ partNumber: '1012-05-CHICO' }),
+    makeView({ partNumber: '1012-05-GRANDE' }),
+  ];
+  const saved: ToolcribSet = {
+    id: 's',
+    nombre: 'ZZ',
+    tipo: 'par',
+    miembros: [
+      { partNumber: 'ZZ-100-IZQ', rol: 'Izquierda', orden: 1, cantidadPorJuego: 1 },
+      { partNumber: 'ZZ-100-DER', rol: 'Derecha', orden: 2, cantidadPorJuego: 1 },
+    ],
+  };
+
+  it('un juego guardado aporta compañeros que ninguna regla fija conoce', () => {
+    const result = findCompanionDrawings('ZZ-100-IZQ', library, [saved]);
+    expect(result.map((c) => c.label)).toEqual(['Derecha']);
+  });
+
+  it('sin juegos guardados se usan las reglas fijas como antes', () => {
+    const result = findCompanionDrawings('1012-05-CHICO', library, []);
+    expect(result.some((c) => c.drawing.partNumber === '1012-05-GRANDE')).toBe(true);
+  });
+
+  it('el guardado gana sobre la regla fija', () => {
+    const override: ToolcribSet = {
+      id: 'o',
+      nombre: 'Override',
+      tipo: 'complemento',
+      miembros: [
+        { partNumber: '1012-05-CHICO', rol: 'Base', orden: 1, cantidadPorJuego: 1 },
+        { partNumber: 'ZZ-100-DER', rol: 'Extra', orden: 2, cantidadPorJuego: 1 },
+      ],
+    };
+    const result = findCompanionDrawings('1012-05-CHICO', library, [override]);
+    expect(result.map((c) => c.drawing.partNumber)).toEqual(['ZZ-100-DER']);
+  });
+
+  it('knownRuleGroupKey identifica las piezas de reglas fijas', () => {
+    expect(knownRuleGroupKey('1012-05-CHICO')).toBe('90-1012-05');
+    expect(knownRuleGroupKey('90-4150-06 -A')).toBe('90-4150-06');
+    expect(knownRuleGroupKey('ZZ-100-IZQ')).toBeNull();
   });
 });

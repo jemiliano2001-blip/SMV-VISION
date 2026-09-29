@@ -11,6 +11,7 @@
 import type { ToolcribActiveDrawingView } from '../types';
 import { isIsoDrawingView } from './matching';
 import { canonicalPartNumber } from './toolcribCatalog';
+import { companionsFromSet, getActiveSets, type ToolcribSet } from './toolcribSets';
 
 export type CompanionType = 'sheet' | 'pair' | 'complement' | 'variant';
 
@@ -92,6 +93,12 @@ const KNOWN_RULES: KnownCompanionRule[] = [
   },
 ];
 
+/** groupKey de la regla fija que aplica a la pieza (O(4)); sirve para la insignia de la Biblioteca. */
+export function knownRuleGroupKey(partNumber: string): string | null {
+  const canonical = canonicalPartNumber(partNumber).toUpperCase().trim();
+  return KNOWN_RULES.find((rule) => rule.match.test(canonical))?.groupKey ?? null;
+}
+
 /**
  * Normaliza un número de parte para extraer la raíz común antes de sufijos de hojas o pares.
  * Ej: "90-1012-06-2" -> "90-1012-06", "4150-06-CORTO" -> "4150-06".
@@ -116,12 +123,18 @@ export function extractBasePartRoot(partNumber: string): string {
  *
  * @param base Dibujo activo base o número de parte
  * @param library Catálogo activo de dibujos
+ * @param sets Juegos guardados; por defecto getActiveSets()
  * @returns Lista ordenada de planos complementarios (excluyendo el plano base)
  */
 export function findCompanionDrawings(
   base: ToolcribActiveDrawingView | string,
   library: readonly ToolcribActiveDrawingView[],
+  sets: readonly ToolcribSet[] = getActiveSets(),
 ): CompanionInfo[] {
+  // 0. Un juego guardado por el operador siempre gana sobre las reglas fijas.
+  const saved = companionsFromSet(base, library, sets);
+  if (saved) return saved;
+
   const basePart = typeof base === 'string' ? base : base.partNumber;
   const baseDrawingId = typeof base === 'string' ? null : base.drawingId;
   const canonicalBase = canonicalPartNumber(basePart).toUpperCase().trim();

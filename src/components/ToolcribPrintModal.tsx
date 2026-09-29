@@ -257,8 +257,8 @@ export function ToolcribPrintModal({
       return;
     }
     if (preview && (!previewReady || (!mask && !skipMask))) return;
-    if (!Number.isFinite(Number(cantidad)) || Number(cantidad) <= 0) {
-      setError('Escribe una cantidad de piezas mayor que cero.');
+    if (!Number.isInteger(Number(cantidad)) || Number(cantidad) <= 0) {
+      setError('Escribe una cantidad entera mayor que cero.');
       return;
     }
 
@@ -342,7 +342,9 @@ export function ToolcribPrintModal({
           permanentNotes:
             index === 0
               ? ownNoteTexts()
-              : (allNotes.get(setPartKey(item.partNumber)) ?? []).filter((n) => n.imprimirEnOT).map((n) => n.texto),
+              : incluirNotasPermanentes
+                ? (allNotes.get(setPartKey(item.partNumber)) ?? []).filter((n) => n.imprimirEnOT).map((n) => n.texto)
+                : [],
         }));
         const jobs = buildSeparatePrintJobs(pieces, { ...preview.stamp, quantityMask: mask }, juegos, notas.trim());
         await openStampedPlanoOt(jobs[0].piece.pdfDataUrl, jobs[0].stamp);

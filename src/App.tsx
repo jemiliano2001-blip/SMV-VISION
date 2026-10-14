@@ -16,6 +16,7 @@ import { BibliotecaView } from './components/BibliotecaView';
 import { ComprasPanel } from './components/ComprasPanel';
 import { ToolingHubView } from './components/tooling/ToolingHubView';
 import { EntregasSinOCPanel } from './components/EntregasSinOCPanel';
+import { EvidenciaPanel } from './components/EvidenciaPanel';
 import { CropAdjustModal } from './components/CropAdjustModal';
 import { QuickPurchaseModal } from './components/QuickPurchaseModal';
 import { ToolcribHistoryModal } from './components/ToolcribHistoryModal';
@@ -227,6 +228,7 @@ export default function App() {
               {activeView === 'compras' && <ComprasPanel />}
               {activeView === 'herramental' && <ToolingHubView />}
               {activeView === 'entregas-sin-oc' && <EntregasSinOCPanel />}
+              {activeView === 'evidencia' && <EvidenciaPanel />}
             </motion.div>
           )}
         </AnimatePresence>

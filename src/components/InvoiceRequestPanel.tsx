@@ -13,11 +13,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Mail, Copy, Check, FileText, ChevronRight,
-  ClipboardCheck,
+  ClipboardCheck, Box, Download, Loader2, Sparkles,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast } from 'sonner';
 
 import type { OdooOrderView, ProductionStatus } from '../lib/firebase/odooOrders';
+import type { OrderDrawingLink } from '../types';
+import { renderStlToDataUrl, copyImageBlobToClipboard } from '../lib/stlImageRenderer';
+import { makeOrderDrawingLinkKey } from '../lib/orderDrawingBridge';
 import {
   type InvoiceType,
   type InvoiceOrderEntry,
@@ -49,6 +53,7 @@ export interface InvoiceRequestPanelProps {
   onClose: () => void;
   orders: OdooOrderView[];
   productionMap: Map<string, ProductionStatus>;
+  resolvedLinksMap?: Map<string, OrderDrawingLink>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,6 +93,7 @@ export function InvoiceRequestPanel({
   onClose,
   orders,
   productionMap,
+  resolvedLinksMap,
 }: InvoiceRequestPanelProps) {
   // Map: orderId → selection state
   const [selections, setSelections] = useState<Map<string, OrderSelection>>(new Map());
@@ -95,12 +101,20 @@ export function InvoiceRequestPanel({
   const [copyError, setCopyError] = useState<string | null>(null);
   const [step, setStep] = useState<'select' | 'preview'>('select');
 
+  // Estado para imágenes 3D renderizadas: drawingId -> { dataUrl, blob }
+  const [rendered3D, setRendered3D] = useState<Map<string, { dataUrl: string; blob: Blob }>>(new Map());
+  const [loading3D, setLoading3D] = useState<Set<string>>(new Set());
+  const [copied3DKey, setCopied3DKey] = useState<string | null>(null);
+
   // Reset state when opening
   useEffect(() => {
     if (open) {
       setSelections(new Map());
       setCopiedField(null);
       setStep('select');
+      setRendered3D(new Map());
+      setLoading3D(new Set());
+      setCopied3DKey(null);
     }
   }, [open]);
 
@@ -145,6 +159,148 @@ export function InvoiceRequestPanel({
     }
     return entries;
   }, [eligibleOrders, selections]);
+
+  // Lista de piezas asociadas a las órdenes seleccionadas que cuentan con modelo 3D (STL)
+  const available3DItems = useMemo(() => {
+    if (!resolvedLinksMap) return [];
+    const items: Array<{
+      key: string;
+      orderName: string;
+      productName: string;
+      stlUrl: string;
+      drawingId: string;
+      partNumber: string;
+    }> = [];
+    const seenStl = new Set<string>();
+
+    for (const order of eligibleOrders) {
+      const sel = getSelection(order.id);
+      if (!sel.selected) continue;
+
+      order.order_lines.forEach((line, idx) => {
+        const linkKey = makeOrderDrawingLinkKey(order.id, idx);
+        const link = resolvedLinksMap.get(linkKey);
+        const drawing = link?.reportDrawing ?? link?.cadDrawing;
+        const stlUrl = drawing?.stlUrl;
+
+        if (stlUrl && !seenStl.has(stlUrl)) {
+          seenStl.add(stlUrl);
+          items.push({
+            key: `${order.name}-${idx}-${drawing.drawingId}`,
+            orderName: order.name,
+            productName: line.product.split('] ')[1] || line.product,
+            stlUrl,
+            drawingId: drawing.drawingId,
+            partNumber: drawing.partNumber,
+          });
+        }
+      });
+    }
+    return items;
+  }, [eligibleOrders, selections, resolvedLinksMap]);
+
+  // Renderizar una pieza 3D a imagen PNG limpia
+  const handleRender3D = useCallback(async (item: { stlUrl: string; drawingId: string }) => {
+    if (rendered3D.has(item.drawingId)) return;
+    setLoading3D((prev) => new Set(prev).add(item.drawingId));
+    try {
+      const res = await renderStlToDataUrl(item.stlUrl, {
+        width: 800,
+        height: 600,
+        backgroundColor: 0xffffff,
+      });
+      if (res.ok === false) {
+        toast.error(`Error al generar 3D: ${res.reason}`);
+      } else {
+        setRendered3D((prev) => new Map(prev).set(item.drawingId, { dataUrl: res.dataUrl, blob: res.blob }));
+      }
+    } finally {
+      setLoading3D((prev) => {
+        const next = new Set(prev);
+        next.delete(item.drawingId);
+        return next;
+      });
+    }
+  }, [rendered3D]);
+
+  // Copiar imagen 3D al portapapeles
+  const handleCopy3DImage = useCallback(async (item: { stlUrl: string; drawingId: string; partNumber: string }) => {
+    let rendered = rendered3D.get(item.drawingId);
+    if (!rendered) {
+      setLoading3D((prev) => new Set(prev).add(item.drawingId));
+      try {
+        const res = await renderStlToDataUrl(item.stlUrl, {
+          width: 800,
+          height: 600,
+          backgroundColor: 0xffffff,
+        });
+        if (res.ok === false) {
+          toast.error(`Error al generar 3D: ${res.reason}`);
+          return;
+        } else {
+          rendered = { dataUrl: res.dataUrl, blob: res.blob };
+          setRendered3D((prev) => new Map(prev).set(item.drawingId, rendered!));
+        }
+      } finally {
+        setLoading3D((prev) => {
+          const next = new Set(prev);
+          next.delete(item.drawingId);
+          return next;
+        });
+      }
+    }
+
+    if (rendered?.blob) {
+      const ok = await copyImageBlobToClipboard(rendered.blob);
+      if (ok) {
+        setCopied3DKey(item.drawingId);
+        toast.success(`Imagen 3D de ${item.partNumber} copiada al portapapeles. Pégala con Ctrl+V en Outlook.`);
+        setTimeout(() => setCopied3DKey(null), 3000);
+      } else {
+        toast.error('No se pudo copiar la imagen al portapapeles. Intenta con "Descargar PNG".');
+      }
+    }
+  }, [rendered3D]);
+
+  // Descargar imagen 3D como archivo PNG
+  const handleDownload3DImage = useCallback(async (item: { stlUrl: string; drawingId: string; partNumber: string }) => {
+    let rendered = rendered3D.get(item.drawingId);
+    if (!rendered) {
+      setLoading3D((prev) => new Set(prev).add(item.drawingId));
+      try {
+        const res = await renderStlToDataUrl(item.stlUrl, {
+          width: 800,
+          height: 600,
+          backgroundColor: 0xffffff,
+        });
+        if (res.ok === false) {
+          toast.error(`Error al generar 3D: ${res.reason}`);
+          return;
+        } else {
+          rendered = { dataUrl: res.dataUrl, blob: res.blob };
+          setRendered3D((prev) => new Map(prev).set(item.drawingId, rendered!));
+        }
+      } finally {
+        setLoading3D((prev) => {
+          const next = new Set(prev);
+          next.delete(item.drawingId);
+          return next;
+        });
+      }
+    }
+
+    if (rendered?.blob) {
+      const url = URL.createObjectURL(rendered.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `3D_${item.partNumber.replace(/[^A-Za-z0-9_-]/g, '_')}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast.success(`Imagen 3D descargada.`);
+    }
+  }, [rendered3D]);
 
   const hasIncompleteRemision = useMemo(
     () => selectedEntries.some((e) => e.type === 'remision' && !e.remisionDetail?.trim()),
@@ -425,6 +581,129 @@ export function InvoiceRequestPanel({
                       {emailContent.body}
                     </div>
                   </div>
+
+                  {/* ── Imágenes de Apoyo 3D (para Mary / Evidencia sin medidas) ── */}
+                  {available3DItems.length > 0 && (
+                    <div className="border-t-2 border-dashed border-line pt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-display font-black text-sm uppercase tracking-tight flex items-center gap-2 text-ink">
+                            <Box size={16} className="text-accent" />
+                            Imágenes 3D de las piezas (sin medidas)
+                          </p>
+                          <p className="text-[11px] font-mono text-ink-dim">
+                            Copia la imagen limpia con 1 clic para pegarla con Ctrl+V directamente en Outlook o descárgala.
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-mono font-bold uppercase tracking-widest bg-accent/10 text-accent px-2 py-0.5 border border-accent/20">
+                          {available3DItems.length} disponible{available3DItems.length > 1 ? 's' : ''}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {available3DItems.map((item) => {
+                          const isRendering = loading3D.has(item.drawingId);
+                          const rendered = rendered3D.get(item.drawingId);
+                          const isCopied = copied3DKey === item.drawingId;
+
+                          return (
+                            <div
+                              key={item.key}
+                              className="border-2 border-line bg-surface p-3 space-y-2 flex flex-col justify-between shadow-sm"
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-display font-bold text-xs uppercase text-ink truncate" title={item.partNumber}>
+                                    {item.partNumber}
+                                  </span>
+                                  <span className="font-mono text-[9px] text-ink-dim uppercase bg-surface-2 px-1.5 py-0.5 border border-line">
+                                    {item.orderName}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-ink-dim font-mono truncate" title={item.productName}>
+                                  {item.productName}
+                                </p>
+                              </div>
+
+                              {/* Preview visual o placeholder */}
+                              <div className="w-full h-36 bg-white border border-line flex items-center justify-center overflow-hidden relative group">
+                                {rendered ? (
+                                  <img
+                                    src={rendered.dataUrl}
+                                    alt={`Modelo 3D de ${item.partNumber}`}
+                                    className="w-full h-full object-contain p-2"
+                                  />
+                                ) : (
+                                  <div className="text-center p-3 space-y-1.5">
+                                    <Box size={28} className="mx-auto text-ink-dim/40" />
+                                    <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim">
+                                      {isRendering ? 'Renderizando vista 3D…' : 'Vista 3D disponible'}
+                                    </p>
+                                    {!isRendering && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleRender3D(item)}
+                                        className="text-[10px] font-bold text-accent hover:underline flex items-center gap-1 mx-auto"
+                                      >
+                                        <Sparkles size={11} /> Generar vista previa
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+
+                                {isRendering && (
+                                  <div className="absolute inset-0 bg-surface/80 backdrop-blur-xs flex items-center justify-center gap-2">
+                                    <Loader2 size={16} className="animate-spin text-accent" />
+                                    <span className="font-mono text-[10px] uppercase font-bold text-ink">Generando 3D…</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Acciones */}
+                              <div className="flex items-center gap-2 pt-1">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isRendering}
+                                  onClick={() => void handleCopy3DImage(item)}
+                                  className={`flex-1 h-8 text-[10px] font-black uppercase tracking-wider border-line transition-all ${
+                                    isCopied
+                                      ? 'bg-ok text-bg border-ok hover:bg-ok/90'
+                                      : 'bg-surface hover:bg-surface-2 text-ink'
+                                  }`}
+                                  title="Copiar imagen al portapapeles para pegar en Outlook"
+                                >
+                                  {isCopied ? (
+                                    <>
+                                      <Check size={12} className="mr-1 text-bg" />
+                                      ¡Copiado!
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy size={12} className="mr-1" />
+                                      Copiar Imagen
+                                    </>
+                                  )}
+                                </Button>
+
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isRendering}
+                                  onClick={() => void handleDownload3DImage(item)}
+                                  className="h-8 px-2.5 border-line bg-surface hover:bg-surface-2 text-ink-dim hover:text-ink text-[10px]"
+                                  title="Descargar imagen PNG"
+                                  aria-label="Descargar imagen PNG"
+                                >
+                                  <Download size={13} />
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </motion.div>

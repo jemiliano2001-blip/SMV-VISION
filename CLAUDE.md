@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+## Graphify local
+Para tareas de código, aplica la sección `Graphify: flujo automático proporcional` de `AGENTS.md` en esta raíz. Es la única política local de Graphify: consulta dirigida e impacto según tarea, contraste con fuentes y actualización AST una vez al cierre cuando cambie código indexable. Sin hooks, pasada semántica ni carga del reporte completo por rutina.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands

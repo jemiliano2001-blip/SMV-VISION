@@ -794,6 +794,7 @@ export function OdooOrdersPanel({
         onClose={() => setInvoicePanelOpen(false)}
         orders={filters.filteredOrders}
         productionMap={productionMap}
+        resolvedLinksMap={resolvedLinksMap}
       />
 
       <ToolcribPrintModal

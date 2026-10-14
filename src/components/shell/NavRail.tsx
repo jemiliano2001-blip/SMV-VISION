@@ -10,7 +10,7 @@
 import { Fragment, useCallback, type ReactElement } from 'react';
 import {
   LayoutDashboard, ScanLine, Library,
-  LogOut, Loader2, Ghost, Boxes, CloudDownload, ShoppingCart, Moon, Sun, FileWarning, ExternalLink, BarChart3, Wrench, type LucideIcon,
+  LogOut, Loader2, Ghost, Boxes, CloudDownload, ShoppingCart, Moon, Sun, FileWarning, ExternalLink, BarChart3, Wrench, Camera, type LucideIcon,
 } from 'lucide-react';
 
 import { useTheme } from 'next-themes';
@@ -19,7 +19,7 @@ import { signOutUser, useFirebaseUser } from '../../lib/firebase/auth';
 import { useSyncMeta } from '../../hooks/useSyncMeta';
 import { Badge } from '../ui/badge';
 
-export type AppView = 'inicio' | 'reporte' | 'biblioteca' | 'odoo' | 'compras' | 'entregas-sin-oc' | 'herramental';
+export type AppView = 'inicio' | 'reporte' | 'biblioteca' | 'odoo' | 'compras' | 'entregas-sin-oc' | 'herramental' | 'evidencia';
 
 interface NavItemDef {
   view: AppView;
@@ -33,6 +33,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: 'odoo', label: 'Órdenes', icon: CloudDownload, section: 'Operación' },
   { view: 'reporte', label: 'Generar reporte', icon: ScanLine, section: 'Operación' },
   { view: 'entregas-sin-oc', label: 'Entregas sin OC', icon: FileWarning, section: 'Operación' },
+  { view: 'evidencia', label: 'Evidencia fotográfica', icon: Camera, section: 'Operación' },
   { view: 'biblioteca', label: 'Biblioteca', icon: Library, section: 'Recursos' },
   { view: 'herramental', label: 'Herramental CNC', icon: Wrench, section: 'Recursos' },
   { view: 'compras', label: 'Compras', icon: ShoppingCart, section: 'Recursos' },

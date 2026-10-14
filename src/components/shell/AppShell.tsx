@@ -31,6 +31,7 @@ const VIEW_TITLES: Record<AppView, string> = {
   herramental: 'Herramental CNC',
   compras: 'Compras',
   'entregas-sin-oc': 'Entregas sin OC',
+  evidencia: 'Evidencia fotográfica',
 };
 
 export function AppShell({ activeView, onNavigate, version, children }: AppShellProps): ReactElement {

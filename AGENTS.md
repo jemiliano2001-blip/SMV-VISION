@@ -1,5 +1,17 @@
 # AGENTS.md
 
+<!-- GRAPHIFY-WORKFLOW:START -->
+## Graphify: flujo automático proporcional
+- No exige palabras clave. Al iniciar una tarea de código, ubica la raíz real, revisa el estado Git y comprueba `graphify-out/graph.json`; reutiliza ese contexto durante la tarea.
+- Archivo/ruta conocida o ajuste aislado de texto/estilo: inspección nativa directa. Módulo desconocido, bug entre archivos o arquitectura: primero `graphify query "<concepto>" --budget 1200`; lee después las fuentes pertinentes. Máximo dos consultas dirigidas antes de buscar nativamente si el resultado no ayuda. No cargues reportes/wiki completos por rutina.
+- Antes de cambiar contratos, exports/imports, rutas, utilidades compartidas o permisos/datos, identifica consumidores con `graphify affected "<id>" --depth 2`; usa `path/explain` si aclaran una relación. Confirma definición, usos y pruebas directamente: el grafo no garantiza cobertura, especialmente Firestore/RLS y llamadas dinámicas. Ante etiquetas duplicadas, usa IDs exactos y comprueba `source_file`/ubicación.
+- Vigencia/cobertura: contrasta definición, usos y pruebas actuales; una fecha o un Git sucio no bastan para validar el mapa. Símbolos ausentes, resultados vacíos, dirección incorrecta o código que contradice el grafo obligan a búsqueda nativa dirigida. Nunca concluir «sin consumidores» o «seguro» solo por el mapa; conserva IDs exactos y verifica archivo/ubicación. No reconstruyas solo por una búsqueda vacía.
+- Si esta tarea modificó código indexable, actualiza UNA vez al cierre desde la raíz: `GRAPHIFY_NO_AUTO_REFRESH=1 graphify update . --no-cluster`. Antes, conserva copia del JSON vigente en almacenamiento local privado y sus conteos; después comprueba JSON válido/no vacío y presencia o ausencia esperada de los símbolos que cambiaste. Un exit 0 no basta. No por cada edición/consulta ni por cambios solo en docs/CSS. Sin `--force`, borrado ni rollback automático: ante bloqueo/fallo, conserva el respaldo, usa fuentes y reporta pendiente. No confundas JSON actualizado con HTML/wiki actualizados, ni con tests aprobados.
+- Si faltan CLI/grafo o la consulta falla, continúa con búsqueda/lectura nativa; no instales ni reconstruyas automáticamente con un modo distinto. No pasada semántica/API, hooks/watch, grafos globales, secretos ni publicación de artefactos. Respeta exclusión local de Git, reglas del proyecto y overrides explícitos del usuario.
+- En cambios sustanciales, cierra con una línea de evidencia: Graphify consultado/omitido y motivo, actualizado o pendiente; no afirmes uso automático de otro agente sin verlo. Ponytail full/Caveman lite y gates existentes se mantienen.
+- En SMV-VISION, contrasta el pipeline/worker/cache y permisos de Functions/Firestore; la base compartida y las reglas reales prevalecen sobre el mapa.
+<!-- GRAPHIFY-WORKFLOW:END -->
+
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Commands

@@ -26,7 +26,13 @@ interface AuthGateProps {
 
 export function AuthGate({ children }: AuthGateProps): ReactElement {
   const auth = useFirebaseUser();
-  const [signingIn, setSigningIn] = useState<boolean>(false);
+  const [signingIn, setSigningIn] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash.startsWith('#')
+      ? window.location.hash.slice(1)
+      : window.location.hash;
+    return Boolean(hash && new URLSearchParams(hash).get('sso_token'));
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isBypassed, setIsBypassed] = useState<boolean>(false);
 
@@ -96,7 +102,7 @@ export function AuthGate({ children }: AuthGateProps): ReactElement {
     return <AuthUnavailableScreen />;
   }
 
-  if (auth.status === 'loading') {
+  if (auth.status === 'loading' || signingIn) {
     return <LoadingScreen />;
   }
 

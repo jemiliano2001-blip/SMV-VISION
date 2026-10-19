@@ -10,18 +10,22 @@ import { callWithRetry, prepareImagePart } from './gemini';
 import { callGeminiProxy } from './geminiProxy';
 import { log } from './log';
 
-export const ISOMETRIC_GEN_PROMPT_VERSION = 'iso-gen-v2';
+export const ISOMETRIC_GEN_PROMPT_VERSION = 'iso-gen-v3';
 export const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 
-const DEFAULT_PROMPT = `You are converting a 2D mechanical engineering drawing (orthographic CAD views) into a clean isometric 3D-style product render of the SAME machined part.
+/** Dibujo de línea para láser. La geometría no es confiable para maquinar. */
+export const ISOMETRIC_LINE_PROMPT = `You are converting a 2D mechanical engineering drawing (orthographic CAD views) into a clean black-line isometric drawing of the SAME machined part.
 
 Rules:
 - Infer the solid from the visible 2D views (front / side / top / detail) on the sheet.
 - Preserve overall shape, proportions, holes, chamfers, and features visible in the drawing.
-- Neutral studio background, soft lighting, no text, no dimensions, no title block, no grid.
-- Single solid metal-looking part, classic isometric / 3/4 engineering view.
+- White background. Black line art only. No shading, no studio lighting, no metal render, no color.
+- No text, no dimensions, no title block, no grid, no border.
+- Single part, classic isometric engineering view.
 - Do NOT invent logos, fasteners, or extra assemblies that are not part of the piece.
 - Output only the image.`;
+
+const DEFAULT_PROMPT = ISOMETRIC_LINE_PROMPT;
 
 export interface GenerateIsometricOptions {
   /** dataURL JPEG/PNG del plano o crop 2D. */

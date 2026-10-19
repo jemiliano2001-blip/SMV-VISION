@@ -2,8 +2,20 @@ import { describe, expect, it } from 'vitest';
 import {
   canGenerateAiIsometric,
   extractGeneratedImageDataUrl,
+  ISOMETRIC_GEN_PROMPT_VERSION,
+  ISOMETRIC_LINE_PROMPT,
   isRealIsoPdfLabel,
 } from '../generateIsometricImage';
+
+describe('prompt de línea para impresión', () => {
+  it('pide dibujo negro sobre blanco y sube la versión de caché', () => {
+    expect(ISOMETRIC_GEN_PROMPT_VERSION).toBe('iso-gen-v3');
+    expect(ISOMETRIC_LINE_PROMPT).toContain('White background');
+    expect(ISOMETRIC_LINE_PROMPT).toContain('Black line art only');
+    expect(ISOMETRIC_LINE_PROMPT).toContain('No text, no dimensions, no title block');
+    expect(ISOMETRIC_LINE_PROMPT).toContain('No shading, no studio lighting');
+  });
+});
 
 describe('extractGeneratedImageDataUrl', () => {
   it('returns null for empty parts', () => {

@@ -6,8 +6,18 @@
 // pdf-lib (~523 KB / 208 KB gzip) solo se necesita al sellar/imprimir un plano
 // OT — se importa dinámicamente dentro de las funciones para no ir en el bundle inicial.
 
+import { log } from './log';
+
 export type PlanoOtHeaderStyle = 'slim' | 'classic';
 export type PlanoOtPrintMode = 'blueprint' | 'board_ticket' | 'both';
+export type FichaPhotoKind = 'iso' | 'stl' | 'ai' | 'none';
+
+/** Foto ya resuelta para la ficha. El sello no descarga ni llama a Gemini. */
+export interface PlanoOtFichaPhoto {
+  kind: FichaPhotoKind;
+  pdfDataUrl?: string;
+  imageDataUrl?: string;
+}
 
 export interface PlanoOtStamp {
   soNumber: string;
@@ -25,6 +35,8 @@ export interface PlanoOtStamp {
   headerStyle?: PlanoOtHeaderStyle;
   /** Modo de impresión: 'blueprint' (defecto), 'board_ticket', o 'both' */
   mode?: PlanoOtPrintMode;
+  /** Isométrica, STL o dibujo de IA. Ausente = recuadro "Sin isométrica". */
+  fichaPhoto?: PlanoOtFichaPhoto;
 }
 
 /** Fracciones de la primera página visible, con origen arriba-izquierda. */
@@ -99,21 +111,89 @@ export function stampDetailLine(stamp: Pick<PlanoOtStamp, 'fecha' | 'poNumber'>)
   return po ? `${fecha}     PO: ${po}` : fecha;
 }
 
+interface FichaDrawAsset {
+  kind: FichaPhotoKind;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  page: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  image: any;
+  srcWidth: number;
+  srcHeight: number;
+  rotation: number;
+}
+
+async function loadFichaPhoto(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pdfDoc: any,
+  photo: PlanoOtFichaPhoto | undefined,
+): Promise<FichaDrawAsset> {
+  const empty: FichaDrawAsset = {
+    kind: 'none', page: null, image: null, srcWidth: 1, srcHeight: 1, rotation: 0,
+  };
+  if (!photo || photo.kind === 'none') return empty;
+
+  if (photo.pdfDataUrl) {
+    try {
+      const { PDFDocument } = await import('pdf-lib');
+      const source = await PDFDocument.load(dataUrlToUint8Array(photo.pdfDataUrl));
+      const original = source.getPage(0);
+      const crop = original.getCropBox();
+      const rotation = ((original.getRotation().angle % 360) + 360) % 360;
+      const sideways = rotation === 90 || rotation === 270;
+      const page = original.node.Contents()
+        ? await pdfDoc.embedPage(original, {
+          left: crop.x,
+          bottom: crop.y,
+          right: crop.x + crop.width,
+          top: crop.y + crop.height,
+        })
+        : null;
+      if (page) {
+        return {
+          kind: photo.kind,
+          page,
+          image: null,
+          srcWidth: sideways ? crop.height : crop.width,
+          srcHeight: sideways ? crop.width : crop.height,
+          rotation,
+        };
+      }
+    } catch (error) {
+      log.warn('[ficha-ot] no se pudo incrustar el PDF de la foto', error);
+    }
+  }
+
+  if (photo.imageDataUrl) {
+    try {
+      const bytes = dataUrlToUint8Array(photo.imageDataUrl);
+      const mime = photo.imageDataUrl.slice(0, photo.imageDataUrl.indexOf(',')).toLowerCase();
+      const image = mime.includes('image/jp')
+        ? await pdfDoc.embedJpg(bytes)
+        : await pdfDoc.embedPng(bytes);
+      return {
+        kind: photo.kind,
+        page: null,
+        image,
+        srcWidth: image.width,
+        srcHeight: image.height,
+        rotation: 0,
+      };
+    } catch (error) {
+      log.warn('[ficha-ot] no se pudo incrustar la imagen de la foto', error);
+    }
+  }
+
+  return empty;
+}
+
 /**
- * Dibuja la Ficha Viajera / Pizarrón con 2 tarjetas (Media Carta):
- * - Tarjeta 1: Pizarrón / Kanban de control de producción
- * - Tarjeta 2: Viajera de piso / Contenedor de piezas
- * Incluye miniatura vectorial del plano, datos en grande y checklist de procesos.
+ * Dibuja la ficha de pizarrón y viajera (media carta x2) en blanco y negro.
+ * La foto ocupa el espacio que antes usaba la ruta de fabricación.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function addFichaPizarronPage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pdfDoc: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  embedded: any,
-  cropWidth: number,
-  cropHeight: number,
-  rotation: number,
+  asset: FichaDrawAsset,
   stamp: PlanoOtStamp,
   pageWidth: number,
   pageHeight: number,
@@ -128,412 +208,179 @@ function addFichaPizarronPage(
 ): void {
   const ticketPage = pdfDoc.addPage([pageWidth, pageHeight]);
   const isLandscape = pageWidth >= pageHeight;
+  const black = rgb(0, 0, 0);
+  const white = rgb(1, 1, 1);
 
   const drawCard = (cardX: number, cardY: number, cardW: number, cardH: number, isBoard: boolean) => {
-    // 1. Marco exterior
     ticketPage.drawRectangle({
-      x: cardX,
-      y: cardY,
-      width: cardW,
-      height: cardH,
-      color: rgb(1, 1, 1),
-      borderColor: rgb(0.12, 0.16, 0.22),
-      borderWidth: 2,
+      x: cardX, y: cardY, width: cardW, height: cardH,
+      color: white, borderColor: black, borderWidth: 1.5,
     });
 
-    // 2. Banner superior
-    const bannerH = 28;
+    const bannerH = 26;
     const bannerY = cardY + cardH - bannerH;
     ticketPage.drawRectangle({
-      x: cardX,
-      y: bannerY,
-      width: cardW,
-      height: bannerH,
-      color: rgb(0.05, 0.17, 0.3), // #0D2B4D
+      x: cardX, y: bannerY, width: cardW, height: bannerH, color: black,
     });
-
-    ticketPage.drawText('SMV // CONTROL DE TALLER', {
-      x: cardX + 10,
-      y: bannerY + bannerH - 12,
+    ticketPage.drawText('SMV', {
+      x: cardX + 10, y: bannerY + 8, size: 11, font: fontBold, color: white,
+    });
+    const badge = isBoard ? 'PIZARRÓN' : 'VIAJERA';
+    ticketPage.drawText(badge, {
+      x: cardX + cardW - fontBold.widthOfTextAtSize(badge, 9) - 10,
+      y: bannerY + 8,
       size: 9,
       font: fontBold,
-      color: rgb(1, 1, 1),
-    });
-    ticketPage.drawText('HOJA DE RUTA Y SEGUIMIENTO EN PISO', {
-      x: cardX + 10,
-      y: bannerY + 4,
-      size: 6.5,
-      font: fontRegular,
-      color: rgb(0.75, 0.85, 0.95),
+      color: white,
     });
 
-    // Badge derecho
-    const badgeW = 75;
-    const badgeH = bannerH - 8;
-    const badgeX = cardX + cardW - badgeW - 8;
-    const badgeY = bannerY + 4;
-    ticketPage.drawRectangle({
-      x: badgeX,
-      y: badgeY,
-      width: badgeW,
-      height: badgeH,
-      color: isBoard ? rgb(0.85, 0.4, 0.05) : rgb(0.1, 0.52, 0.35),
-    });
-    ticketPage.drawText(isBoard ? 'PIZARRÓN' : 'VIAJERA', {
-      x: badgeX + (isBoard ? 15 : 18),
-      y: badgeY + 4.5,
-      size: 8,
-      font: fontBold,
-      color: rgb(1, 1, 1),
-    });
-
-    // 3. Bloque de métricas operativas (SO, CANTIDAD, PO/FECHA)
-    const metricsH = 46;
+    const metricsH = 40;
     const metricsY = bannerY - metricsH;
     ticketPage.drawRectangle({
-      x: cardX,
-      y: metricsY,
-      width: cardW,
-      height: metricsH,
-      color: rgb(0.96, 0.97, 0.98),
-      borderColor: rgb(0.8, 0.85, 0.9),
-      borderWidth: 1,
+      x: cardX, y: metricsY, width: cardW, height: metricsH,
+      color: white, borderColor: black, borderWidth: 0.8,
     });
-
-    // Sección 1: SO
     const soVal = oneLine(stamp.soNumber) || '—';
-    ticketPage.drawText('ORDEN (SO):', {
-      x: cardX + 8,
-      y: metricsY + metricsH - 12,
-      size: 7,
-      font: fontBold,
-      color: rgb(0.4, 0.45, 0.5),
+    ticketPage.drawText('ORDEN (SO)', {
+      x: cardX + 8, y: metricsY + metricsH - 12, size: 7, font: fontBold, color: black,
     });
     ticketPage.drawText(soVal, {
-      x: cardX + 8,
-      y: metricsY + 8,
-      size: 14,
-      font: fontBold,
-      color: rgb(0.05, 0.17, 0.3),
+      x: cardX + 8, y: metricsY + 8, size: 13, font: fontBold, color: black,
     });
 
-    // Sección 2: CANTIDAD
     const cantX = cardX + cardW * 0.42;
     ticketPage.drawLine({
-      start: { x: cantX, y: metricsY },
-      end: { x: cantX, y: metricsY + metricsH },
-      color: rgb(0.8, 0.85, 0.9),
-      thickness: 1,
+      start: { x: cantX, y: metricsY }, end: { x: cantX, y: metricsY + metricsH },
+      color: black, thickness: 0.8,
     });
-    ticketPage.drawText('CANTIDAD TOTAL:', {
-      x: cantX + 8,
-      y: metricsY + metricsH - 12,
-      size: 7,
-      font: fontBold,
-      color: rgb(0.4, 0.45, 0.5),
+    ticketPage.drawText('CANTIDAD', {
+      x: cantX + 8, y: metricsY + metricsH - 12, size: 7, font: fontBold, color: black,
     });
     ticketPage.drawText(`${oneLine(stamp.cantidad) || '1'} PZS`, {
-      x: cantX + 8,
-      y: metricsY + 8,
-      size: 16,
-      font: fontBold,
-      color: rgb(0.85, 0.15, 0.15),
+      x: cantX + 8, y: metricsY + 8, size: 14, font: fontBold, color: black,
     });
 
-    // Sección 3: PO y Fecha
     const poX = cardX + cardW * 0.7;
     ticketPage.drawLine({
-      start: { x: poX, y: metricsY },
-      end: { x: poX, y: metricsY + metricsH },
-      color: rgb(0.8, 0.85, 0.9),
-      thickness: 1,
+      start: { x: poX, y: metricsY }, end: { x: poX, y: metricsY + metricsH },
+      color: black, thickness: 0.8,
     });
-    const poVal = oneLine(stamp.poNumber) || 'S/N';
-    ticketPage.drawText(`PO: ${poVal}`, {
-      x: poX + 6,
-      y: metricsY + metricsH - 13,
-      size: 8,
-      font: fontBold,
-      color: rgb(0.1, 0.1, 0.1),
+    ticketPage.drawText(`PO: ${oneLine(stamp.poNumber) || 'S/N'}`, {
+      x: poX + 6, y: metricsY + metricsH - 14, size: 8, font: fontBold, color: black,
     });
     ticketPage.drawText(`F: ${oneLine(stamp.fecha) || '—'}`, {
-      x: poX + 6,
-      y: metricsY + 7,
-      size: 7,
-      font: fontRegular,
-      color: rgb(0.3, 0.3, 0.3),
+      x: poX + 6, y: metricsY + 8, size: 7, font: fontRegular, color: black,
     });
 
-    // 4. Bloque central: Pieza & Miniatura
-    const middleH = Math.min(130, Math.max(95, cardH * 0.28));
-    const middleY = metricsY - middleH;
+    const footerH = 16;
+    const infoH = 48;
+    const photoX = cardX + 8;
+    const photoW = cardW - 16;
+    const photoY = cardY + footerH + 4;
+    const photoH = Math.max(40, metricsY - infoH - photoY);
+    const infoY = photoY + photoH;
 
-    // Miniatura a la derecha
-    const thumbW = Math.min(125, cardW * 0.35);
-    const thumbH = middleH - 10;
-    const thumbX = cardX + cardW - thumbW - 8;
-    const thumbY = middleY + 5;
+    ticketPage.drawText('PIEZA', {
+      x: cardX + 8, y: infoY + infoH - 11, size: 7, font: fontBold, color: black,
+    });
+    const partNum = sanitizeWinAnsi(stamp.partNumber || stamp.soNumber || '—');
+    ticketPage.drawText(partNum, {
+      x: cardX + 40, y: infoY + infoH - 12, size: 10, font: fontBold, color: black,
+    });
+    ticketPage.drawText(`CLIENTE: ${sanitizeWinAnsi(stamp.customer || 'SUPRAJIT')}`, {
+      x: cardX + 8, y: infoY + infoH - 24, size: 7, font: fontRegular, color: black,
+    });
+    const detail = sanitizeWinAnsi(stamp.piezaDescripcion || stamp.notas || '');
+    if (detail) {
+      const row = wrapStampText(detail, (text) => fontRegular.widthOfTextAtSize(text, 7), cardW - 20)[0] ?? '';
+      if (row) {
+        ticketPage.drawText(row, {
+          x: cardX + 8, y: infoY + 6, size: 7, font: fontRegular, color: black,
+        });
+      }
+    }
 
     ticketPage.drawRectangle({
-      x: thumbX,
-      y: thumbY,
-      width: thumbW,
-      height: thumbH,
-      color: rgb(1, 1, 1),
-      borderColor: rgb(0.75, 0.78, 0.82),
-      borderWidth: 1,
-    });
-    ticketPage.drawText('PLANO / DIBUJO', {
-      x: thumbX + 4,
-      y: thumbY + thumbH - 8,
-      size: 5.5,
-      font: fontBold,
-      color: rgb(0.5, 0.5, 0.5),
+      x: photoX, y: photoY, width: photoW, height: photoH,
+      color: white, borderColor: black, borderWidth: 1,
     });
 
-    if (embedded) {
-      const maxW = thumbW - 8;
-      const maxH = thumbH - 12;
-      const tScale = Math.min(maxW / cropWidth, maxH / cropHeight);
-      const txOffset = thumbX + 4 + (maxW - cropWidth * tScale) / 2;
-      const tyOffset = thumbY + 3 + (maxH - cropHeight * tScale) / 2;
-      ticketPage.drawPage(embedded, {
-        x: rotation === 180 || rotation === 270 ? txOffset + cropWidth * tScale : txOffset,
-        y: rotation === 90 || rotation === 180 ? tyOffset + cropHeight * tScale : tyOffset,
+    const pad = 8;
+    const caption = asset.kind === 'ai' && (asset.page || asset.image)
+      ? 'Isométrica generada'
+      : '';
+    const missing = !asset.page && !asset.image;
+    const maxW = photoW - pad * 2;
+    const maxH = photoH - pad * 2 - (caption ? 12 : 0);
+    if (asset.page && asset.srcWidth > 0 && asset.srcHeight > 0 && maxW > 0 && maxH > 0) {
+      const tScale = Math.min(maxW / asset.srcWidth, maxH / asset.srcHeight);
+      const txOffset = photoX + pad + (maxW - asset.srcWidth * tScale) / 2;
+      const tyOffset = photoY + pad + (maxH - asset.srcHeight * tScale) / 2;
+      const rotation = asset.rotation;
+      ticketPage.drawPage(asset.page, {
+        x: rotation === 180 || rotation === 270 ? txOffset + asset.srcWidth * tScale : txOffset,
+        y: rotation === 90 || rotation === 180 ? tyOffset + asset.srcHeight * tScale : tyOffset,
         xScale: tScale,
         yScale: tScale,
         rotate: degrees(-rotation),
       });
-
-      if (stamp.quantityMask) {
-        ticketPage.drawRectangle({
-          x: txOffset + stamp.quantityMask.x * cropWidth * tScale,
-          y: tyOffset + (1 - stamp.quantityMask.y - stamp.quantityMask.height) * cropHeight * tScale,
-          width: stamp.quantityMask.width * cropWidth * tScale,
-          height: stamp.quantityMask.height * cropHeight * tScale,
-          color: rgb(1, 1, 1),
-        });
-      }
+    } else if (asset.image && asset.srcWidth > 0 && asset.srcHeight > 0 && maxW > 0 && maxH > 0) {
+      const tScale = Math.min(maxW / asset.srcWidth, maxH / asset.srcHeight);
+      const dw = asset.srcWidth * tScale;
+      const dh = asset.srcHeight * tScale;
+      ticketPage.drawImage(asset.image, {
+        x: photoX + pad + (maxW - dw) / 2,
+        y: photoY + pad + (caption ? 12 : 0) + (maxH - dh) / 2,
+        width: dw,
+        height: dh,
+      });
     }
 
-    // Datos de pieza a la izquierda de la miniatura
-    const infoW = thumbX - cardX - 16;
-    const partNum = sanitizeWinAnsi(stamp.partNumber || stamp.soNumber || '—');
-    ticketPage.drawText('PIEZA / NÚMERO DE PARTE:', {
-      x: cardX + 8,
-      y: middleY + middleH - 12,
-      size: 7,
-      font: fontBold,
-      color: rgb(0.4, 0.45, 0.5),
-    });
-    ticketPage.drawText(partNum, {
-      x: cardX + 8,
-      y: middleY + middleH - 26,
-      size: 13,
-      font: fontBold,
-      color: rgb(0.05, 0.17, 0.3),
-    });
-    ticketPage.drawText(`CLIENTE: ${sanitizeWinAnsi(stamp.customer || 'SUPRAJIT')}`, {
-      x: cardX + 8,
-      y: middleY + middleH - 39,
-      size: 7.5,
-      font: fontBold,
-      color: rgb(0.2, 0.2, 0.2),
-    });
-
-    let currentTextY = middleY + middleH - 51;
-    if (stamp.piezaDescripcion) {
-      const descRows = wrapStampText(sanitizeWinAnsi(stamp.piezaDescripcion), t => fontRegular.widthOfTextAtSize(t, 7), infoW);
-      for (const row of descRows.slice(0, 2)) {
-        ticketPage.drawText(row, {
-          x: cardX + 8,
-          y: currentTextY,
-          size: 7,
-          font: fontRegular,
-          color: rgb(0.3, 0.35, 0.4),
-        });
-        currentTextY -= 9;
-      }
+    const label = missing ? 'Sin isométrica' : caption;
+    if (label) {
+      ticketPage.drawText(label, {
+        x: photoX + 8,
+        y: photoY + 6,
+        size: 8,
+        font: fontBold,
+        color: black,
+      });
     }
 
-    if (stamp.notas) {
-      const notaRows = wrapStampText(`NOTAS: ${sanitizeWinAnsi(stamp.notas)}`, t => fontBold.widthOfTextAtSize(t, 7), infoW);
-      for (const row of notaRows.slice(0, 2)) {
-        ticketPage.drawText(row, {
-          x: cardX + 8,
-          y: currentTextY,
-          size: 7,
-          font: fontBold,
-          color: rgb(0.85, 0.15, 0.15),
-        });
-        currentTextY -= 9;
-      }
-    }
-
-    // 5. Tabla de procesos del taller (Checklist)
-    const tableHeaderH = 14;
-    const tableHeaderY = middleY - 6;
-    ticketPage.drawRectangle({
-      x: cardX + 6,
-      y: tableHeaderY - tableHeaderH,
-      width: cardW - 12,
-      height: tableHeaderH,
-      color: rgb(0.9, 0.93, 0.96),
-      borderColor: rgb(0.7, 0.75, 0.8),
-      borderWidth: 0.75,
-    });
-    ticketPage.drawText('RUTA DE FABRICACIÓN Y LIBERACIÓN EN TALLER', {
-      x: cardX + 10,
-      y: tableHeaderY - tableHeaderH + 3.5,
-      size: 6.5,
-      font: fontBold,
-      color: rgb(0.1, 0.2, 0.3),
-    });
-
-    const colOperadorX = cardX + cardW * 0.52;
-    const colFechaX = cardX + cardW * 0.74;
-    const colStatusX = cardX + cardW * 0.89;
-
-    ticketPage.drawText('OPERADOR', {
-      x: colOperadorX + 4,
-      y: tableHeaderY - tableHeaderH + 3.5,
-      size: 6,
-      font: fontBold,
-      color: rgb(0.3, 0.35, 0.4),
-    });
-    ticketPage.drawText('FECHA / TURNO', {
-      x: colFechaX + 4,
-      y: tableHeaderY - tableHeaderH + 3.5,
-      size: 6,
-      font: fontBold,
-      color: rgb(0.3, 0.35, 0.4),
-    });
-    ticketPage.drawText('LIB. [OK]', {
-      x: colStatusX + 1,
-      y: tableHeaderY - tableHeaderH + 3.5,
-      size: 6,
-      font: fontBold,
-      color: rgb(0.3, 0.35, 0.4),
-    });
-
-    const stepRows = [
-      '1. PREPARACIÓN Y CORTE MATERIAL',
-      '2. TORNO (CONVENCIONAL / CNC)',
-      '3. FRESA / CENTRO DE MAQUINADO',
-      '4. RECTIFICADO (PLANO / CILÍNDRICO)',
-      '5. TRATAMIENTO TÉRMICO / DUREZA',
-      '6. INSPECCIÓN FINAL Y CALIDAD',
-    ];
-
-    const rowH = Math.min(17, Math.max(12, (tableHeaderY - tableHeaderH - cardY - 18) / stepRows.length));
-    let stepY = tableHeaderY - tableHeaderH - rowH;
-
-    for (const step of stepRows) {
-      ticketPage.drawRectangle({
-        x: cardX + 6,
-        y: stepY,
-        width: cardW - 12,
-        height: rowH,
-        color: rgb(1, 1, 1),
-        borderColor: rgb(0.85, 0.88, 0.9),
-        borderWidth: 0.5,
-      });
-
-      ticketPage.drawText(`[  ] ${step}`, {
-        x: cardX + 10,
-        y: stepY + 3.5,
-        size: 6,
-        font: fontRegular,
-        color: rgb(0.1, 0.15, 0.2),
-      });
-
-      // Líneas divisorias de columnas
-      ticketPage.drawLine({
-        start: { x: colOperadorX, y: stepY },
-        end: { x: colOperadorX, y: stepY + rowH },
-        color: rgb(0.85, 0.88, 0.9),
-        thickness: 0.5,
-      });
-      ticketPage.drawLine({
-        start: { x: colFechaX, y: stepY },
-        end: { x: colFechaX, y: stepY + rowH },
-        color: rgb(0.85, 0.88, 0.9),
-        thickness: 0.5,
-      });
-      ticketPage.drawLine({
-        start: { x: colStatusX, y: stepY },
-        end: { x: colStatusX, y: stepY + rowH },
-        color: rgb(0.85, 0.88, 0.9),
-        thickness: 0.5,
-      });
-
-      stepY -= rowH;
-    }
-
-    // 6. Pie de tarjeta
-    ticketPage.drawText(`SMV VISION // FOLIO: ${soVal} · LIBERACIÓN PISO`, {
-      x: cardX + 8,
-      y: cardY + 5,
-      size: 6,
-      font: fontRegular,
-      color: rgb(0.45, 0.45, 0.45),
+    ticketPage.drawText(`SMV VISION // FOLIO: ${soVal}`, {
+      x: cardX + 8, y: cardY + 5, size: 6, font: fontRegular, color: black,
     });
     ticketPage.drawText('FIRMA DE RECIBIDO: _____________________', {
-      x: cardX + cardW - 165,
-      y: cardY + 5,
-      size: 6,
-      font: fontRegular,
-      color: rgb(0.45, 0.45, 0.45),
+      x: cardX + cardW - 168, y: cardY + 5, size: 6, font: fontRegular, color: black,
     });
   };
 
   if (isLandscape) {
-    // Tarjeta 1 (Izquierda) y Tarjeta 2 (Derecha)
     const cardW = (pageWidth / 2) - 18;
     const cardH = pageHeight - 24;
     drawCard(12, 12, cardW, cardH, true);
     drawCard(pageWidth / 2 + 6, 12, cardW, cardH, false);
-
-    // Línea de corte vertical al centro
     ticketPage.drawLine({
       start: { x: pageWidth / 2, y: 8 },
       end: { x: pageWidth / 2, y: pageHeight - 8 },
       dashArray: [5, 4],
       thickness: 1,
-      color: rgb(0.5, 0.5, 0.5),
-    });
-    ticketPage.drawText('- - CORTE (MEDIA CARTA) - -', {
-      x: (pageWidth / 2) - 48,
-      y: pageHeight - 10,
-      size: 6.5,
-      font: fontRegular,
-      color: rgb(0.5, 0.5, 0.5),
+      color: rgb(0.35, 0.35, 0.35),
     });
   } else {
-    // Tarjeta 1 (Arriba) y Tarjeta 2 (Abajo)
     const cardW = pageWidth - 24;
     const cardH = (pageHeight / 2) - 18;
     drawCard(12, pageHeight / 2 + 6, cardW, cardH, true);
     drawCard(12, 12, cardW, cardH, false);
-
-    // Línea de corte horizontal al centro
     ticketPage.drawLine({
       start: { x: 8, y: pageHeight / 2 },
       end: { x: pageWidth - 8, y: pageHeight / 2 },
       dashArray: [5, 4],
       thickness: 1,
-      color: rgb(0.5, 0.5, 0.5),
-    });
-    ticketPage.drawText('- - CORTE (MEDIA CARTA) - -', {
-      x: (pageWidth / 2) - 48,
-      y: (pageHeight / 2) + 2,
-      size: 6.5,
-      font: fontRegular,
-      color: rgb(0.5, 0.5, 0.5),
+      color: rgb(0.35, 0.35, 0.35),
     });
   }
 }
-
 /**
  * Toma el dataURL de un PDF y devuelve los bytes del PDF sellado.
  * Admite:
@@ -578,12 +425,10 @@ export async function stampPlanoOt(
 
   // Si se solicitó la ficha de pizarrón (o ambas), se inserta primero la página de Ficha Viajera
   if (printMode === 'board_ticket' || printMode === 'both') {
+    const photoAsset = await loadFichaPhoto(pdfDoc, stamp.fichaPhoto);
     addFichaPizarronPage(
       pdfDoc,
-      embedded,
-      crop.width,
-      crop.height,
-      rotation,
+      photoAsset,
       stamp,
       width,
       height,
@@ -687,7 +532,7 @@ export async function stampPlanoOt(
       y,
       size: row.size,
       font: fontBold,
-      color: row.notes ? rgb(0.8, 0.1, 0.1) : rgb(0, 0, 0),
+      color: rgb(0, 0, 0),
     });
     y -= row.size * (isSlim ? 0.25 : 0.3);
   }

@@ -27,6 +27,12 @@ describe('buildSeparatePrintJobs', () => {
     expect(jobs).toHaveLength(2);
     expect(jobs.every((j) => j.stamp.soNumber === 'SO-1234' && j.stamp.poNumber === 'PO-9')).toBe(true);
     expect(jobs.every((j) => j.stamp.fecha === '2026-09-29 10:00')).toBe(true);
+    const withPhoto = buildSeparatePrintJobs(pieces, {
+      ...baseStamp,
+      fichaPhoto: { kind: 'iso', pdfDataUrl: 'data:application/pdf;base64,e30=' },
+    }, 10, '');
+    expect(withPhoto[0].stamp.fichaPhoto).toBeUndefined();
+    expect(withPhoto[1].stamp.fichaPhoto).toBeUndefined();
   });
 
   it('multiplica la cantidad por las piezas por juego', () => {

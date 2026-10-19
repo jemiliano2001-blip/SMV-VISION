@@ -1,3 +1,4 @@
+import { inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, degrees, rgb } from 'pdf-lib';
 import {
@@ -12,6 +13,40 @@ import {
 } from '../planoOt';
 
 const stamp = { soNumber: 'SO-18252', cantidad: '25', fecha: '2026-09-10 10:30' };
+const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+function pdfText(bytes: Uint8Array): string {
+  const raw = Buffer.from(bytes);
+  const chunks: Buffer[] = [raw];
+  let offset = 0;
+  while (offset < raw.length) {
+    const start = raw.indexOf('stream', offset);
+    if (start < 0) break;
+    let dataStart = start + 'stream'.length;
+    if (raw[dataStart] === 0x0d) dataStart += 1;
+    if (raw[dataStart] === 0x0a) dataStart += 1;
+    const end = raw.indexOf('endstream', dataStart);
+    if (end < 0) break;
+    let dataEnd = end;
+    if (raw[dataEnd - 1] === 0x0a) dataEnd -= 1;
+    if (raw[dataEnd - 1] === 0x0d) dataEnd -= 1;
+    try {
+      chunks.push(inflateSync(raw.subarray(dataStart, dataEnd)));
+    } catch {
+      chunks.push(raw.subarray(dataStart, dataEnd));
+    }
+    offset = end + 'endstream'.length;
+  }
+  const latin = Buffer.concat(chunks).toString('latin1');
+  return latin.replace(/<([0-9A-Fa-f\s]+)>/g, (_match, hex: string) => {
+    const clean = hex.replace(/\s+/g, '');
+    let out = '';
+    for (let i = 0; i + 1 < clean.length; i += 2) {
+      out += String.fromCharCode(Number.parseInt(clean.slice(i, i + 2), 16));
+    }
+    return out;
+  });
+}
 async function fixture(rotation = 0, cropped = false) {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([600, 800]);
@@ -122,6 +157,30 @@ describe('Ficha de Pizarrón y Encabezado Slim', () => {
     const out = await PDFDocument.load(bytes);
     // 1 ficha + 2 páginas originales del fixture = 3 páginas
     expect(out.getPageCount()).toBe(3);
+  });
+
+  it('quita la ruta de fabricación y deja el recuadro de foto', async () => {
+    const bytes = await stampPlanoOt(await fixture(), {
+      ...stamp,
+      mode: 'board_ticket',
+      partNumber: '90-5492REV1',
+    });
+    const raw = pdfText(bytes);
+    expect(raw.includes('RUTA DE FABRICACI')).toBe(false);
+    expect(raw.includes('Sin isom')).toBe(true);
+    expect(raw.includes('PIZARRON') || raw.includes('PIZARR')).toBe(true);
+  });
+
+  it('marca la foto cuando vino de la IA', async () => {
+    const png = TINY_PNG;
+    const bytes = await stampPlanoOt(await fixture(), {
+      ...stamp,
+      mode: 'board_ticket',
+      fichaPhoto: { kind: 'ai', imageDataUrl: png },
+    });
+    const raw = pdfText(bytes);
+    expect(raw.includes('Isom')).toBe(true);
+    expect(raw.includes('RUTA DE FABRICACI')).toBe(false);
   });
 
   it('admite headerStyle=classic y headerStyle=slim', async () => {

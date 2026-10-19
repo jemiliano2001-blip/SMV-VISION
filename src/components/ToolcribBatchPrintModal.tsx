@@ -22,6 +22,7 @@ import {
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { attachFichaPhoto, photoSourcesForPart } from '../lib/fichaOtPhoto';
 import { openStampedPlanoOtBatch, type BatchPlanoOtItem, type PlanoOtPrintMode, type PlanoOtHeaderStyle } from '../lib/planoOt';
 import { log } from '../lib/log';
 import type { ToolcribActiveDrawingView } from '../types';
@@ -29,6 +30,8 @@ import type { ToolcribActiveDrawingView } from '../types';
 export interface ToolcribBatchPrintModalProps {
   /** null = modal cerrado. Cada entrada debe tener `pdfUrl` (el caller ya filtró). */
   drawings: ToolcribActiveDrawingView[] | null;
+  /** Catálogo completo para encontrar el ISO o el STL hermano de cada CAD. */
+  catalogViews?: readonly ToolcribActiveDrawingView[];
   onClose: () => void;
   onSuccess: (info: { soNumber: string | null; drawings: ToolcribActiveDrawingView[] }) => void;
 }
@@ -40,6 +43,7 @@ function defaultFecha(): string {
 
 export function ToolcribBatchPrintModal({
   drawings,
+  catalogViews = [],
   onClose,
   onSuccess,
 }: ToolcribBatchPrintModalProps) {
@@ -85,20 +89,24 @@ export function ToolcribBatchPrintModal({
       for (const drawing of drawings) {
         if (!drawing.pdfUrl) continue;
         const pdfDataUrl = await fetchPdfAsDataUrl(drawing.pdfUrl);
+        const stamp = await attachFichaPhoto({
+          soNumber: soNumber.trim() || 'N/A',
+          cantidad: cantidades[drawing.drawingId]?.trim() || '1',
+          poNumber: poNumber.trim(),
+          fecha,
+          notas: notas.trim(),
+          partNumber: drawing.partNumber,
+          customer: drawing.customer,
+          piezaDescripcion: drawing.description,
+          mode: batchPrintMode,
+          headerStyle,
+        }, {
+          ...photoSourcesForPart(drawing.partNumber, catalogViews),
+          cadPdfDataUrl: pdfDataUrl,
+        });
         items.push({
           pdfDataUrl,
-          stamp: {
-            soNumber: soNumber.trim() || 'N/A',
-            cantidad: cantidades[drawing.drawingId]?.trim() || '1',
-            poNumber: poNumber.trim(),
-            fecha,
-            notas: notas.trim(),
-            partNumber: drawing.partNumber,
-            customer: drawing.customer,
-            piezaDescripcion: drawing.description,
-            mode: batchPrintMode,
-            headerStyle,
-          },
+          stamp,
           partNumber: drawing.partNumber,
           revision: drawing.revision,
         });

@@ -13,6 +13,7 @@ import {
   type PlanoOtSetItem,
 } from '../lib/planoOt';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { attachFichaPhoto, photoSourcesForPart } from '../lib/fichaOtPhoto';
 import { listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
 import { listActiveDrawingViews } from '../lib/firebase/toolcrib';
 import { findCompanionDrawings, type CompanionInfo } from '../lib/companionDrawings';
@@ -347,16 +348,30 @@ export function ToolcribPrintModal({
                 : [],
         }));
         const jobs = buildSeparatePrintJobs(pieces, { ...preview.stamp, quantityMask: mask }, juegos, notas.trim());
-        await openStampedPlanoOt(jobs[0].piece.pdfDataUrl, jobs[0].stamp);
+        const first = jobs[0];
+        const firstStamp = await attachFichaPhoto(first.stamp, {
+          ...photoSourcesForPart(first.piece.partNumber, catalog),
+          cadPdfDataUrl: first.piece.pdfDataUrl,
+        });
+        await openStampedPlanoOt(first.piece.pdfDataUrl, firstStamp);
         if (generation.current !== currentGeneration) return;
         setPendingJobs(jobs.map((job, index) => ({ job, printed: index === 0 })));
         return;
       }
 
       if (setItems && setItems.length > 1) {
-        await openStampedPlanoOtSet(setItems, { ...preview.stamp, quantityMask: mask });
+        const base = setItems[0];
+        const stamped = await attachFichaPhoto({ ...preview.stamp, quantityMask: mask }, {
+          ...photoSourcesForPart(base.partNumber, catalog),
+          cadPdfDataUrl: base.pdfDataUrl,
+        });
+        await openStampedPlanoOtSet(setItems, stamped);
       } else {
-        await openStampedPlanoOt(preview.dataUrl, { ...preview.stamp, quantityMask: mask });
+        const stamped = await attachFichaPhoto({ ...preview.stamp, quantityMask: mask }, {
+          ...photoSourcesForPart(drawing.partNumber, catalog),
+          cadPdfDataUrl: preview.dataUrl,
+        });
+        await openStampedPlanoOt(preview.dataUrl, stamped);
       }
       if (generation.current !== currentGeneration) return;
 
@@ -378,7 +393,12 @@ export function ToolcribPrintModal({
     if (!pendingJobs) return;
     setError(null);
     try {
-      await openStampedPlanoOt(pendingJobs[index].job.piece.pdfDataUrl, pendingJobs[index].job.stamp);
+      const pending = pendingJobs[index].job;
+      const stamped = await attachFichaPhoto(pending.stamp, {
+        ...photoSourcesForPart(pending.piece.partNumber, catalog),
+        cadPdfDataUrl: pending.piece.pdfDataUrl,
+      });
+      await openStampedPlanoOt(pending.piece.pdfDataUrl, stamped);
       setPendingJobs((prev) => prev && prev.map((entry, i) => (i === index ? { ...entry, printed: true } : entry)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al imprimir esta pieza.');

@@ -7,6 +7,7 @@ import { makeOrderDrawingLinkKey, getAllCadDrawingSnapshotsForPrint, refreshLink
 import { openStampedPlanoOtBatch, type BatchPlanoOtItem } from '../lib/planoOt';
 import { ensureActiveSets } from '../lib/firebase/toolcribSets';
 import { fetchPdfAsDataUrl } from '../lib/fetchPdf';
+import { attachFichaPhoto, photoSourcesForPart } from '../lib/fichaOtPhoto';
 import { log } from '../lib/log';
 
 export interface UseBatchPrintOtsOptions {
@@ -116,22 +117,26 @@ export function useBatchPrintOts({
               const isMultiple = cadSnapshots.length > 1;
               const sheetSuffix = isMultiple ? ` [Plano ${sIdx + 1}/${cadSnapshots.length}]` : '';
 
+              const stamp = await attachFichaPhoto({
+                soNumber: order.name,
+                cantidad: String(line.qty_pending),
+                poNumber: order.client_order_ref ?? '',
+                fecha,
+                notas: ((line.description ? line.description.slice(0, 60) : '') + sheetSuffix).trim(),
+                partNumber: cadSnap.partNumber,
+                customer: cadSnap.customer,
+                piezaDescripcion: isMultiple
+                  ? `${cadSnap.description || ''} · Juego ${sIdx + 1} de ${cadSnapshots.length}`.trim()
+                  : cadSnap.description,
+                headerStyle: 'slim',
+                mode: isPrimary ? 'both' : 'blueprint',
+              }, {
+                ...photoSourcesForPart(cadSnap.partNumber, library),
+                cadPdfDataUrl: pdfDataUrl,
+              });
               items.push({
                 pdfDataUrl,
-                stamp: {
-                  soNumber: order.name,
-                  cantidad: String(line.qty_pending),
-                  poNumber: order.client_order_ref ?? '',
-                  fecha,
-                  notas: ((line.description ? line.description.slice(0, 60) : '') + sheetSuffix).trim(),
-                  partNumber: cadSnap.partNumber,
-                  customer: cadSnap.customer,
-                  piezaDescripcion: isMultiple
-                    ? `${cadSnap.description || ''} · Juego ${sIdx + 1} de ${cadSnapshots.length}`.trim()
-                    : cadSnap.description,
-                  headerStyle: 'slim',
-                  mode: isPrimary ? 'both' : 'blueprint',
-                },
+                stamp,
                 partNumber: cadSnap.partNumber,
                 revision: cadSnap.revision,
               });

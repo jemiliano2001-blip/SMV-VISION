@@ -46,6 +46,7 @@ export function buildSeparatePrintJobs(
         cantidad: String(quantityForMember(juegos, piece.cantidadPorJuego)),
         notas: joinNotes([...piece.permanentNotes, corrida]),
         quantityMask: index === 0 ? baseStamp.quantityMask : null,
+        fichaPhoto: undefined,
       },
     };
   });

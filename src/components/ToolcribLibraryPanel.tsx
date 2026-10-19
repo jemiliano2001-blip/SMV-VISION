@@ -1377,6 +1377,7 @@ export function ToolcribLibraryPanel({
 
       <ToolcribBatchPrintModal
         drawings={batchPrintDrawings}
+        catalogViews={views}
         onClose={() => setBatchPrintDrawings(null)}
         onSuccess={handleBatchPrintSuccess}
       />

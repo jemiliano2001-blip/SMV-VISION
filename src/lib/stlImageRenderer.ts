@@ -24,6 +24,11 @@ export interface RenderStlOptions {
   height?: number;
   backgroundColor?: number | string;
   metalColor?: number;
+  /**
+   * `color` conserva el render de metal para factura y correo.
+   * `print` es escala de grises de alto contraste para la láser de la OT.
+   */
+  tone?: 'color' | 'print';
 }
 
 /**
@@ -37,8 +42,9 @@ export async function renderStlToDataUrl(
   try {
     const width = options.width ?? 600;
     const height = options.height ?? 450;
+    const printTone = options.tone === 'print';
     const bgColor = options.backgroundColor ?? 0xffffff;
-    const metalColor = options.metalColor ?? 0x64748b;
+    const metalColor = printTone ? 0x2a2a2a : (options.metalColor ?? 0x64748b);
 
     // 1. Cargar la geometría STL
     const loader = new STLLoader();
@@ -66,28 +72,34 @@ export async function renderStlToDataUrl(
     // Material metálico satinado limpio
     const material = new MeshStandardMaterial({
       color: metalColor,
-      metalness: 0.55,
-      roughness: 0.35,
+      metalness: printTone ? 0.05 : 0.55,
+      roughness: printTone ? 0.9 : 0.35,
     });
 
     const mesh = new Mesh(geometry, material);
     scene.add(mesh);
 
     // 3. Luces de estudio industrial
-    const ambientLight = new AmbientLight(0xffffff, 0.65);
+    const ambientLight = new AmbientLight(0xffffff, printTone ? 0.9 : 0.65);
     scene.add(ambientLight);
 
-    const keyLight = new DirectionalLight(0xfffaed, 0.95);
+    const keyLight = new DirectionalLight(printTone ? 0xffffff : 0xfffaed, printTone ? 1.15 : 0.95);
     keyLight.position.set(150, 200, 120);
     scene.add(keyLight);
 
-    const fillLight = new DirectionalLight(0x90b8f8, 0.5);
-    fillLight.position.set(-150, 80, -120);
-    scene.add(fillLight);
+    if (!printTone) {
+      const fillLight = new DirectionalLight(0x90b8f8, 0.5);
+      fillLight.position.set(-150, 80, -120);
+      scene.add(fillLight);
 
-    const rimLight = new DirectionalLight(0x38bdf8, 0.6);
-    rimLight.position.set(-80, -100, 150);
-    scene.add(rimLight);
+      const rimLight = new DirectionalLight(0x38bdf8, 0.6);
+      rimLight.position.set(-80, -100, 150);
+      scene.add(rimLight);
+    } else {
+      const fillLight = new DirectionalLight(0xffffff, 0.4);
+      fillLight.position.set(-150, 80, -120);
+      scene.add(fillLight);
+    }
 
     // 4. Cámara en perspectiva isométrica
     const camera = new PerspectiveCamera(42, width / height, 0.1, 5000);

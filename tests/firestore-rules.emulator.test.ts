@@ -79,8 +79,10 @@ describeWithEmulator("reglas Firestore de Vision en la base compartida con el Da
   })
 
   it("desplegar las reglas de Vision no rompe al Dashboard (company_configs)", async () => {
-    // La TV anónima lee la configuración; solo un admin verificado la cambia (copia fiel de las reglas del Dashboard).
-    await assertSucceeds(anonimo().doc("company_configs/suprajit").get())
+    // El Dashboard exige cuenta real (ya no hay TV anónima): un anónimo no lee; un usuario real sí.
+    // Solo un admin verificado cambia la configuración (copia fiel de las reglas del Dashboard).
+    await assertFails(anonimo().doc("company_configs/suprajit").get())
+    await assertSucceeds(usuario().doc("company_configs/suprajit").get())
     await assertFails(anonimo().doc("company_configs/suprajit").update({ company_name: "Z" }))
     await assertSucceeds(adminDashboard().doc("company_configs/suprajit").set({
       company_name: "Suprajit", delivery_schedule: "L-S", updatedAt: new Date(),

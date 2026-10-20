@@ -119,7 +119,7 @@ service cloud.firestore {
           && request.resource.data.updatedAt is timestamp;
     }
     match /company_configs/{configId} {
-      allow read: if request.auth != null; // la TV anónima la lee
+      allow read: if isSignedIn(); // el Dashboard exige cuenta real; anónimos excluidos
       allow create, update: if dashIsVerifiedAdmin() && dashIsValidCompanyConfig();
       allow delete: if dashIsVerifiedAdmin();
     }

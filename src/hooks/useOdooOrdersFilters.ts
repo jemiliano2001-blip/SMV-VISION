@@ -26,6 +26,11 @@ export function requesterKey(order: OdooOrderView): string {
   return orderRequester(order) || 'Sin Requisitor';
 }
 
+/** La más antigua primero (lo más urgente arriba); sin fecha, al final. */
+export function sortOrdersOldestFirst(orders: OdooOrderView[]): OdooOrderView[] {
+  return [...orders].sort((a, b) => (a.date_order || '9').localeCompare(b.date_order || '9'));
+}
+
 export function useOdooOrdersFilters({
   orders,
   isOrderMissingDrawing,
@@ -94,7 +99,7 @@ export function useOdooOrdersFilters({
 
   // Órdenes filtradas por texto, requisitor y urgencia
   const filteredOrders = useMemo(() => {
-    return searchMatchedOrders.filter((o) => {
+    const matching = searchMatchedOrders.filter((o) => {
       if (selectedRequisitor !== 'ALL') {
         if (requesterKey(o) !== selectedRequisitor) return false;
       }
@@ -114,6 +119,7 @@ export function useOdooOrdersFilters({
 
       return true;
     });
+    return sortOrdersOldestFirst(matching);
   }, [searchMatchedOrders, selectedRequisitor, urgencyFilter, isOrderMissingDrawing]);
 
   // Agrupación de órdenes por Requisitor

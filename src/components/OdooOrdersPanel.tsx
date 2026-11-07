@@ -6,7 +6,6 @@ import {
   AlertCircle,
   FileDown,
   Mail,
-  User,
   Users,
   Search,
   ChevronDown,
@@ -14,8 +13,8 @@ import {
   List,
   X,
   Printer,
-  Building2,
   AlertTriangle,
+  MousePointerClick,
 } from 'lucide-react';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
 import { InvoiceRequestPanel } from './InvoiceRequestPanel';
@@ -36,12 +35,24 @@ import { makeOrderDrawingLinkKey, parseOdooLineLabels } from '../lib/orderDrawin
 import { useOdooLineActions } from '../hooks/useOdooLineActions';
 import { useBatchPrintOts } from '../hooks/useBatchPrintOts';
 import { requesterKey, useOdooOrdersFilters } from '../hooks/useOdooOrdersFilters';
-import { OrderCard } from './odoo-orders/OrderCard';
+import { OrderDetail } from './odoo-orders/OrderDetail';
+import { OrderListRow } from './odoo-orders/OrderListRow';
+import { PageFrame } from './shell/PageFrame';
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from './ui/sheet';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { formatRelativeTime } from '../lib/age';
 import { log } from '../lib/log';
 import { exportDeliverySlip, exportOdooOrdersReportPdf as exportPdf } from '../lib/deliverySlipGenerator';
 
+/** Valor del selector de compañía que carga las órdenes de todas. */
+export const ALL_PARTNERS = 'ALL';
+
 export interface OdooOrdersPanelProps {
+  /** Viven en App para sobrevivir el viaje a Biblioteca y de regreso. */
+  partnerKey: string;
+  onPartnerKeyChange: (partnerKey: string) => void;
+  selectedOrderId: string | null;
+  onSelectedOrderIdChange: (orderId: string | null) => void;
   catalog: UseToolcribCatalogResult;
   bridge: UseOrderDrawingBridgeResult;
   onSendToReport: (link: OrderDrawingLink) => Promise<void>;
@@ -63,6 +74,10 @@ export interface OdooOrdersPanelProps {
 }
 
 export function OdooOrdersPanel({
+  partnerKey,
+  onPartnerKeyChange,
+  selectedOrderId,
+  onSelectedOrderIdChange,
   catalog,
   bridge,
   onSendToReport,
@@ -77,9 +92,7 @@ export function OdooOrdersPanel({
   const [syncElapsedSeconds, setSyncElapsedSeconds] = useState(0);
   const [invoicePanelOpen, setInvoicePanelOpen] = useState(false);
 
-  // Compañía (partner) — vacío hasta elegir; no carga todas las órdenes de golpe.
-  const [selectedPartnerKey, setSelectedPartnerKey] = useState<string | null>(null);
-
+  const isDesktop = useMediaQuery('(min-width: 1280px)');
   const syncTriggeredAt = useRef<Date | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { meta } = useSyncMeta();
@@ -161,20 +174,12 @@ export function OdooOrdersPanel({
 
   const filters = useOdooOrdersFilters({ orders, isOrderMissingDrawing });
 
-  // Paginación progresiva para mantener 60 FPS en listas largas de órdenes
-  const [visibleOrderLimit, setVisibleOrderLimit] = useState(25);
-  useEffect(() => {
-    setVisibleOrderLimit(25);
-  }, [selectedPartnerKey, filters.searchTerm, filters.selectedRequisitor, filters.urgencyFilter]);
-
-  const displayedOrders = useMemo(() => {
-    return filters.filteredOrders.slice(0, visibleOrderLimit);
-  }, [filters.filteredOrders, visibleOrderLimit]);
-
-  const fetchOrders = useCallback(async (partnerKey: string) => {
+  const fetchOrders = useCallback(async (key: string) => {
     setLoading(true);
     setError(null);
-    const result = await listOrdersToInvoice({ partnerKey });
+    const result = await listOrdersToInvoice(
+      key === ALL_PARTNERS ? { partnerKeyPrefix: '' } : { partnerKey: key },
+    );
     if (result.ok) {
       setOrders(result.value);
       const soNumbers = result.value.map((o) => o.name);
@@ -195,15 +200,28 @@ export function OdooOrdersPanel({
   }, []);
 
   const selectPartner = useCallback(
-    (partnerKey: string) => {
-      setSelectedPartnerKey(partnerKey);
+    (key: string) => {
+      onPartnerKeyChange(key);
+      onSelectedOrderIdChange(null);
       filters.setSearchTerm('');
       filters.setSelectedRequisitor('ALL');
       batchPrint.clearSelection();
-      void fetchOrders(partnerKey);
     },
-    [fetchOrders, filters, batchPrint],
+    [onPartnerKeyChange, onSelectedOrderIdChange, filters, batchPrint],
   );
+
+  useEffect(() => {
+    void fetchOrders(partnerKey);
+  }, [partnerKey, fetchOrders]);
+
+  // En escritorio siempre hay una orden abierta: la más urgente de lo filtrado.
+  const selectedOrder = filters.filteredOrders.find((o) => o.id === selectedOrderId) ?? null;
+  const firstOrderId = filters.filteredOrders[0]?.id ?? null;
+  useEffect(() => {
+    if (isDesktop && !loading && !selectedOrder && firstOrderId) {
+      onSelectedOrderIdChange(firstOrderId);
+    }
+  }, [isDesktop, loading, selectedOrder, firstOrderId, onSelectedOrderIdChange]);
 
   useEffect(() => {
     if (!syncingOdoo || !meta || !syncTriggeredAt.current) return;
@@ -212,18 +230,15 @@ export function OdooOrdersPanel({
       setSyncElapsedSeconds(0);
       syncTriggeredAt.current = null;
       if (syncTimeoutRef.current) clearInterval(syncTimeoutRef.current);
-      if (selectedPartnerKey) {
-        const stillThere = meta.partners.some((p) => p.key === selectedPartnerKey);
-        if (stillThere) {
-          void fetchOrders(selectedPartnerKey);
-        } else {
-          setSelectedPartnerKey(null);
-          setOrders([]);
-          setProductionMap(new Map());
-        }
+      const stillThere =
+        partnerKey === ALL_PARTNERS || meta.partners.some((p) => p.key === partnerKey);
+      if (stillThere) {
+        void fetchOrders(partnerKey);
+      } else {
+        onPartnerKeyChange(ALL_PARTNERS);
       }
     }
-  }, [meta, syncingOdoo, fetchOrders, selectedPartnerKey]);
+  }, [meta, syncingOdoo, fetchOrders, partnerKey, onPartnerKeyChange]);
 
   const startSyncTimer = useCallback(() => {
     setSyncingOdoo(true);
@@ -267,19 +282,16 @@ export function OdooOrdersPanel({
     };
   }, []);
 
-  // Si la compañía seleccionada ya no aparece en el catálogo del sync, limpiar.
+  // Si la compañía seleccionada ya no aparece en el catálogo del sync, volver a todas.
   useEffect(() => {
-    if (!selectedPartnerKey || !meta) return;
-    if (meta.partners.length === 0) return;
-    if (!meta.partners.some((p) => p.key === selectedPartnerKey)) {
-      setSelectedPartnerKey(null);
-      setOrders([]);
-      setProductionMap(new Map());
+    if (partnerKey === ALL_PARTNERS || !meta || meta.partners.length === 0) return;
+    if (!meta.partners.some((p) => p.key === partnerKey)) {
+      onPartnerKeyChange(ALL_PARTNERS);
     }
-  }, [meta, selectedPartnerKey]);
+  }, [meta, partnerKey, onPartnerKeyChange]);
 
-  const renderOrderCard = (order: OdooOrderView) => (
-    <OrderCard
+  const renderOrderDetail = (order: OdooOrderView) => (
+    <OrderDetail
       key={order.id}
       order={order}
       productionMap={productionMap}
@@ -304,489 +316,337 @@ export function OdooOrdersPanel({
     />
   );
 
+  const renderOrderRow = (order: OdooOrderView) => (
+    <OrderListRow
+      key={order.id}
+      order={order}
+      selected={order.id === selectedOrderId}
+      missingDrawing={isOrderMissingDrawing(order)}
+      onSelect={onSelectedOrderIdChange}
+    />
+  );
+
+  const urgencyOptions = [
+    { key: 'ALL', label: 'Todas', count: filters.urgencyCounts.all, tone: 'text-ink' },
+    { key: 'OVERDUE', label: 'Vencidas', count: filters.urgencyCounts.overdue, tone: 'text-danger', title: 'Más de 14 días desde su emisión' },
+    { key: 'CRITICAL', label: 'Críticas', count: filters.urgencyCounts.critical, tone: 'text-warn', title: 'Entre 8 y 14 días desde su emisión' },
+    { key: 'NORMAL', label: 'Recientes', count: filters.urgencyCounts.normal, tone: 'text-ok', title: 'Menos de 8 días desde su emisión' },
+    { key: 'MISSING_DRAWING', label: 'Sin plano', count: filters.urgencyCounts.missingDrawing, tone: 'text-accent', title: 'Con líneas activas sin plano vinculado' },
+  ] as const;
+
+  const hasActiveFilters = Boolean(filters.searchTerm) || filters.selectedRequisitor !== 'ALL' || filters.urgencyFilter !== 'ALL';
+  const fieldClass = 'h-10 rounded-lg border border-line bg-surface-2 px-3 text-xs text-ink focus:outline-none focus:border-accent';
+
   return (
-    <div className="h-full flex flex-col bg-bg">
-      {/* ── Header Principal ── */}
-      <header className="shrink-0 border-b border-line bg-surface/95 backdrop-blur-xl px-4 sm:px-6 lg:px-9 py-4 flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-accent/10 text-accent flex items-center justify-center">
-            <CloudDownload size={22} strokeWidth={2.5} />
-          </div>
-          <div>
-            <h1 className="font-display font-bold text-2xl sm:text-3xl tracking-[-0.04em] leading-none">
-              Órdenes de producción
-            </h1>
-            <p className="text-xs text-ink-dim mt-1">
-              Pendientes de facturación (to invoice + upselling)
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {meta && (
-            <div
-              className={`font-mono text-[10px] uppercase tracking-wider px-3 py-2 rounded-lg border ${
-                meta.status === 'error'
-                  ? 'border-danger/50 bg-danger/10 text-danger'
-                  : 'border-line text-ink-dim'
-              }`}
-              title={meta.status === 'error' ? meta.errorMessage : undefined}
-            >
-              {meta.status === 'error'
-                ? `FALLO SYNC · ${meta.lastSuccessfulSyncAt ? `ÚLTIMO OK ${formatRelativeTime(meta.lastSuccessfulSyncAt)}` : formatRelativeTime(meta.lastSyncAt)}`
-                : `SYNC · ${formatRelativeTime(meta.lastSyncAt)} · ${meta.ordersProcessed} ÓRDENES`}
-            </div>
-          )}
-          {batchPrint.selectedLines.size > 0 && (
+    <>
+      <PageFrame
+        scrollBody={false}
+        title="Órdenes de producción"
+        subtitle={
+          meta?.status === 'error' ? (
+            <span className="text-danger" title={meta.errorMessage}>
+              Falló el último sync
+              {meta.lastSuccessfulSyncAt ? ` · último correcto ${formatRelativeTime(meta.lastSuccessfulSyncAt)}` : ''}
+            </span>
+          ) : meta ? (
+            `Pendientes de facturar · sync ${formatRelativeTime(meta.lastSyncAt)} · ${meta.ordersProcessed} órdenes`
+          ) : (
+            'Pendientes de facturar'
+          )
+        }
+        actions={
+          <>
+            {batchPrint.selectedLines.size > 0 && (
+              <Button
+                variant="ghost"
+                onClick={() => void batchPrint.handleBatchPrintOts()}
+                disabled={batchPrint.batchPrinting}
+                className="flex items-center gap-2 px-4 rounded-lg border border-ok bg-ok text-bg hover:bg-ok/80 transition-colors disabled:opacity-50 text-[11px] font-semibold h-10"
+                title="Combinar y abrir en un solo PDF todas las OTs seleccionadas"
+              >
+                {batchPrint.batchPrinting ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+                {batchPrint.batchPrinting ? 'Imprimiendo…' : `Imprimir lote (${batchPrint.selectedLines.size})`}
+              </Button>
+            )}
             <Button
               variant="ghost"
-              onClick={() => void batchPrint.handleBatchPrintOts()}
-              disabled={batchPrint.batchPrinting}
-              className="flex items-center gap-2 px-4 py-2 border-2 border-ok bg-ok text-bg hover:bg-ok/80 transition-colors disabled:opacity-50 text-[11px] font-black uppercase tracking-widest shadow-hard hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 h-auto rounded-none"
-              title="Combinar y abrir en un solo PDF todas las OTs seleccionadas"
+              onClick={() => setInvoicePanelOpen(true)}
+              disabled={loading || filters.filteredOrders.length === 0}
+              className="flex items-center gap-2 px-4 rounded-lg border border-accent bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-30 text-[11px] font-semibold shadow-hard-accent h-10"
             >
-              {batchPrint.batchPrinting ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Printer size={14} />
-              )}
-              {batchPrint.batchPrinting ? 'Imprimiendo…' : `Imprimir Lote (${batchPrint.selectedLines.size} OTs)`}
+              <Mail size={14} />
+              Factura / Remisión
             </Button>
-          )}
-          <Button
-            variant="ghost"
-            onClick={() => setInvoicePanelOpen(true)}
-            disabled={loading || filters.filteredOrders.length === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-accent bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-30 text-[11px] font-semibold shadow-hard-accent h-10"
-          >
-            <Mail size={14} />
-            Factura / Remisión
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              exportPdf(filters.filteredOrders, productionMap).catch((e) => {
-                log.error('[smv-vision] exportPdf falló', e);
-                lineActions.setLineActionError('No se pudo generar el PDF del reporte de órdenes.');
-              });
-            }}
-            disabled={loading || filters.filteredOrders.length === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-semibold h-10 text-ink"
-          >
-            <FileDown size={14} />
-            PDF
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => void handleRefresh()}
-            disabled={loading || syncingOdoo}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-line bg-surface-2 hover:border-accent hover:text-accent transition-colors disabled:opacity-50 text-[11px] font-semibold h-10 text-ink"
-          >
-            <RefreshCw size={14} className={(loading || syncingOdoo) ? 'animate-spin' : ''} />
-            {syncingOdoo ? `Sincronizando… ${syncElapsedSeconds}s` : loading ? 'Cargando…' : 'Refrescar'}
-          </Button>
-        </div>
-      </header>
-
-      {/* ── Banner de Error en Sincronización (No Destructivo) ── */}
-      {meta?.status === 'error' && (
-        <div className="bg-danger/10 border-b-2 border-danger px-6 py-3 flex items-center justify-between text-danger font-mono text-xs flex-wrap gap-2 animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={16} className="shrink-0 text-danger" />
-            <span>
-              <strong>Aviso de Sincronización:</strong> {meta.errorMessage || 'Error de conexión con Odoo.'}
-              {meta.lastSuccessfulSyncAt && (
-                <span className="opacity-80 ml-1">
-                  (Mostrando catálogo del último sync exitoso {formatRelativeTime(meta.lastSuccessfulSyncAt)})
-                </span>
-              )}
-            </span>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleRefresh()}
-            disabled={syncingOdoo}
-            className="border-danger text-danger hover:bg-danger hover:text-bg h-7 text-[10px] font-mono font-bold uppercase tracking-wider"
-          >
-            Reintentar Sync
-          </Button>
-        </div>
-      )}
-
-      {/* ── Banner de Progreso Batch Print ── */}
-      {batchPrint.batchPrintStatus && (
-        <div className="bg-accent/15 border-b-2 border-accent px-6 py-2 flex items-center justify-between text-ink font-mono text-xs animate-fadeIn">
-          <div className="flex items-center gap-2">
-            <Loader2 size={14} className="animate-spin text-accent" />
-            <span className="font-bold">{batchPrint.batchPrintStatus}</span>
-          </div>
-        </div>
-      )}
-
-      {/* ── Compañías (partners) — carga perezosa ── */}
-      <section className="shrink-0 border-b border-line bg-surface px-4 sm:px-6 lg:px-9 py-3">
-        <div className="flex items-center gap-2 mb-2">
-          <Building2 size={14} className="text-accent" />
-          <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim">
-            Compañía
-          </span>
-        </div>
-        {partners.length === 0 ? (
-          <p className="text-xs text-ink-dim">
-            Sin compañías en el último sync. Pulsa Refrescar para sincronizar Odoo.
-          </p>
-        ) : (
-          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none flex-nowrap sm:flex-wrap">
-            {partners.map((partner) => {
-              const selected = selectedPartnerKey === partner.key;
-              return (
-                <button
-                  key={partner.key}
-                  type="button"
-                  onClick={() => selectPartner(partner.key)}
-                  className={`flex min-h-10 items-center gap-2 px-3 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors shrink-0 ${
-                    selected
-                      ? 'border-accent bg-accent text-bg'
-                      : 'border-line bg-surface-2 text-ink hover:border-accent hover:text-accent'
-                  }`}
-                >
-                  <span className="max-w-[220px] truncate">{partner.name}</span>
-                  <span
-                    className={`px-1.5 py-0.5 font-mono text-[9px] font-bold ${
-                      selected ? 'bg-bg text-accent' : 'bg-accent text-bg'
-                    }`}
-                  >
-                    {partner.toInvoiceCount}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* ── Subheader / Barra de Navegación y Filtros por Requisitor ── */}
-      {selectedPartnerKey && (
-        <section className="shrink-0 border-b-2 border-line bg-surface-2 px-4 sm:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          {/* Selector de Modo de Vista */}
-          <div className="flex items-center border-2 border-line bg-surface p-0.5 shadow-sm shrink-0">
-            <button
-              type="button"
-              onClick={() => filters.setViewMode('all')}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
-                filters.viewMode === 'all'
-                  ? 'bg-[#0D2B4D] text-white shadow-sm'
-                  : 'text-ink-dim hover:text-ink hover:bg-surface-2'
-              }`}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                exportPdf(filters.filteredOrders, productionMap).catch((e) => {
+                  log.error('[smv-vision] exportPdf falló', e);
+                  lineActions.setLineActionError('No se pudo generar el PDF del reporte de órdenes.');
+                });
+              }}
+              disabled={loading || filters.filteredOrders.length === 0}
+              className="flex items-center gap-2 px-4 rounded-lg border border-line bg-surface-2 hover:border-ok hover:text-ok transition-colors disabled:opacity-30 text-[11px] font-semibold h-10 text-ink"
             >
-              <List size={14} />
-              <span>Todas</span>
-              <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
-                {filters.filteredOrders.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => filters.setViewMode('by_requisitor')}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider transition-colors ${
-                filters.viewMode === 'by_requisitor'
-                  ? 'bg-[#0D2B4D] text-white shadow-sm'
-                  : 'text-ink-dim hover:text-ink hover:bg-surface-2'
-              }`}
+              <FileDown size={14} />
+              PDF
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => void handleRefresh()}
+              disabled={loading || syncingOdoo}
+              className="flex items-center gap-2 px-4 rounded-lg border border-line bg-surface-2 hover:border-accent hover:text-accent transition-colors disabled:opacity-50 text-[11px] font-semibold h-10 text-ink"
             >
-              <Users size={14} />
-              <span>Por Requisitor</span>
-              <span className="ml-1 px-1.5 py-0.2 font-mono text-[9px] bg-accent text-bg font-bold">
-                {filters.uniqueRequisitores.length}
-              </span>
-            </button>
-          </div>
+              <RefreshCw size={14} className={loading || syncingOdoo ? 'animate-spin' : ''} />
+              {syncingOdoo ? `Sincronizando… ${syncElapsedSeconds}s` : loading ? 'Cargando…' : 'Refrescar'}
+            </Button>
+          </>
+        }
+        toolbar={
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <select
+              aria-label="Compañía"
+              value={partnerKey}
+              onChange={(e) => selectPartner(e.target.value)}
+              className={`${fieldClass} font-semibold w-full sm:w-56`}
+            >
+              <option value={ALL_PARTNERS}>Todas las compañías</option>
+              {partners.map((partner) => (
+                <option key={partner.key} value={partner.key}>
+                  {partner.name} ({partner.toInvoiceCount})
+                </option>
+              ))}
+            </select>
 
-          {/* Barra de Filtros y Búsqueda */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
-            {/* Selector Filtro de Requisitor */}
-            <div className="flex items-center gap-2 bg-surface border-2 border-line px-3 py-1.5 text-xs">
-              <User size={14} className="text-accent shrink-0" />
-              <span className="font-mono text-[10px] uppercase font-bold text-ink-dim shrink-0">Ing:</span>
-              <select
-                value={filters.selectedRequisitor}
-                onChange={(e) => filters.setSelectedRequisitor(e.target.value)}
-                className="bg-transparent font-mono text-xs text-ink font-bold focus:outline-none uppercase cursor-pointer w-full"
-              >
-                <option value="ALL">TODOS ({filters.searchMatchedOrders.length})</option>
-                {filters.uniqueRequisitores.map((req) => {
-                  const count = filters.searchMatchedOrders.filter(
-                    (o) => requesterKey(o) === req,
-                  ).length;
-                  return (
-                    <option key={req} value={req}>
-                      {req} ({count})
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            {/* Caja de Búsqueda Rápida */}
-            <div className="relative flex items-center">
-              <Search size={14} className="absolute left-3 text-ink-dim" />
+            <div className="relative w-full sm:w-56">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim" />
               <input
                 type="text"
+                aria-label="Buscar órdenes"
                 placeholder="Buscar SO, PO, pieza…"
                 value={filters.searchTerm}
                 onChange={(e) => filters.setSearchTerm(e.target.value)}
-                className="bg-surface border-2 border-line pl-8 pr-8 py-1.5 font-mono text-xs text-ink placeholder:text-ink-dim focus:outline-none focus:border-accent w-full sm:w-60 uppercase"
+                className={`${fieldClass} w-full pl-8 pr-9 placeholder:text-ink-dim`}
               />
               {filters.searchTerm && (
                 <button
                   type="button"
                   onClick={() => filters.setSearchTerm('')}
-                  className="absolute right-2 text-ink-dim hover:text-ink"
+                  className="absolute right-0 top-0 grid size-10 place-items-center text-ink-dim hover:text-ink"
+                  aria-label="Limpiar búsqueda"
                 >
                   <X size={14} />
                 </button>
               )}
             </div>
-          </div>
 
-          {/* Píldoras de Filtro por Urgencia & Planos */}
-          <div className="flex items-center gap-1.5 flex-wrap border-t border-line/60 pt-2 w-full mt-2">
-            <span className="text-[10px] font-mono font-bold uppercase text-ink-dim mr-1">
-              Urgencia:
-            </span>
-            <button
-              type="button"
-              onClick={() => filters.setUrgencyFilter('ALL')}
-              className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
-                filters.urgencyFilter === 'ALL'
-                  ? 'bg-ink text-bg border-ink shadow-sm'
-                  : 'bg-surface text-ink-dim border-line hover:text-ink hover:border-accent'
-              }`}
+            <select
+              aria-label="Ingeniero"
+              value={filters.selectedRequisitor}
+              onChange={(e) => filters.setSelectedRequisitor(e.target.value)}
+              className={`${fieldClass} w-full sm:w-48`}
             >
-              Todas ({filters.urgencyCounts.all})
-            </button>
-            {filters.urgencyCounts.overdue > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  filters.setUrgencyFilter(filters.urgencyFilter === 'OVERDUE' ? 'ALL' : 'OVERDUE')
-                }
-                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1 ${
-                  filters.urgencyFilter === 'OVERDUE'
-                    ? 'bg-danger text-white border-danger shadow-sm'
-                    : 'bg-danger/10 text-danger border-danger/40 hover:bg-danger/20'
-                }`}
-                title="Órdenes con más de 14 días desde su emisión"
-              >
-                <AlertTriangle size={11} />
-                Vencidas (+14d) ({filters.urgencyCounts.overdue})
-              </button>
-            )}
-            {filters.urgencyCounts.critical > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  filters.setUrgencyFilter(filters.urgencyFilter === 'CRITICAL' ? 'ALL' : 'CRITICAL')
-                }
-                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1 ${
-                  filters.urgencyFilter === 'CRITICAL'
-                    ? 'bg-warn text-bg border-warn shadow-sm'
-                    : 'bg-warn/10 text-warn border-warn/40 hover:bg-warn/20'
-                }`}
-                title="Órdenes entre 8 y 14 días desde su emisión"
-              >
-                Críticas (8-14d) ({filters.urgencyCounts.critical})
-              </button>
-            )}
-            {filters.urgencyCounts.normal > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  filters.setUrgencyFilter(filters.urgencyFilter === 'NORMAL' ? 'ALL' : 'NORMAL')
-                }
-                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border ${
-                  filters.urgencyFilter === 'NORMAL'
-                    ? 'bg-ok text-bg border-ok shadow-sm'
-                    : 'bg-ok/10 text-ok border-ok/40 hover:bg-ok/20'
-                }`}
-                title="Órdenes con menos de 8 días de emisión"
-              >
-                Recientes ({filters.urgencyCounts.normal})
-              </button>
-            )}
-            {filters.urgencyCounts.missingDrawing > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  filters.setUrgencyFilter(
-                    filters.urgencyFilter === 'MISSING_DRAWING' ? 'ALL' : 'MISSING_DRAWING',
-                  )
-                }
-                className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1 ${
-                  filters.urgencyFilter === 'MISSING_DRAWING'
-                    ? 'bg-accent text-bg border-accent shadow-sm'
-                    : 'bg-accent/10 text-accent border-accent/40 hover:bg-accent/20'
-                }`}
-                title="Órdenes con líneas activas sin plano vinculado"
-              >
-                Sin Plano ({filters.urgencyCounts.missingDrawing})
-              </button>
-            )}
-          </div>
-        </section>
-      )}
+              <option value="ALL">Todos los ingenieros ({filters.searchMatchedOrders.length})</option>
+              {filters.uniqueRequisitores.map((req) => {
+                const count = filters.searchMatchedOrders.filter((o) => requesterKey(o) === req).length;
+                return (
+                  <option key={req} value={req}>
+                    {req} ({count})
+                  </option>
+                );
+              })}
+            </select>
 
-      {/* ── Contenido Principal ── */}
-      <main className="flex-1 overflow-y-auto p-3 sm:p-6">
-        {lineActions.lineActionError && (
-          <div className="mb-4 flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-            <AlertCircle size={16} className="shrink-0 mt-0.5" />
-            <span>{lineActions.lineActionError}</span>
-            <button
-              type="button"
-              className="ml-auto text-ink-dim hover:text-ink"
-              onClick={() => lineActions.setLineActionError(null)}
-              aria-label="Cerrar"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        )}
-        {loading ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4">
-            <Loader2 size={32} className="animate-spin text-accent" />
-            <p className="font-mono text-[11px] uppercase tracking-widest">Sincronizando con Firestore…</p>
-          </div>
-        ) : error ? (
-          <div className="h-full flex flex-col items-center justify-center text-danger space-y-4">
-            <AlertCircle size={48} />
-            <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
-          </div>
-        ) : !selectedPartnerKey ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 rounded-2xl border border-dashed border-line bg-surface/70 p-12 text-center max-w-2xl mx-auto shadow-hard">
-            <Building2 size={48} className="text-line" />
-            <p className="font-display font-semibold text-2xl tracking-tight text-ink">
-              Elige una compañía para ver sus órdenes
-            </p>
-            <p className="max-w-md text-sm leading-relaxed text-ink-dim">
-              Los botones de arriba cargan solo las órdenes de esa compañía.
-            </p>
-          </div>
-        ) : filters.filteredOrders.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 rounded-2xl border border-dashed border-line bg-surface/70 p-12 text-center max-w-2xl mx-auto shadow-hard">
-            <CloudDownload size={48} className="text-line" />
-            <p className="font-display font-semibold text-2xl tracking-tight text-ink">No se encontraron órdenes</p>
-            <p className="max-w-md text-sm leading-relaxed text-ink-dim">
-              {filters.searchTerm || filters.selectedRequisitor !== 'ALL'
-                ? 'Ninguna orden coincide con los filtros de búsqueda aplicados.'
-                : 'Todas las órdenes de esta compañía están facturadas o no hay datos sincronizados.'}
-            </p>
-            {(filters.searchTerm || filters.selectedRequisitor !== 'ALL') && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  filters.setSearchTerm('');
-                  filters.setSelectedRequisitor('ALL');
-                }}
-                className="font-mono text-xs underline text-accent uppercase"
+            <div role="group" aria-label="Urgencia" className="flex items-center gap-1 overflow-x-auto scrollbar-none max-w-full">
+              {urgencyOptions.map((option) => {
+                if (option.key !== 'ALL' && option.count === 0) return null;
+                const active = filters.urgencyFilter === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    aria-pressed={active}
+                    title={'title' in option ? option.title : undefined}
+                    onClick={() => filters.setUrgencyFilter(active ? 'ALL' : option.key)}
+                    className={`h-10 shrink-0 rounded-lg px-2.5 text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                      active ? 'bg-surface-2 ring-1 ring-line' : 'hover:bg-surface-2'
+                    } ${option.tone}`}
+                  >
+                    {option.label} <span className="font-mono tabular-nums">{option.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center gap-1 sm:ml-auto">
+              <button
+                type="button"
+                aria-pressed={filters.viewMode === 'all'}
+                title="Ver lista completa"
+                aria-label="Ver lista completa"
+                onClick={() => filters.setViewMode('all')}
+                className={`grid size-10 place-items-center rounded-lg transition-colors ${
+                  filters.viewMode === 'all' ? 'bg-surface-2 text-accent ring-1 ring-line' : 'text-ink-dim hover:text-ink'
+                }`}
               >
-                Limpiar filtros
-              </Button>
-            )}
+                <List size={16} />
+              </button>
+              <button
+                type="button"
+                aria-pressed={filters.viewMode === 'by_requisitor'}
+                title="Agrupar por ingeniero"
+                aria-label="Agrupar por ingeniero"
+                onClick={() => filters.setViewMode('by_requisitor')}
+                className={`grid size-10 place-items-center rounded-lg transition-colors ${
+                  filters.viewMode === 'by_requisitor' ? 'bg-surface-2 text-accent ring-1 ring-line' : 'text-ink-dim hover:text-ink'
+                }`}
+              >
+                <Users size={16} />
+              </button>
+            </div>
           </div>
-        ) : filters.viewMode === 'all' ? (
-          /* ── MODO 1: Vista de Lista Plana (Todas las órdenes) ── */
-          <div className="space-y-6 max-w-6xl mx-auto">
-            {displayedOrders.map((order) => renderOrderCard(order))}
-            {filters.filteredOrders.length > visibleOrderLimit && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-2 border-line bg-surface shadow-hard">
-                <span className="font-mono text-xs text-ink-dim uppercase">
-                  Mostrando {displayedOrders.length} de {filters.filteredOrders.length} órdenes
+        }
+        notices={
+          <>
+            {meta?.status === 'error' && (
+              <div className="shrink-0 bg-danger/10 border-b border-danger px-4 sm:px-6 py-2 flex items-center justify-between text-danger text-xs flex-wrap gap-2">
+                <span className="flex items-center gap-2">
+                  <AlertTriangle size={14} className="shrink-0" />
+                  {meta.errorMessage || 'Error de conexión con Odoo.'}
                 </span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setVisibleOrderLimit((prev) => prev + 25)}
-                    className="font-mono text-xs font-bold uppercase tracking-wider border-2 border-line hover:border-accent"
-                  >
-                    Cargar 25 más
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setVisibleOrderLimit(filters.filteredOrders.length)}
-                    className="font-mono text-xs uppercase tracking-wider text-accent underline"
-                  >
-                    Mostrar todas ({filters.filteredOrders.length})
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleRefresh()}
+                  disabled={syncingOdoo}
+                  className="border-danger text-danger hover:bg-danger hover:text-bg"
+                >
+                  Reintentar sync
+                </Button>
               </div>
             )}
-          </div>
-        ) : (
-          /* ── MODO 2: Vista Agrupada por Requisitor / Ingeniero ── */
-          <div className="space-y-8 max-w-6xl mx-auto">
-            {filters.groupedByRequisitor.map(([requisitorName, groupOrders]) => {
+            {batchPrint.batchPrintStatus && (
+              <div className="shrink-0 bg-accent/15 border-b border-accent px-4 sm:px-6 py-2 flex items-center gap-2 text-ink text-xs font-semibold">
+                <Loader2 size={14} className="animate-spin text-accent" />
+                {batchPrint.batchPrintStatus}
+              </div>
+            )}
+            {lineActions.lineActionError && (
+              <div className="shrink-0 bg-danger/10 border-b border-danger/40 px-4 sm:px-6 py-2 flex items-start gap-2 text-sm text-danger">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>{lineActions.lineActionError}</span>
+                <button
+                  type="button"
+                  className="ml-auto text-ink-dim hover:text-ink"
+                  onClick={() => lineActions.setLineActionError(null)}
+                  aria-label="Cerrar"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+          </>
+        }
+      >
+        {/* ── Lista ── */}
+        <section
+          aria-label="Lista de órdenes"
+          className="w-full xl:w-[420px] xl:shrink-0 overflow-y-auto border-r border-line bg-surface"
+        >
+          {loading ? (
+            <div className="h-full flex flex-col items-center justify-center gap-3 text-ink-dim">
+              <Loader2 size={28} className="animate-spin text-accent" />
+              <p className="text-xs">Cargando órdenes…</p>
+            </div>
+          ) : error ? (
+            <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-danger">
+              <AlertCircle size={32} />
+              <p className="text-sm text-center">{error}</p>
+            </div>
+          ) : filters.filteredOrders.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center text-ink-dim">
+              <CloudDownload size={32} className="text-line" />
+              <p className="font-display font-semibold text-lg text-ink">No se encontraron órdenes</p>
+              <p className="text-xs leading-relaxed">
+                {hasActiveFilters
+                  ? 'Ninguna orden coincide con los filtros aplicados.'
+                  : 'No hay órdenes pendientes de facturar en esta selección.'}
+              </p>
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    filters.setSearchTerm('');
+                    filters.setSelectedRequisitor('ALL');
+                    filters.setUrgencyFilter('ALL');
+                  }}
+                  className="text-xs underline text-accent"
+                >
+                  Limpiar filtros
+                </Button>
+              )}
+            </div>
+          ) : filters.viewMode === 'all' ? (
+            filters.filteredOrders.map(renderOrderRow)
+          ) : (
+            filters.groupedByRequisitor.map(([requisitorName, groupOrders]) => {
               const isCollapsed = filters.collapsedRequisitores[requisitorName] ?? false;
-
-              // Métricas del grupo de este Requisitor
-              const totalLines = groupOrders.reduce((sum, o) => sum + o.order_lines.length, 0);
-              const totalPendingPieces = groupOrders.reduce(
-                (sum, o) => sum + o.order_lines.reduce((lSum, line) => lSum + line.qty_pending, 0),
+              const pendingPieces = groupOrders.reduce(
+                (sum, o) => sum + o.order_lines.reduce((lineSum, line) => lineSum + line.qty_pending, 0),
                 0,
               );
-
               return (
-                <div
-                  key={requisitorName}
-                  className="border-2 border-line bg-surface shadow-hard overflow-hidden"
-                >
-                  {/* Encabezado del Grupo / Requisitor */}
-                  <div
+                <div key={requisitorName}>
+                  <button
+                    type="button"
+                    aria-expanded={!isCollapsed}
                     onClick={() => filters.toggleGroupCollapse(requisitorName)}
-                    className="bg-[#0D2B4D] text-white px-5 py-3.5 flex items-center justify-between cursor-pointer select-none border-b-2 border-line hover:bg-[#12365e] transition-colors"
+                    className="sticky top-0 z-10 w-full min-h-11 flex items-center gap-2 px-4 py-2 text-left bg-surface-2 border-b border-line"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-none bg-accent text-bg font-black flex items-center justify-center border border-accent">
-                        <User size={18} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="font-display font-black text-xl tracking-tight uppercase">
-                            {requisitorName}
-                          </h2>
-                          <span className="bg-accent text-bg px-2 py-0.5 text-[10px] font-black uppercase tracking-widest font-mono">
-                            {groupOrders.length} {groupOrders.length === 1 ? 'ORDEN' : 'ÓRDENES'}
-                          </span>
-                        </div>
-                        <p className="font-mono text-[10px] opacity-70 uppercase tracking-widest mt-0.5">
-                          {totalLines} LÍNEAS TOTALES · {totalPendingPieces} PIEZAS PENDIENTES
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs font-bold uppercase tracking-wider opacity-80">
-                        {isCollapsed ? 'Mostrar órdenes' : 'Ocultar'}
-                      </span>
-                      {isCollapsed ? <ChevronRight size={20} /> : <ChevronDown size={20} />}
-                    </div>
-                  </div>
-
-                  {/* Lista de Órdenes del Requisitor */}
-                  {!isCollapsed && (
-                    <div className="p-5 space-y-6 bg-surface-2/20">
-                      {groupOrders.map((order) => renderOrderCard(order))}
-                    </div>
-                  )}
+                    {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    <span className="text-xs font-bold text-ink truncate">{requisitorName}</span>
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-dim tabular-nums">
+                      {groupOrders.length} órd · {pendingPieces} pzs
+                    </span>
+                  </button>
+                  {!isCollapsed && groupOrders.map(renderOrderRow)}
                 </div>
               );
-            })}
-          </div>
+            })
+          )}
+        </section>
+
+        {/* ── Detalle ── */}
+        {isDesktop && (
+          <section aria-label="Detalle de la orden" className="flex-1 min-w-0 overflow-y-auto">
+            {selectedOrder ? (
+              renderOrderDetail(selectedOrder)
+            ) : (
+              !loading && (
+                <div className="h-full flex flex-col items-center justify-center gap-2 text-ink-dim">
+                  <MousePointerClick size={28} className="text-line" />
+                  <p className="text-sm">Elige una orden de la lista</p>
+                </div>
+              )
+            )}
+          </section>
         )}
-      </main>
+      </PageFrame>
+
+      {!isDesktop && (
+        <Sheet
+          open={selectedOrder !== null}
+          onOpenChange={(open) => {
+            if (!open) onSelectedOrderIdChange(null);
+          }}
+        >
+          <SheetContent side="right" className="p-0 gap-0 w-full data-[side=right]:w-full data-[side=right]:sm:max-w-3xl overflow-y-auto">
+            <SheetTitle className="sr-only">Orden {selectedOrder?.name}</SheetTitle>
+            <SheetDescription className="sr-only">Líneas y acciones de la orden seleccionada.</SheetDescription>
+            {selectedOrder && renderOrderDetail(selectedOrder)}
+          </SheetContent>
+        </Sheet>
+      )}
 
       {/* ── Modal de Factura / Remisión ── */}
       <InvoiceRequestPanel
@@ -817,6 +677,6 @@ export function OdooOrdersPanel({
           }
         }}
       />
-    </div>
+    </>
   );
 }

@@ -2,6 +2,7 @@ import { memo } from 'react';
 import {
   AlertTriangle,
   CheckSquare,
+  ChevronDown,
   FileSearch,
   Loader2,
   Printer,
@@ -13,6 +14,12 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Button } from '../ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import {
   Table,
   TableBody,
@@ -38,7 +45,7 @@ import {
   parseOdooLineLabels,
 } from '../../lib/orderDrawingBridge';
 
-export interface OrderCardProps {
+export interface OrderDetailProps {
   order: OdooOrderView;
   productionMap: Map<string, ProductionStatus>;
   bridge: UseOrderDrawingBridgeResult;
@@ -64,7 +71,76 @@ export interface OrderCardProps {
   onSendOrderToReport?: (order: OdooOrderView) => void | Promise<void>;
 }
 
-export const OrderCard = memo(function OrderCard({
+/** Una acción principal según el estado de la línea; el resto, en el menú. */
+function LineActions({
+  needsDrawing,
+  busy,
+  printing,
+  sending,
+  onPrint,
+  onReport,
+  onBiblioteca,
+  onPurchase,
+}: {
+  needsDrawing: boolean;
+  busy: boolean;
+  printing: boolean;
+  sending: boolean;
+  onPrint: () => void;
+  onReport: () => void;
+  onBiblioteca: () => void;
+  onPurchase: () => void;
+}) {
+  const working = printing || sending;
+  return (
+    <div className="flex items-stretch gap-1">
+      <Button
+        type="button"
+        variant={needsDrawing ? 'outline' : 'secondary'}
+        size="sm"
+        disabled={busy}
+        onClick={needsDrawing ? onBiblioteca : onPrint}
+        className="flex-1 inline-flex items-center justify-center gap-1.5"
+        title={needsDrawing ? 'Buscar plano en Biblioteca' : 'Imprimir OT con su plano'}
+      >
+        {working ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : needsDrawing ? (
+          <FileSearch size={12} />
+        ) : (
+          <Printer size={12} />
+        )}
+        <span className="text-[10px] font-black uppercase tracking-widest">
+          {needsDrawing ? 'Biblioteca' : 'Imprimir'}
+        </span>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button type="button" variant="secondary" size="sm" aria-label="Más acciones de la línea">
+              <ChevronDown size={14} />
+            </Button>
+          }
+        />
+        <DropdownMenuContent align="end" className="w-52">
+          {needsDrawing && (
+            <DropdownMenuItem disabled={busy} onClick={onPrint}>
+              <Printer size={14} /> Buscar plano e imprimir
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem disabled={busy} onClick={onReport}>
+            <Send size={14} /> Enviar a reporte
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onPurchase}>
+            <ShoppingCart size={14} /> Comprar material
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+export const OrderDetail = memo(function OrderDetail({
   order,
   productionMap,
   bridge,
@@ -80,7 +156,7 @@ export const OrderCard = memo(function OrderCard({
   onQuickPurchase,
   onOpenBiblioteca,
   onExportDeliverySlip,
-}: OrderCardProps) {
+}: OrderDetailProps) {
   const ageDays = order.date_order ? getOrderAgeDays(order.date_order.split(' ')[0]) : null;
   const prod = productionMap.get(order.name);
   const badge =
@@ -91,7 +167,7 @@ export const OrderCard = memo(function OrderCard({
       : { label: `◐ ${prod.entregadas}/${prod.total} OTs`, cls: 'bg-warn text-bg' };
 
   return (
-    <div className="order-card overflow-hidden rounded-xl border border-line bg-surface flex flex-col shadow-sm">
+    <div className="order-card flex flex-col bg-surface">
       <div className="border-b-2 border-line bg-[#0D2B4D] text-white px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
         <div>
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
@@ -200,7 +276,7 @@ export const OrderCard = memo(function OrderCard({
       </div>
 
       <div className="p-0 overflow-x-auto">
-        <Table className="w-full text-left border-collapse min-w-[650px] sm:min-w-full">
+        <Table className="w-full text-left border-collapse min-w-[720px]">
           <TableHeader>
             <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
               <TableHead className="w-10 px-3 py-2 text-center h-auto">
@@ -223,10 +299,10 @@ export const OrderCard = memo(function OrderCard({
                   )}
                 </button>
               </TableHead>
-              <TableHead className="px-5 py-2 font-bold w-1/3 text-ink-dim h-auto">Producto</TableHead>
-              <TableHead className="px-5 py-2 font-bold text-ink-dim h-auto">Descripción</TableHead>
-              <TableHead className="px-5 py-2 font-bold text-center w-28 text-ink-dim h-auto">Pendiente</TableHead>
-              <TableHead className="px-5 py-2 font-bold text-center min-w-[220px] text-ink-dim h-auto">Plano</TableHead>
+              <TableHead className="px-4 py-2 font-bold text-ink-dim h-auto">Pieza</TableHead>
+              <TableHead className="px-4 py-2 font-bold text-center w-24 text-ink-dim h-auto">Pendiente</TableHead>
+              <TableHead className="px-4 py-2 font-bold w-56 text-ink-dim h-auto">Plano</TableHead>
+              <TableHead className="px-4 py-2 font-bold w-48 text-ink-dim h-auto">Acción</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -271,7 +347,7 @@ export const OrderCard = memo(function OrderCard({
                       <span className="text-ink-dim opacity-30 text-xs">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="px-5 py-3 align-top">
+                  <TableCell className="px-4 py-3 align-top whitespace-normal">
                     <span className="font-display font-black uppercase tracking-tight text-sm text-ink block">
                       {line.product.split('] ')[1] || line.product}
                     </span>
@@ -280,41 +356,36 @@ export const OrderCard = memo(function OrderCard({
                         {line.product.split(']')[0] + ']'}
                       </span>
                     )}
+                    {line.description && (
+                      <p className="font-mono text-xs text-ink-dim leading-snug mt-1">{line.description}</p>
+                    )}
+                    {(() => {
+                      const drawingRev = link?.cadDrawing?.revision ?? link?.reportDrawing?.revision;
+                      if (!drawingRev) return null;
+                      const revCheck = checkRevisionDiscrepancy(
+                        `${line.description || ''} ${line.product || ''}`,
+                        drawingRev,
+                      );
+                      if (!revCheck.hasMismatch) return null;
+                      return (
+                        <div
+                          className="mt-1.5 inline-flex items-center gap-1.5 bg-warn/15 border border-warn text-warn font-mono text-[9px] font-bold px-2 py-0.5"
+                          title={`Discrepancia detectada: Odoo pide Rev "${revCheck.orderRev}" pero el catálogo tiene Rev "${revCheck.drawingRev}".`}
+                        >
+                          <AlertTriangle size={11} className="shrink-0" />
+                          <span>Odoo pide Rev {revCheck.orderRev} (Plano es Rev {revCheck.drawingRev})</span>
+                        </div>
+                      );
+                    })()}
                   </TableCell>
-                  <TableCell className="px-5 py-3 font-mono text-xs text-ink align-top leading-snug">
-                    <div className="space-y-1.5">
-                      <div>{line.description || '—'}</div>
-                      {(() => {
-                        const drawingRev = link?.cadDrawing?.revision ?? link?.reportDrawing?.revision;
-                        if (drawingRev) {
-                          const revCheck = checkRevisionDiscrepancy(
-                            `${line.description || ''} ${line.product || ''}`,
-                            drawingRev,
-                          );
-                          if (revCheck.hasMismatch) {
-                            return (
-                              <div
-                                className="inline-flex items-center gap-1.5 bg-warn/15 border border-warn text-warn font-mono text-[9px] font-bold px-2 py-0.5"
-                                title={`Discrepancia detectada: Odoo pide Rev "${revCheck.orderRev}" pero el catálogo tiene Rev "${revCheck.drawingRev}".`}
-                              >
-                                <AlertTriangle size={11} className="shrink-0" />
-                                <span>Odoo pide Rev {revCheck.orderRev} (Plano es Rev {revCheck.drawingRev})</span>
-                              </div>
-                            );
-                          }
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  </TableCell>
-                  <TableCell className="px-5 py-3 text-center align-top">
+                  <TableCell className="px-4 py-3 text-center align-top">
                     {fullyDelivered ? (
                       <span className="font-mono text-[10px] text-ok uppercase tracking-widest">
                         ✓ entregada
                       </span>
                     ) : (
                       <div>
-                        <span className="font-black text-xl italic">{line.qty_pending}</span>
+                        <span className="font-black text-xl italic tabular-nums">{line.qty_pending}</span>
                         {line.qty_delivered > 0 && (
                           <span className="block font-mono text-[9px] text-ink-dim">
                             de {line.qty} ({line.qty_delivered} entregadas)
@@ -323,108 +394,52 @@ export const OrderCard = memo(function OrderCard({
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="px-5 py-3 text-center align-top">
-                    {!fullyDelivered && (
-                      <div className="flex flex-col items-stretch gap-1.5 min-w-[200px]">
-                        {link && link.status !== 'no_match' && partLabel ? (
-                          <div className="flex flex-col items-center">
-                            <span
-                              className="font-mono text-[9px] text-ok uppercase tracking-wide truncate max-w-[200px]"
-                              title={`Score ${link.matchScore}`}
-                            >
-                              {partLabel}
-                              {link.matchScore > 0 ? ` · ${link.matchScore}` : ''}
-                            </span>
-                            {link.status === 'manual' && (
-                              <span className="inline-flex items-center gap-1 font-mono text-[8px] text-accent font-bold uppercase tracking-wider bg-accent/10 px-1.5 py-0.2 rounded mt-0.5">
-                                <Sparkles size={9} />
-                                Alias aprendido
-                              </span>
-                            )}
-                          </div>
-                        ) : link?.status === 'no_match' ? (
-                          <span className="font-mono text-[9px] text-warn uppercase tracking-wide">
-                            Sin plano
+                  <TableCell className="px-4 py-3 align-top whitespace-normal">
+                    {!fullyDelivered &&
+                      (link && link.status !== 'no_match' && partLabel ? (
+                        <div>
+                          <span
+                            className="block font-mono text-[10px] text-ok uppercase tracking-wide break-words"
+                            title={`Score ${link.matchScore}`}
+                          >
+                            {partLabel}
+                            {link.matchScore > 0 ? ` · ${link.matchScore}` : ''}
                           </span>
-                        ) : null}
-                        <div className="flex flex-wrap justify-center gap-1">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            disabled={lineBusyKey !== null || sendingKey !== null}
-                            onClick={() => void onPrintLine(order, line, idx)}
-                            className="inline-flex items-center gap-1"
-                            title="Buscar plano CAD e imprimir OT"
-                          >
-                            {isMatching ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : (
-                              <Printer size={12} />
-                            )}
-                            <span className="text-[9px] font-black uppercase tracking-widest">
-                              Imprimir
+                          {link.status === 'manual' && (
+                            <span className="inline-flex items-center gap-1 font-mono text-[8px] text-accent font-bold uppercase tracking-wider bg-accent/10 px-1.5 rounded mt-0.5">
+                              <Sparkles size={9} />
+                              Alias aprendido
                             </span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            disabled={lineBusyKey !== null || sendingKey !== null}
-                            onClick={() => void onSendLineToReport(order, line, idx)}
-                            className="inline-flex items-center gap-1"
-                            title="Adjuntar plano al reporte y abrir Generar Reporte"
-                          >
-                            {isSending ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : (
-                              <Send size={12} />
-                            )}
-                            <span className="text-[9px] font-black uppercase tracking-widest">
-                              Reporte
-                            </span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => {
-                              const parsed = parseOdooLineLabels(line.product, line.description);
-                              onQuickPurchase({
-                                soNumber: order.name,
-                                poNumber: order.client_order_ref || undefined,
-                                pieza: parsed.pieza || line.product,
-                                numeroParte: parsed.numeroParte || undefined,
-                                cantidad: line.qty_pending,
-                                rowKey: lineKey,
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 hover:border-accent hover:text-accent"
-                            title="Requisitar material o insumos para esta orden en Compras"
-                          >
-                            <ShoppingCart size={12} />
-                            <span className="text-[9px] font-black uppercase tracking-widest">
-                              Comprar
-                            </span>
-                          </Button>
-                          {(link?.status === 'no_match' || !link || !link.cadDrawing) && (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={lineBusyKey !== null || sendingKey !== null}
-                              onClick={() => onOpenBiblioteca(order, line, idx)}
-                              className="inline-flex items-center gap-1"
-                              title="Buscar plano en Biblioteca"
-                            >
-                              <FileSearch size={12} />
-                              <span className="text-[9px] font-black uppercase tracking-widest">
-                                Biblioteca
-                              </span>
-                            </Button>
                           )}
                         </div>
-                      </div>
+                      ) : (
+                        <span className="font-mono text-[10px] text-warn uppercase tracking-wide">
+                          {link?.status === 'no_match' ? 'Sin plano' : 'Sin vincular'}
+                        </span>
+                      ))}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    {!fullyDelivered && (
+                      <LineActions
+                        needsDrawing={link?.status === 'no_match' || !link || !link.cadDrawing}
+                        busy={lineBusyKey !== null || sendingKey !== null}
+                        printing={isMatching}
+                        sending={isSending}
+                        onPrint={() => void onPrintLine(order, line, idx)}
+                        onReport={() => void onSendLineToReport(order, line, idx)}
+                        onBiblioteca={() => onOpenBiblioteca(order, line, idx)}
+                        onPurchase={() => {
+                          const parsed = parseOdooLineLabels(line.product, line.description);
+                          onQuickPurchase({
+                            soNumber: order.name,
+                            poNumber: order.client_order_ref || undefined,
+                            pieza: parsed.pieza || line.product,
+                            numeroParte: parsed.numeroParte || undefined,
+                            cantidad: line.qty_pending,
+                            rowKey: lineKey,
+                          });
+                        }}
+                      />
                     )}
                   </TableCell>
                 </TableRow>
@@ -432,7 +447,7 @@ export const OrderCard = memo(function OrderCard({
             })}
             {order.order_lines.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
+                <TableCell colSpan={5} className="px-4 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
                   No hay líneas de producto en esta orden
                 </TableCell>
               </TableRow>

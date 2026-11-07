@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { Camera, FileDown, ImagePlus, Loader2, AlertCircle, Trash2, Info } from 'lucide-react';
+import { FileDown, ImagePlus, Loader2, AlertCircle, Trash2, Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from './ui/button';
+import { PageFrame } from './shell/PageFrame';
 import { listOrdersToInvoice, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
 import {
   EVIDENCE_MAX_PHOTOS,
@@ -93,32 +94,22 @@ export function EvidenciaPanel() {
   const canGenerate = Boolean(order) && photos.length > 0 && !busy;
 
   return (
-    <div className="h-full flex flex-col bg-bg">
-      <header className="shrink-0 border-b border-line bg-surface/95 px-4 sm:px-6 lg:px-9 py-4 flex items-center gap-3">
-        <div className="size-11 rounded-xl bg-accent/12 text-accent flex items-center justify-center shrink-0">
-          <Camera size={20} strokeWidth={2.5} />
-        </div>
-        <div>
-          <h1 className="font-display font-bold text-2xl sm:text-3xl tracking-[-0.04em] leading-none">
-            Evidencia fotográfica
-          </h1>
-          <p className="text-xs text-ink-dim mt-1">
-            Fotos de la maquinaria/herramental construido para la factura de Suprajit
+    <PageFrame
+      title="Evidencia fotográfica"
+      subtitle="Fotos de la maquinaria/herramental construido para la factura de Suprajit"
+    >
+      <div className="space-y-5">
+        <div className="flex items-start gap-2 border border-line bg-surface-2/50 px-3 py-2.5 text-xs text-ink-dim">
+          <Info size={15} className="shrink-0 mt-0.5 text-accent" />
+          <p>
+            Suprajit (desde el 13/10/2026) pide <strong>fotografía impresa</strong> de la máquina o herramienta
+            construida al entregar la factura en contra-recibos, y el <strong>PDF</strong> junto con la factura
+            electrónica a matamoros.invices@suprajit.com. Usa fotos reales, no el plano.
           </p>
         </div>
-      </header>
 
-      <main className="flex-1 overflow-y-auto p-3.5 sm:p-6">
-        <div className="max-w-4xl mx-auto space-y-5">
-          <div className="flex items-start gap-2 border border-line bg-surface-2/50 px-3 py-2.5 text-xs text-ink-dim">
-            <Info size={15} className="shrink-0 mt-0.5 text-accent" />
-            <p>
-              Suprajit (desde el 13/10/2026) pide <strong>fotografía impresa</strong> de la máquina o herramienta
-              construida al entregar la factura en contra-recibos, y el <strong>PDF</strong> junto con la factura
-              electrónica a matamoros.invices@suprajit.com. Usa fotos reales, no el plano.
-            </p>
-          </div>
-
+        <div className="grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)] gap-5 items-start">
+          <div className="space-y-5">
           {error && (
             <div className="flex items-center gap-2 border border-danger/50 bg-danger/10 px-3 py-2 text-sm text-danger">
               <AlertCircle size={16} /> {error}
@@ -154,6 +145,16 @@ export function EvidenciaPanel() {
               />
             )}
           </section>
+
+          <Button
+            onClick={() => void handleGenerate()}
+            disabled={!canGenerate}
+            className="flex items-center gap-2 h-11 px-6 font-semibold disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <FileDown size={16} />}
+            Generar PDF de evidencia
+          </Button>
+          </div>
 
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -209,17 +210,8 @@ export function EvidenciaPanel() {
               </ul>
             )}
           </section>
-
-          <Button
-            onClick={() => void handleGenerate()}
-            disabled={!canGenerate}
-            className="flex items-center gap-2 h-11 px-6 font-semibold disabled:opacity-50"
-          >
-            {busy ? <Loader2 size={16} className="animate-spin" /> : <FileDown size={16} />}
-            Generar PDF de evidencia
-          </Button>
         </div>
-      </main>
-    </div>
+      </div>
+    </PageFrame>
   );
 }

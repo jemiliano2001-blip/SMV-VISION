@@ -1,25 +1,21 @@
 /**
  * InicioView — portada / resumen.
  *
- * Contesta "¿qué hay hoy?" con cifras en vivo de Firestore, métricas de carga
- * por requisitor, semáforo de antigüedad de órdenes y accesos rápidos.
+ * Contesta "¿qué hay hoy?": órdenes más críticas, semáforo de antigüedad,
+ * carga por requisitor y cifras en vivo de Firestore.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { motion } from 'motion/react';
 import {
   ScanLine,
-  Library,
   ArrowRight,
   CloudDownload,
-  ShoppingCart,
   FileWarning,
   RefreshCw,
   Clock,
   Users,
   Boxes,
-  Activity,
-  Building2,
   AlertCircle,
   X,
   type LucideIcon,
@@ -27,17 +23,24 @@ import {
 
 import { listEntregasSinOC, listOrdersToInvoice, orderRequester, REPORT_PARTNER_KEY_PREFIX, type OdooOrderView } from '../lib/firebase/odooOrders';
 import { triggerOdooSync } from '../lib/firebase/syncOdoo';
-import { formatRelativeTime, getOrderAgeDays } from '../lib/age';
+import { formatAgeDays, formatRelativeTime, getOrderAgeDays } from '../lib/age';
+import { topCriticalOrders } from '../lib/topCriticalOrders';
 import { useSyncMeta } from '../hooks/useSyncMeta';
 import { BarChart, type BarChartEntry } from './charts/BarChart';
 import { Button } from './ui/button';
+import { PageFrame } from './shell/PageFrame';
 import type { AnalysisRunSummary } from '../types';
 import type { AppView } from './shell/AppShell';
 
 export interface InicioViewProps {
   onNavigate: (view: AppView) => void;
   analysisSummary: AnalysisRunSummary | null;
+  /** Abre una orden concreta (id del documento Firestore). */
+  onOpenOrder?: (orderId: string) => void;
 }
+
+const CRITICAL_LIMIT = 8;
+const NO_REQUESTER = 'Sin requisitor';
 
 /** Por cifra: `undefined` = cargando · `null` = la consulta falló · número = dato bueno. */
 function show(n: number | null | undefined): string {
@@ -46,16 +49,14 @@ function show(n: number | null | undefined): string {
   return String(n);
 }
 
-const container = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05, delayChildren: 0.04 } },
-};
-const item = {
-  hidden: { opacity: 0, y: 14 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 30 } },
-} as const;
+function ageTone(days: number | null): string {
+  if (days === null) return 'text-ink-dim';
+  if (days > 15) return 'text-danger';
+  if (days >= 7) return 'text-warn';
+  return 'text-ok';
+}
 
-export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): ReactElement {
+export function InicioView({ onNavigate, analysisSummary, onOpenOrder }: InicioViewProps): ReactElement {
   const now = new Date().toLocaleDateString('es-MX', {
     weekday: 'long',
     day: 'numeric',
@@ -188,21 +189,28 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     }, 0);
   }, [orders, loadingOrders, ordersLoadFailed]);
 
-  // Carga por requisitor (Top 5)
-  const requisitorChartData = useMemo<BarChartEntry[]>(() => {
+  // Órdenes más críticas (más antiguas primero)
+  const criticalOrders = useMemo(() => topCriticalOrders(orders, CRITICAL_LIMIT), [orders]);
+
+  // Carga por requisitor (Top 5); "Sin requisitor" va aparte, fuera de la gráfica
+  const { requisitorChartData, noRequesterPieces } = useMemo(() => {
     const counts = new Map<string, number>();
+    let unassigned = 0;
     for (const o of orders) {
-      const req = orderRequester(o) || 'Sin requisitor';
+      const req = orderRequester(o);
       const pieces = (o.order_lines ?? []).reduce(
         (sum, l) => sum + (Number.isFinite(l.qty_pending) && l.qty_pending > 0 ? l.qty_pending : 0),
         0,
       );
-      counts.set(req, (counts.get(req) ?? 0) + (pieces > 0 ? pieces : 1));
+      const value = pieces > 0 ? pieces : 1;
+      if (!req) unassigned += value;
+      else counts.set(req, (counts.get(req) ?? 0) + value);
     }
-    return Array.from(counts.entries())
+    const data: BarChartEntry[] = Array.from(counts.entries())
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5);
+    return { requisitorChartData: data, noRequesterPieces: unassigned };
   }, [orders]);
 
   // Semáforo de antigüedad
@@ -239,364 +247,218 @@ export function InicioView({ onNavigate, analysisSummary }: InicioViewProps): Re
     : syncState === 'loading'
       ? undefined
       : null;
-  const systemReady = syncState === 'ready' && !isError && !isStale && !ordersLoadFailed;
-  const systemStatus = systemReady
-    ? {
-        title: 'Flujo de producción disponible',
-        description: 'Firestore y Odoo reportan datos disponibles. Puedes iniciar una auditoría o consultar el catálogo.',
-        label: 'Listo para auditar',
-        tone: 'text-ok',
-        dot: 'bg-ok',
-      }
-    : syncState === 'loading'
-      ? {
-          title: 'Verificando servicios',
-          description: 'Estamos comprobando el estado de Firestore y la última sincronización con Odoo.',
-          label: 'Comprobando conexión',
-          tone: 'text-ink-dim',
-          dot: 'bg-ink-dim',
-        }
-      : {
-          title: 'Datos operativos no confirmados',
-          description: isError
-            ? 'La última sincronización con Odoo reportó una incidencia. Puedes consultar los datos existentes o intentar sincronizar de nuevo.'
-            : isStale
-              ? 'La información disponible tiene más de 35 minutos. Sincroniza antes de tomar decisiones operativas.'
-              : 'No fue posible confirmar la conexión con Firestore y Odoo en esta sesión.',
-          label: isError ? 'Sincronización con incidencias' : isStale ? 'Datos desactualizados' : 'Conexión no confirmada',
-          tone: isError ? 'text-danger' : 'text-warn',
-          dot: isError ? 'bg-danger' : 'bg-warn',
-        };
+  const syncLabel =
+    syncState === 'loading'
+      ? 'Verificando sync Odoo'
+      : isError
+        ? 'Sync con incidencias'
+        : isStale
+          ? 'Sync desactualizado'
+          : syncState === 'ready'
+            ? 'Último sync Odoo'
+            : 'Sync no disponible';
+  const syncTone = isError ? 'text-danger' : isStale || syncState !== 'ready' ? 'text-warn' : 'text-ok';
 
   return (
-    <motion.div
-      variants={container}
-      initial="hidden"
-      animate="show"
-      className="bp-grid-lg min-h-full px-4 py-5 sm:px-6 sm:py-7 lg:px-9 lg:py-8 max-w-[1480px] mx-auto"
-    >
-      {/* ── Encabezado ── */}
-      <motion.header variants={item} className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="workspace-kicker mb-2">Centro de producción</p>
-          <h1 className="workspace-title text-4xl sm:text-5xl text-ink">
-            Prioridades del taller
-          </h1>
-          <p className="mt-2 text-sm text-ink-dim">Órdenes, carga y alertas que requieren atención hoy.</p>
-        </div>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <p className="font-mono text-[10px] text-ink-dim capitalize">{now}</p>
-          <Button onClick={() => onNavigate('reporte')} className="h-11 rounded-lg bg-accent px-4 text-white font-semibold shadow-hard-accent hover:bg-accent/90">
-            <ScanLine size={16} /> Nuevo reporte
-          </Button>
-        </div>
-      </motion.header>
-
-      {error && (
-        <motion.div
-          variants={item}
-          className="mb-5 flex items-start gap-2 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-sm text-danger"
-        >
-          <AlertCircle size={16} className="shrink-0 mt-0.5" />
-          <span className="grow font-mono text-xs">{error}</span>
-          <button
-            type="button"
-            onClick={() => setError(null)}
-            className="grid min-h-11 min-w-11 place-items-center rounded-lg text-danger/70 hover:bg-danger/10 hover:text-danger shrink-0"
-            title="Cerrar"
-            aria-label="Cerrar error"
-          >
-            <X size={14} />
-          </button>
-        </motion.div>
-      )}
-
-      {/* ── Métricas Principales (KPI Cards) ── */}
-      <motion.section variants={item} aria-label="Resumen operativo" className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 mb-6">
-        <StatCard
-          icon={CloudDownload}
-          value={show(pendingOrdersValue)}
-          label="Órdenes pendientes"
-          onClick={() => onNavigate('odoo')}
-        />
-        <StatCard
-          icon={Boxes}
-          value={show(totalPieces)}
-          label="Piezas por entregar"
-          tone="text-accent"
-          onClick={() => onNavigate('odoo')}
-        />
-        <StatCard
-          icon={FileWarning}
-          value={show(sinOc)}
-          label="Entregas sin OC"
-          tone={sinOc ? 'text-warn' : undefined}
-          onClick={() => onNavigate('entregas-sin-oc')}
-        />
-        <div className="workspace-panel p-3 sm:p-4 flex flex-col justify-between">
-          <div className="flex items-start justify-between mb-2">
-            <RefreshCw size={16} className={`text-ink-dim ${syncing ? 'animate-spin text-accent' : ''}`} />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void handleTriggerSync()}
-              disabled={syncing}
-              className="min-h-11 rounded-lg px-3 text-[9px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-white transition-colors"
-              title="Disparar sincronización con Odoo ahora"
+    <PageFrame
+      title="Inicio"
+      subtitle={<span className="capitalize">{now}</span>}
+      actions={
+        <Button onClick={() => onNavigate('reporte')} className="h-11 rounded-lg bg-accent px-4 text-white font-semibold shadow-hard-accent hover:bg-accent/90">
+          <ScanLine size={16} /> Nuevo reporte
+        </Button>
+      }
+      toolbar={
+        partnersList.length > 0 ? (
+          <label className="flex items-center gap-2 font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim">
+            Compañía
+            <select
+              value={selectedPartnerKey}
+              onChange={(e) => setSelectedPartnerKey(e.target.value)}
+              className="min-h-11 rounded-lg border border-line bg-surface px-3 text-xs font-bold text-ink normal-case tracking-normal outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              {syncing ? `${syncElapsed}s` : 'Sincronizar'}
-            </Button>
+              <option value="ALL">Todas ({totalToInvoiceOrders})</option>
+              {partnersList.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.name} ({p.toInvoiceCount})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : undefined
+      }
+      notices={
+        error ? (
+          <div className="shrink-0 mx-4 sm:mx-6 mt-3 flex items-start gap-2 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-sm text-danger">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span className="grow font-mono text-xs">{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="grid min-h-11 min-w-11 place-items-center rounded-lg text-danger/70 hover:bg-danger/10 hover:text-danger shrink-0"
+              title="Cerrar"
+              aria-label="Cerrar error"
+            >
+              <X size={14} />
+            </button>
           </div>
-          <div>
-            <p className={`font-display font-bold leading-none text-xl sm:text-2xl lg:text-3xl truncate ${isError ? 'text-danger' : isStale ? 'text-warn' : 'text-ink'}`}>
-              {effectiveLastSyncDate ? formatRelativeTime(effectiveLastSyncDate) : '—'}
-            </p>
-            <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
-              {syncState === 'loading'
-                ? 'Verificando sync Odoo'
-                : isError
-                  ? 'Sync · Fallo'
-                  : isStale
-                    ? 'Sync · Desactualizado'
-                    : syncState === 'ready'
-                      ? 'Último sync Odoo'
-                      : 'Sync no disponible'}
-            </p>
-          </div>
-        </div>
-      </motion.section>
-
-      {/* ── Selector de Compañía para Widgets Analíticos ── */}
-      {partnersList.length > 0 && (
-        <motion.section variants={item} className="mb-6 flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-none flex-nowrap sm:flex-wrap">
-          <span className="font-mono text-[10px] uppercase font-bold tracking-widest text-ink-dim flex items-center gap-1.5 mr-2 shrink-0">
-            <Building2 size={13} className="text-accent" />
-            Filtrar análisis por:
-          </span>
-          <button
-            type="button"
-            onClick={() => setSelectedPartnerKey('ALL')}
-            className={`min-h-11 rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider border transition-colors shrink-0 ${
-              selectedPartnerKey === 'ALL'
-                ? 'border-accent bg-accent text-bg'
-                : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
-            }`}
-          >
-            Todas ({totalToInvoiceOrders})
-          </button>
-          {partnersList.map((p) => {
-            const isSelected = selectedPartnerKey === p.key;
-            return (
+        ) : undefined
+      }
+    >
+      <div className="max-w-[1480px] mx-auto space-y-5">
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-4">
+          {/* ── Columna principal: órdenes críticas ── */}
+          <section className="workspace-panel p-5" aria-label="Órdenes críticas">
+            <div className="flex items-center justify-between gap-2 mb-3 pb-2 border-b border-line/60">
+              <h2 className="font-display font-semibold text-base tracking-tight">Órdenes críticas</h2>
               <button
-                key={p.key}
                 type="button"
-                onClick={() => setSelectedPartnerKey(p.key)}
-                className={`min-h-11 rounded-lg px-3 py-1 text-[10px] font-bold uppercase tracking-wider border transition-colors flex items-center gap-1.5 shrink-0 ${
-                  isSelected
-                    ? 'border-accent bg-accent text-bg'
-                    : 'border-line bg-surface text-ink hover:border-accent hover:text-accent'
-                }`}
+                onClick={() => onNavigate('odoo')}
+                className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[10px] uppercase font-bold text-accent hover:bg-accent/10"
               >
-                <span className="max-w-[150px] truncate">{p.name}</span>
-                <span
-                  className={`font-mono text-[9px] px-1 py-0.2 ${
-                    isSelected ? 'bg-bg text-accent font-bold' : 'bg-surface-2 text-ink-dim'
-                  }`}
-                >
-                  {p.toInvoiceCount}
-                </span>
+                <span>Ver todas</span>
+                <ArrowRight size={12} />
               </button>
-            );
-          })}
-        </motion.section>
-      )}
-
-      {/* ── Widgets Operativos: Carga por Requisitor & Semáforo de Antigüedad ── */}
-      <motion.section variants={item} className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-7">
-        {/* Widget 1: Carga de Piezas por Requisitor */}
-        <div className="workspace-panel p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-line/60">
-            <div className="flex items-center gap-2">
-              <Users size={16} className="text-accent" />
-              <h2 className="font-display font-semibold text-base tracking-tight">
-                Carga por Requisitor / Ingeniero
-              </h2>
             </div>
-            <span className="font-mono text-[10px] text-ink-dim uppercase">Piezas pendientes</span>
-          </div>
-
-          <div className="py-2">
             {loadingOrders ? (
-              <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Calculando distribución…</p>
-            ) : requisitorChartData.length === 0 ? (
+              <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Cargando órdenes…</p>
+            ) : criticalOrders.length === 0 ? (
               <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Sin órdenes activas.</p>
             ) : (
-              <BarChart data={requisitorChartData} colorVar="--color-accent" />
+              <ul className="divide-y divide-line/50">
+                {criticalOrders.map((o) => (
+                  <li key={o.id}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenOrder?.(o.id)}
+                      className="w-full min-h-14 py-2 px-2 flex items-center gap-3 text-left rounded-lg hover:bg-accent/5 outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      <span className={`w-20 shrink-0 font-display font-bold text-sm ${ageTone(o.ageDays)}`}>
+                        {o.ageDays === null ? '—' : formatAgeDays(o.ageDays)}
+                      </span>
+                      <span className="min-w-0 grow">
+                        <span className="block font-semibold text-sm truncate">{o.name}</span>
+                        <span className="block font-mono text-[10px] text-ink-dim truncate">
+                          {o.company}
+                          {o.requester ? ` · ${o.requester}` : ''}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] text-ink-dim">
+                        {o.pendingPieces} {o.pendingPieces === 1 ? 'pza' : 'pzas'}
+                      </span>
+                      <ArrowRight size={14} className="shrink-0 text-ink-dim" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
-          </div>
+          </section>
 
-          <div className="mt-4 pt-3 border-t border-line/40 flex items-center justify-between">
-            <span className="font-mono text-[10px] text-ink-dim">
-              Mostrando top {requisitorChartData.length} solicitantes
-            </span>
-            <button
-              type="button"
-              onClick={() => onNavigate('odoo')}
-              className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[10px] uppercase font-bold text-accent hover:bg-accent/10"
-            >
-              <span>Ver en Órdenes</span>
-              <ArrowRight size={12} />
-            </button>
-          </div>
-        </div>
-
-        {/* Widget 2: Semáforo de Antigüedad (Aging) */}
-        <div className="workspace-panel p-5 flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-line/60">
-            <div className="flex items-center gap-2">
-              <Clock size={16} className="text-accent" />
-              <h2 className="font-display font-semibold text-base tracking-tight">
-                Semáforo de Antigüedad (Aging)
-              </h2>
-            </div>
-            <span className="font-mono text-[10px] text-ink-dim uppercase">
-              {agingStats.totalOrders} {agingStats.totalOrders === 1 ? 'orden' : 'órdenes'}
-            </span>
-          </div>
-
-          <div className="space-y-3 py-1">
-            {/* Barra segmentada */}
-            <div className="h-3 w-full bg-surface-2 border border-line flex overflow-hidden">
-              <div
-                style={{ width: `${agingStats.pctRecent}%` }}
-                className="bg-ok h-full transition-all"
-                title={`< 7 días: ${agingStats.recent} órdenes (${agingStats.pctRecent}%)`}
-              />
-              <div
-                style={{ width: `${agingStats.pctMid}%` }}
-                className="bg-warn h-full transition-all"
-                title={`7–15 días: ${agingStats.mid} órdenes (${agingStats.pctMid}%)`}
-              />
-              <div
-                style={{ width: `${agingStats.pctCritical}%` }}
-                className="bg-danger h-full transition-all"
-                title={`> 15 días: ${agingStats.critical} órdenes (${agingStats.pctCritical}%)`}
-              />
-            </div>
-
-            {/* Desglose de 3 columnas */}
-            <div className="grid grid-cols-3 gap-2 pt-2 text-center">
-              <div className="bg-surface-2/70 rounded-lg border border-line p-2.5">
-                <span className="inline-block w-2 h-2 rounded-full bg-ok mb-1" />
-                <p className="font-display font-black text-xl text-ok leading-none">{agingStats.recent}</p>
-                <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&lt; 7 días</p>
-                <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctRecent}%</p>
-              </div>
-
-              <div className="bg-surface-2/70 rounded-lg border border-line p-2.5">
-                <span className="inline-block w-2 h-2 rounded-full bg-warn mb-1" />
-                <p className="font-display font-black text-xl text-warn leading-none">{agingStats.mid}</p>
-                <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">7–15 días</p>
-                <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctMid}%</p>
-              </div>
-
-              <div className="bg-surface-2/70 rounded-lg border border-line p-2.5">
-                <span className="inline-block w-2 h-2 rounded-full bg-danger mb-1" />
-                <p className="font-display font-black text-xl text-danger leading-none">{agingStats.critical}</p>
-                <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&gt; 15 días</p>
-                <p className="font-mono text-[9px] text-ink-dim/80">{agingStats.pctCritical}%</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-line/40 flex items-center justify-between">
-            <span className="font-mono text-[10px] text-ink-dim">
-              {agingStats.critical > 0 ? (
-                <strong className="text-danger">{agingStats.critical} órdenes requieren atención urgente</strong>
-              ) : (
-                <span className="text-ok">Tiempos de entrega en rango normal</span>
-              )}
-            </span>
-            <button
-              type="button"
-              onClick={() => onNavigate('odoo')}
-              className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[10px] uppercase font-bold text-accent hover:bg-accent/10"
-            >
-              <span>Ver Órdenes</span>
-              <ArrowRight size={12} />
-            </button>
-          </div>
-        </div>
-      </motion.section>
-
-      {/* ── Accesos Rápidos y Última Auditoría ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {/* Accesos rápidos */}
-        <motion.section variants={item} className="space-y-3">
-          <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-1">Módulos del Taller</p>
-          <QuickAction
-            icon={ScanLine}
-            title="Generar Reporte"
-            desc="Auditar planos y generar reporte PDF con recorte de isométricos"
-            onClick={() => onNavigate('reporte')}
-          />
-          <QuickAction
-            icon={Library}
-            title="Biblioteca Tool Crib"
-            desc="Catálogo de planos CAD/ISO, visor 3D STL e historial de impresiones"
-            onClick={() => onNavigate('biblioteca')}
-          />
-          <QuickAction
-            icon={ShoppingCart}
-            title="Compras & Materiales"
-            desc="Catálogo de metales, ensambles, herramientas e insumos"
-            onClick={() => onNavigate('compras')}
-          />
-        </motion.section>
-
-        {/* Resumen del sistema o última auditoría */}
-        <motion.section variants={item} className="space-y-3">
-          <p className="font-mono text-[10px] uppercase tracking-[2px] text-ink-dim mb-1">Estado de Sesión</p>
-          {analysisSummary ? (
-            <div className="workspace-panel p-5">
-              <p className="font-mono text-[9px] uppercase tracking-[2px] text-ink-dim mb-3">Última auditoría de visión</p>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <Stat n={analysisSummary.totalOrders} l="Órdenes" />
-                <Stat n={analysisSummary.totalAudited} l="Auditadas" tone="text-accent" />
-                <Stat n={analysisSummary.totalAnalyzed} l="Planos" />
-              </div>
-            </div>
-          ) : (
-            <div className="workspace-panel p-5 flex flex-col justify-between h-[calc(100%-24px)]">
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <Activity size={16} className={systemStatus.tone} />
-                  <h3 className="font-display font-semibold text-base">{systemStatus.title}</h3>
+          {/* ── Columna lateral: semáforo y carga ── */}
+          <div className="space-y-4">
+            <section className="workspace-panel p-5" aria-label="Semáforo de antigüedad">
+              <div className="flex items-center justify-between gap-2 mb-3 pb-2 border-b border-line/60">
+                <div className="flex items-center gap-2">
+                  <Clock size={16} className="text-accent" />
+                  <h2 className="font-display font-semibold text-base tracking-tight">Semáforo</h2>
                 </div>
-                <p className="font-mono text-xs text-ink-dim leading-relaxed">
-                  {systemStatus.description}
-                </p>
-              </div>
-
-              <div className="pt-4 border-t border-line/60 flex items-center justify-between">
-                <span className="font-mono text-[10px] text-ink-dim flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full ${systemStatus.dot} ${systemReady ? 'animate-pulse' : ''}`} />
-                  {systemStatus.label}
+                <span className="font-mono text-[10px] text-ink-dim uppercase">
+                  {agingStats.totalOrders} {agingStats.totalOrders === 1 ? 'orden' : 'órdenes'}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('reporte')}
-                  className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 font-mono text-[11px] font-bold text-accent uppercase hover:bg-accent/10"
-                >
-                  <span>Iniciar reporte</span>
-                  <ArrowRight size={12} />
-                </button>
               </div>
-            </div>
+              <div className="h-3 w-full bg-surface-2 border border-line flex overflow-hidden">
+                <div
+                  style={{ width: `${agingStats.pctRecent}%` }}
+                  className="bg-ok h-full transition-all"
+                  title={`< 7 días: ${agingStats.recent} órdenes (${agingStats.pctRecent}%)`}
+                />
+                <div
+                  style={{ width: `${agingStats.pctMid}%` }}
+                  className="bg-warn h-full transition-all"
+                  title={`7–15 días: ${agingStats.mid} órdenes (${agingStats.pctMid}%)`}
+                />
+                <div
+                  style={{ width: `${agingStats.pctCritical}%` }}
+                  className="bg-danger h-full transition-all"
+                  title={`> 15 días: ${agingStats.critical} órdenes (${agingStats.pctCritical}%)`}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-2 pt-3 text-center">
+                <div className="bg-surface-2/70 rounded-lg border border-line p-2">
+                  <p className="font-display font-black text-xl text-ok leading-none">{agingStats.recent}</p>
+                  <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&lt; 7 días</p>
+                </div>
+                <div className="bg-surface-2/70 rounded-lg border border-line p-2">
+                  <p className="font-display font-black text-xl text-warn leading-none">{agingStats.mid}</p>
+                  <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">7–15 días</p>
+                </div>
+                <div className="bg-surface-2/70 rounded-lg border border-line p-2">
+                  <p className="font-display font-black text-xl text-danger leading-none">{agingStats.critical}</p>
+                  <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">&gt; 15 días</p>
+                </div>
+              </div>
+            </section>
+
+            <section className="workspace-panel p-5" aria-label="Carga por requisitor">
+              <div className="flex items-center justify-between gap-2 mb-3 pb-2 border-b border-line/60">
+                <div className="flex items-center gap-2">
+                  <Users size={16} className="text-accent" />
+                  <h2 className="font-display font-semibold text-base tracking-tight">Carga por requisitor</h2>
+                </div>
+                <span className="font-mono text-[10px] text-ink-dim uppercase">Piezas</span>
+              </div>
+              {loadingOrders ? (
+                <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Calculando distribución…</p>
+              ) : requisitorChartData.length === 0 ? (
+                <p className="font-mono text-[10px] text-ink-dim py-6 text-center">Sin órdenes con requisitor.</p>
+              ) : (
+                <BarChart data={requisitorChartData} colorVar="--color-accent" />
+              )}
+              {!loadingOrders && noRequesterPieces > 0 && (
+                <p className="mt-3 pt-2 border-t border-line/40 font-mono text-[10px] text-ink-dim">
+                  {NO_REQUESTER}: {noRequesterPieces} {noRequesterPieces === 1 ? 'pieza' : 'piezas'}
+                </p>
+              )}
+            </section>
+          </div>
+        </div>
+
+        {/* ── KPIs en franja baja ── */}
+        <section aria-label="Resumen operativo" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <StatCard icon={CloudDownload} value={show(pendingOrdersValue)} label="Órdenes pendientes" onClick={() => onNavigate('odoo')} />
+          <StatCard icon={Boxes} value={show(totalPieces)} label="Piezas por entregar" tone="text-accent" onClick={() => onNavigate('odoo')} />
+          <StatCard
+            icon={FileWarning}
+            value={show(sinOc)}
+            label="Entregas sin OC"
+            tone={sinOc ? 'text-warn' : undefined}
+            onClick={() => onNavigate('entregas-sin-oc')}
+          />
+        </section>
+
+        {/* ── Estado de sync en una línea ── */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-ink-dim">
+          <RefreshCw size={14} className={syncing ? 'animate-spin text-accent' : ''} />
+          <span className={syncTone}>{syncLabel}</span>
+          <span>{effectiveLastSyncDate ? formatRelativeTime(effectiveLastSyncDate) : '—'}</span>
+          {analysisSummary && (
+            <span>
+              · Última auditoría: {analysisSummary.totalOrders} órdenes, {analysisSummary.totalAudited} auditadas, {analysisSummary.totalAnalyzed} planos
+            </span>
           )}
-        </motion.section>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void handleTriggerSync()}
+            disabled={syncing}
+            className="min-h-11 rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wider text-accent border border-accent/40 hover:bg-accent hover:text-white transition-colors"
+            title="Disparar sincronización con Odoo ahora"
+          >
+            {syncing ? `${syncElapsed}s` : 'Sincronizar'}
+          </Button>
+        </div>
       </div>
-    </motion.div>
+    </PageFrame>
   );
 }
 
@@ -615,7 +477,7 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
           <ArrowRight size={14} className="text-ink-dim opacity-0 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
-      <p className={`font-display font-bold leading-none text-2xl sm:text-3xl lg:text-4xl truncate ${tone}`}>
+      <p className={`font-display font-bold leading-none text-2xl sm:text-3xl truncate ${tone}`}>
         {value}
       </p>
       <p className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[1.5px] sm:tracking-[2px] text-ink-dim mt-2 truncate">
@@ -634,40 +496,9 @@ function StatCard({ icon: Icon, value, label, tone = 'text-ink', onClick }: {
       onClick={onClick}
       whileHover={{ y: -2 }}
       whileTap={{ y: 0 }}
-      className="group workspace-panel min-h-28 p-3 sm:p-4 text-left transition-colors hover:border-accent/60 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      className="group workspace-panel min-h-24 p-3 sm:p-4 text-left transition-colors hover:border-accent/60 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
     >
       {body}
-    </motion.button>
-  );
-}
-
-function Stat({ n, l, tone = 'text-ink' }: { n: number | string; l: string; tone?: string }) {
-  return (
-    <div>
-      <p className={`font-display font-bold text-2xl leading-none ${tone}`}>{n}</p>
-      <p className="font-mono text-[9px] uppercase tracking-wider text-ink-dim mt-1">{l}</p>
-    </div>
-  );
-}
-
-function QuickAction({ icon: Icon, title, desc, onClick }: { icon: LucideIcon; title: string; desc: string; onClick: () => void }) {
-  return (
-    <motion.button
-      type="button"
-      onClick={onClick}
-      whileHover={{ y: -2 }}
-      whileTap={{ y: 0 }}
-      className="w-full min-h-16 text-left workspace-panel p-4 flex items-center gap-4 transition-colors hover:border-accent/60 group outline-none focus-visible:ring-2 focus-visible:ring-accent relative overflow-hidden"
-    >
-      <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-      <span className="grid place-items-center w-10 h-10 rounded-lg bg-surface-2 border border-line group-hover:border-accent group-hover:bg-accent group-hover:text-white transition-colors shrink-0">
-        <Icon size={18} />
-      </span>
-      <div className="min-w-0">
-        <h3 className="font-display font-semibold text-[15px] tracking-tight group-hover:text-accent transition-colors">{title}</h3>
-        <p className="font-mono text-[10px] text-ink-dim truncate">{desc}</p>
-      </div>
-      <ArrowRight size={16} className="ml-auto text-ink-dim opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all group-hover:text-accent" />
     </motion.button>
   );
 }

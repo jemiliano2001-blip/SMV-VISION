@@ -10,6 +10,7 @@ import {
   Bolt,
   Wrench,
 } from 'lucide-react';
+import { PageFrame } from '../shell/PageFrame';
 import { SpeedsFeedsCalculatorTab } from './SpeedsFeedsCalculatorTab';
 import { BlueprintAdvisorTab } from './BlueprintAdvisorTab';
 import { ToolingVaultTab } from './ToolingVaultTab';
@@ -51,27 +52,43 @@ export function ToolingHubView(): ReactElement {
   const [activeTab, setActiveTab] = useState<ToolingHubTab>('calculadora');
 
   return (
-    <div className="tooling-workspace min-h-full bp-grid-lg flex flex-col">
-      {/* Header Fijo */}
-      <div className="sticky top-0 z-20 border-b border-line bg-bg/95 px-4 py-4 backdrop-blur sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
-          <div>
-            <p className="workspace-kicker mb-2">
-              Ingeniería & Maquinado CNC
-            </p>
-            <h1 className="workspace-title text-3xl sm:text-4xl flex items-center gap-3">
-              Herramental & Cálculo
-            </h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-xs font-mono font-bold shadow-sm">
-              <Wrench size={15} className="text-accent" aria-hidden="true" /> Haas VF & ST
-            </span>
-          </div>
+    <PageFrame
+      title="Herramental y cálculo"
+      subtitle="Ingeniería y maquinado CNC"
+      actions={
+        <span className="flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-xs font-mono font-bold shadow-sm">
+          <Wrench size={15} className="text-accent" aria-hidden="true" /> Haas VF &amp; ST
+        </span>
+      }
+      scrollBody={false}
+    >
+      <div className="tooling-workspace bp-grid-lg flex h-full w-full min-h-0 flex-col lg:flex-row">
+        {/* Menú: select en pantallas < lg */}
+        <div className="shrink-0 border-b border-line bg-surface px-4 py-3 lg:hidden">
+          <label htmlFor="tooling-tab-select" className="mb-1 block text-[10px] font-mono font-bold uppercase text-ink-dim">
+            Herramienta
+          </label>
+          <select
+            id="tooling-tab-select"
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as ToolingHubTab)}
+            className="min-h-11 w-full rounded-lg border border-line bg-surface-2 px-3 text-xs font-mono font-bold text-ink outline-none focus:border-accent"
+          >
+            {TABS.map((tab) => (
+              <option key={tab.id} value={tab.id}>
+                {tab.label}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {/* Barra de Pestañas con Navegación Horizontal */}
-        <div role="tablist" aria-label="Herramientas CNC" className="mt-4 flex items-center gap-2 overflow-x-auto border-t border-line/40 pt-3 pb-1 scrollbar-none">
+        {/* Submenú vertical en lg+ */}
+        <div
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label="Herramientas CNC"
+          className="hidden w-60 shrink-0 flex-col gap-2 overflow-y-auto border-r border-line bg-surface/60 p-3 lg:flex"
+        >
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -83,28 +100,26 @@ export function ToolingHubView(): ReactElement {
                 id={`tooling-tab-${tab.id}`}
                 aria-selected={isActive}
                 aria-controls="tooling-active-panel"
+                title={tab.label}
                 onClick={() => setActiveTab(tab.id)}
-                className={`min-h-11 rounded-lg border px-3.5 text-xs font-mono font-bold whitespace-nowrap flex items-center gap-2 transition-all shrink-0 ${
+                className={`min-h-11 w-full rounded-lg border px-3 text-left text-xs font-mono font-bold flex items-center gap-2 transition-all ${
                   isActive
                     ? 'border-accent bg-accent text-white shadow-hard-accent'
                     : 'border-line bg-surface text-ink hover:border-accent hover:bg-surface-2'
                 }`}
               >
-                <Icon size={14} />
-                <span className="hidden md:inline">{tab.label}</span>
-                <span className="md:hidden">{tab.shortLabel}</span>
+                <Icon size={14} className="shrink-0" />
+                <span className="min-w-0">{tab.shortLabel}</span>
               </button>
             );
           })}
         </div>
-      </div>
-
       {/* Contenido Dinámico de la Pestaña Activa */}
       <div
         id="tooling-active-panel"
         role="tabpanel"
         aria-labelledby={`tooling-tab-${activeTab}`}
-        className="flex-1 p-3.5 sm:p-6 lg:p-8 overflow-y-auto"
+        className="flex-1 min-w-0 min-h-0 p-3.5 sm:p-6 lg:p-8 overflow-y-auto"
       >
         {activeTab === 'calculadora' && <SpeedsFeedsCalculatorTab />}
         {activeTab === 'asesor_planos' && <BlueprintAdvisorTab />}
@@ -115,6 +130,7 @@ export function ToolingHubView(): ReactElement {
         {activeTab === 'grados_haas' && <GradesAndHaasTab />}
         {activeTab === 'proveedores' && <SupplierDirectoryTab />}
       </div>
-    </div>
+      </div>
+    </PageFrame>
   );
 }

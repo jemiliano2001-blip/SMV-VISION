@@ -11,7 +11,7 @@ import { makeOrderDrawingLinkKey, getReportDrawingSnapshot } from './lib/orderDr
 import { AppShell, type AppView } from './components/shell/AppShell';
 import { InicioView } from './components/InicioView';
 import { ReporteView } from './components/ReporteView';
-import { OdooOrdersPanel } from './components/OdooOrdersPanel';
+import { ALL_PARTNERS, OdooOrdersPanel } from './components/OdooOrdersPanel';
 import { BibliotecaView } from './components/BibliotecaView';
 import { ComprasPanel } from './components/ComprasPanel';
 import { ToolingHubView } from './components/tooling/ToolingHubView';
@@ -34,6 +34,8 @@ const StlViewerModal = lazy(() =>
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('inicio');
   const [biblioSearchPrefill, setBiblioSearchPrefill] = useState('');
+  const [ordersPartnerKey, setOrdersPartnerKey] = useState<string>(ALL_PARTNERS);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [cropAdjustTarget, setCropAdjustTarget] = useState<Order | null>(null);
   const [quickPurchaseData, setQuickPurchaseData] = useState<{
     soNumber?: string;
@@ -197,15 +199,25 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}
-              className={
-                activeView === 'biblioteca' ? 'h-full overflow-hidden' : 'h-full overflow-y-auto'
-              }
+              className="h-full overflow-hidden"
             >
               {activeView === 'inicio' && (
-                <InicioView onNavigate={navigate} analysisSummary={vision.analysisSummary} />
+                <InicioView
+                  onNavigate={navigate}
+                  analysisSummary={vision.analysisSummary}
+                  onOpenOrder={(orderId) => {
+                    setOrdersPartnerKey(ALL_PARTNERS);
+                    setSelectedOrderId(orderId);
+                    navigate('odoo');
+                  }}
+                />
               )}
               {activeView === 'odoo' && (
                 <OdooOrdersPanel
+                  partnerKey={ordersPartnerKey}
+                  onPartnerKeyChange={setOrdersPartnerKey}
+                  selectedOrderId={selectedOrderId}
+                  onSelectedOrderIdChange={setSelectedOrderId}
                   catalog={catalog}
                   bridge={bridge}
                   onSendToReport={handleSendToReport}

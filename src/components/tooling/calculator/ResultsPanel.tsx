@@ -10,10 +10,12 @@ import type { SpeedsFeedsState } from './useSpeedsFeedsState';
 
 interface ResultsPanelProps {
   state: SpeedsFeedsState;
+  /** 'diagram' o 'metrics' renderiza solo esa mitad; sin valor, ambas. */
+  section?: 'diagram' | 'metrics';
 }
 
 /** Diagrama de corte, gauges, KPIs, rugosidad/chip-thinning, warnings y fórmulas. */
-export function ResultsPanel({ state }: ResultsPanelProps): ReactElement {
+export function ResultsPanel({ state, section }: ResultsPanelProps): ReactElement {
   const {
     operationMode,
     unitSystem,
@@ -38,6 +40,7 @@ export function ResultsPanel({ state }: ResultsPanelProps): ReactElement {
   return (
     <div className="space-y-4">
       {/* 1. Diagrama de corte */}
+      {section !== 'metrics' && (
       <div className="border-2 border-line bg-surface p-4 shadow-hard">
         {operationMode === 'turning' ? (
           <TurningCutDiagram
@@ -64,9 +67,12 @@ export function ResultsPanel({ state }: ResultsPanelProps): ReactElement {
           />
         )}
       </div>
+      )}
+      {section !== 'diagram' && (
+      <>
 
       {/* 2. Gauges + banda de rango */}
-      <div className="border-2 border-line bg-surface p-4 shadow-hard grid grid-cols-1 sm:grid-cols-3 gap-4 items-center">
+      <div className="border-2 border-line bg-surface p-4 shadow-hard grid grid-cols-1 sm:grid-cols-3 2xl:grid-cols-2 2xl:[&>*:last-child]:col-span-2 gap-4 items-center">
         <ArcGauge
           value={rpmValue}
           max={rpmMax}
@@ -92,7 +98,7 @@ export function ResultsPanel({ state }: ResultsPanelProps): ReactElement {
       </div>
 
       {/* 3. KPI tiles + MRR */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-2 gap-3">
         <div className="border-2 border-line bg-surface p-4 shadow-hard text-center">
           <span className="font-mono text-[9px] uppercase tracking-widest text-ink-dim block">Velocidad Husillo</span>
           <span className="font-display font-black text-2xl lg:text-3xl text-accent block mt-1">
@@ -262,6 +268,8 @@ export function ResultsPanel({ state }: ResultsPanelProps): ReactElement {
           </div>
         </div>
       </details>
+      </>
+      )}
     </div>
   );
 }

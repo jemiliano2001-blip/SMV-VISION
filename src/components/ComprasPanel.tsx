@@ -5,6 +5,7 @@ import { listPurchases, createPurchase, updatePurchase, deletePurchase } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { PageFrame } from './shell/PageFrame';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 const ITEM_TYPES: { value: PurchaseItemType; label: string }[] = [
@@ -176,98 +177,93 @@ export function ComprasPanel(): ReactElement {
     </TableHead>
   );
 
-  return (
-    <div className="min-h-full bp-grid-lg flex flex-col">
-      <div className="sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-line px-4 sm:px-6 lg:px-9 py-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="workspace-kicker mb-2">Directorio</p>
-            <h1 className="workspace-title text-3xl sm:text-4xl flex items-center gap-3">
-              Compras y materiales
-            </h1>
-          </div>
-          <Button
-            onClick={handleOpenAdd}
-            className="bg-accent text-white px-4 py-2 text-[12px] font-semibold hover:bg-accent/90 transition-colors shadow-hard-accent flex items-center gap-2 rounded-lg h-11"
-          >
-            <Plus size={14} /> Nuevo Material
-          </Button>
-        </div>
-        
-        {error && (
-          <div className="mt-4 flex items-start gap-2 border border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger leading-snug">
-            <AlertCircle size={14} className="shrink-0 mt-0.5" />
-            <span className="text-left">{error}</span>
-          </div>
-        )}
-
-        <div className="mt-4 sm:mt-5">
-          <div className="flex flex-col sm:flex-row gap-3 items-center w-full">
-            <div className="relative flex-1 w-full group">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim group-focus-within:text-accent transition-colors" size={16} />
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar material por nombre, SKU o proveedor..."
-                className="w-full bg-surface border-2 border-line text-ink pl-10 pr-10 h-10 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent focus-visible:shadow-[4px_4px_0px_0px_rgba(var(--color-accent),0.2)] transition-all shadow-hard rounded-none"
-              />
-              {searchQuery && (
-                <Button 
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-0 top-1/2 min-h-11 min-w-11 -translate-y-1/2 text-ink-dim hover:text-ink hover:bg-transparent"
-                >
-                  <X size={14} />
-                </Button>
-              )}
-            </div>
-            <div className="hidden sm:flex items-center justify-center bg-surface border-2 border-line px-4 py-2.5 shadow-hard whitespace-nowrap min-w-[140px]">
-              <span className="font-mono text-[11px] font-bold text-ink-dim uppercase tracking-widest">
-                <span className="text-accent">{filteredAndSortedItems.length}</span> / {items.length} res
-              </span>
-            </div>
-          </div>
-          {items.length >= 500 && (
-            <p className="mt-2 font-mono text-[10px] text-warn uppercase tracking-widest">
-              Mostrando los 500 más recientes — puede haber más materiales sin listar aquí.
-            </p>
+  const toolbar = (
+    <div>
+      <div className="flex flex-col sm:flex-row gap-3 items-center w-full">
+        <div className="relative flex-1 w-full group">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim group-focus-within:text-accent transition-colors" size={16} />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Buscar material por nombre, SKU o proveedor..."
+            className="w-full bg-surface border border-line text-ink pl-10 pr-10 h-10 text-[12px] font-mono focus-visible:ring-0 focus-visible:border-accent transition-all rounded-lg"
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSearchQuery('')}
+              aria-label="Limpiar búsqueda"
+              className="absolute right-0 top-1/2 min-h-11 min-w-11 -translate-y-1/2 text-ink-dim hover:text-ink hover:bg-transparent"
+            >
+              <X size={14} />
+            </Button>
           )}
         </div>
+        <span className="hidden sm:block font-mono text-[11px] font-bold text-ink-dim uppercase tracking-widest whitespace-nowrap">
+          <span className="text-accent">{filteredAndSortedItems.length}</span> / {items.length} res
+        </span>
       </div>
+      {items.length >= 500 && (
+        <p className="mt-2 font-mono text-[10px] text-warn uppercase tracking-widest">
+          Mostrando los 500 más recientes — puede haber más materiales sin listar aquí.
+        </p>
+      )}
+    </div>
+  );
 
-      <div className="flex-1 p-3.5 sm:p-6 lg:p-8 overflow-y-auto">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center h-40 text-ink-dim font-mono text-[11px] uppercase tracking-widest">
-            <Loader2 size={24} className="animate-spin mb-3 text-accent" />
-            Cargando directorio...
-          </div>
-        ) : items.length === 0 ? (
-          <div className="border-2 border-line border-dashed flex flex-col items-center justify-center text-center p-12 bg-surface/40 corner-ticks">
-             <Box className="text-line w-16 h-16 mb-4" />
-             <h3 className="font-display font-black text-2xl uppercase tracking-tighter text-ink-dim italic mb-2">Directorio Vacío</h3>
-             <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[2px]">Agrega metales, piezas o herramientas para empezar</p>
-          </div>
-        ) : filteredAndSortedItems.length === 0 ? (
-          <div className="border-2 border-line border-dashed flex flex-col items-center justify-center text-center p-12 bg-surface/40 corner-ticks">
-             <Search className="text-line w-16 h-16 mb-4" />
-             <h3 className="font-display font-black text-2xl uppercase tracking-tighter text-ink-dim italic mb-2">Sin Resultados</h3>
-             <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[2px]">No se encontraron materiales que coincidan con la búsqueda</p>
-          </div>
-        ) : (
-          <div className="workspace-panel relative overflow-x-auto">
-            <Table className="min-w-[650px] sm:min-w-full">
-              <TableHeader className="bg-surface-2 border-b-2 border-line text-ink-dim">
-                <TableRow className="border-0 hover:bg-transparent">
-                  <SortableHeader field="nombre" label="Material / Descripción" />
-                  <SortableHeader field="tipo" label="Tipo" width="w-28" />
-                  <SortableHeader field="sku" label="SKU / Parte" />
-                  <SortableHeader field="proveedor" label="Proveedor" />
-                  <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest border-r-2 border-line text-ink-dim">Notas</TableHead>
-                  <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-center w-28 text-ink-dim">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+  const notices = error ? (
+    <div className="shrink-0 mx-4 sm:mx-6 mt-3 flex items-start gap-2 border border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger leading-snug">
+      <AlertCircle size={14} className="shrink-0 mt-0.5" />
+      <span className="text-left">{error}</span>
+    </div>
+  ) : null;
+
+  return (
+    <PageFrame
+      title="Compras y materiales"
+      actions={
+        <Button
+          onClick={handleOpenAdd}
+          className="bg-accent text-white px-4 py-2 text-[12px] font-semibold hover:bg-accent/90 transition-colors shadow-hard-accent flex items-center gap-2 rounded-lg h-11"
+        >
+          <Plus size={14} /> Nuevo Material
+        </Button>
+      }
+      toolbar={toolbar}
+      notices={notices}
+    >
+      {loading ? (
+        <div className="flex flex-col items-center justify-center h-40 text-ink-dim font-mono text-[11px] uppercase tracking-widest">
+          <Loader2 size={24} className="animate-spin mb-3 text-accent" />
+          Cargando directorio...
+        </div>
+      ) : items.length === 0 ? (
+        <div className="border-2 border-line border-dashed flex flex-col items-center justify-center text-center p-12 bg-surface/40 corner-ticks">
+           <Box className="text-line w-16 h-16 mb-4" />
+           <h3 className="font-display font-black text-2xl uppercase tracking-tighter text-ink-dim italic mb-2">Directorio Vacío</h3>
+           <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[2px]">Agrega metales, piezas o herramientas para empezar</p>
+        </div>
+      ) : filteredAndSortedItems.length === 0 ? (
+        <div className="border-2 border-line border-dashed flex flex-col items-center justify-center text-center p-12 bg-surface/40 corner-ticks">
+           <Search className="text-line w-16 h-16 mb-4" />
+           <h3 className="font-display font-black text-2xl uppercase tracking-tighter text-ink-dim italic mb-2">Sin Resultados</h3>
+           <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[2px]">No se encontraron materiales que coincidan con la búsqueda</p>
+        </div>
+      ) : (
+        <div className="workspace-panel relative overflow-x-auto">
+          <Table className="min-w-[650px] sm:min-w-full">
+            <TableHeader className="bg-surface-2 border-b-2 border-line text-ink-dim">
+              <TableRow className="border-0 hover:bg-transparent">
+                <SortableHeader field="nombre" label="Material / Descripción" />
+                <SortableHeader field="tipo" label="Tipo" width="w-28" />
+                <SortableHeader field="sku" label="SKU / Parte" />
+                <SortableHeader field="proveedor" label="Proveedor" />
+                <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest border-r-2 border-line text-ink-dim">Notas</TableHead>
+                <TableHead className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-right w-44 text-ink-dim">Acciones</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
                 {filteredAndSortedItems.map((item) => (
                   <TableRow key={item.id} className="border-b-2 border-line hover:bg-surface-2 transition-colors group border-0">
                     <TableCell className="px-4 py-3 border-r-2 border-line group-hover:bg-accent/5 transition-colors">
@@ -287,8 +283,8 @@ export function ComprasPanel(): ReactElement {
                     <TableCell className="px-4 py-3 border-r-2 border-line text-[10px] font-mono text-ink-dim group-hover:bg-accent/5 transition-colors">
                       {item.notas || '—'}
                     </TableCell>
-                    <TableCell className="px-3 py-3 text-center align-middle group-hover:bg-accent/5 transition-colors">
-                      <div className="flex items-center justify-center gap-1.5">
+                    <TableCell className="px-3 py-3 w-44 text-right align-middle group-hover:bg-accent/5 transition-colors">
+                      <div className="flex items-center justify-end gap-1.5">
                         {item.link ? (
                           <a
                             href={item.link.startsWith('http') ? item.link : `https://${item.link}`}
@@ -300,9 +296,7 @@ export function ComprasPanel(): ReactElement {
                           >
                             <ExternalLink size={13} />
                           </a>
-                        ) : (
-                          <div className="w-8"></div>
-                        )}
+                        ) : null}
                         <Button
                           variant="outline"
                           size="icon"
@@ -328,10 +322,9 @@ export function ComprasPanel(): ReactElement {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
-          </div>
-        )}
-      </div>
+          </Table>
+        </div>
+      )}
 
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="max-w-lg rounded-xl p-0 gap-0 overflow-hidden bg-surface border border-line shadow-hard-accent flex flex-col" showCloseButton={false}>
@@ -453,6 +446,6 @@ export function ComprasPanel(): ReactElement {
           </form>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageFrame>
   );
 }

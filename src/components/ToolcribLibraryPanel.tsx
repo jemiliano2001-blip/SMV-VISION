@@ -839,9 +839,79 @@ export function ToolcribLibraryPanel({
     onCatalogChanged?.();
   }, [loadAliases, onCatalogChanged]);
 
+  const pageSelectClass =
+    'min-h-11 rounded-lg border border-line bg-surface-2 text-ink text-xs font-mono px-2 focus-visible:outline-none focus-visible:border-accent';
+  // Biblioteca (isPage): categoría, cobertura y salud del catálogo en la misma
+  // franja que la búsqueda y los botones, en lugar de chips en dos renglones.
+  const pageFilters = isPage ? (
+    <>
+      <select
+        value={selectedFamily}
+        onChange={(event) => setSelectedFamily(event.target.value as PartFamily)}
+        aria-label="Filtrar por categoría"
+        className={pageSelectClass}
+      >
+        {FAMILIES.map((family) => {
+          const count = familyCounts[family.id];
+          if (family.id !== 'all' && count === 0) return null;
+          return (
+            <option key={family.id} value={family.id}>
+              {family.label} ({count})
+            </option>
+          );
+        })}
+      </select>
+      <select
+        value={selectedAsset}
+        onChange={(event) => setSelectedAsset(event.target.value as AssetFilter)}
+        aria-label="Filtrar por cobertura (CAD, ISO, 3D)"
+        className={pageSelectClass}
+      >
+        {ASSET_FILTERS.map((filter) => {
+          const count = assetCounts[filter.id];
+          if (isGapAssetFilter(filter.id) && count === 0) return null;
+          return (
+            <option key={filter.id} value={filter.id}>
+              {filter.label} ({count})
+            </option>
+          );
+        })}
+      </select>
+      <button
+        type="button"
+        aria-pressed={onlySets}
+        onClick={() => setOnlySets((prev) => !prev)}
+        className={`px-2 min-h-11 rounded-lg border text-[10px] font-mono font-bold uppercase tracking-wider transition-colors ${onlySets ? 'border-accent bg-accent/10 text-accent' : 'border-line text-ink-dim hover:border-accent/40'}`}
+      >
+        Solo pares / juegos
+      </button>
+      {catalogHealth.total > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 font-mono text-[10px] text-ink-dim uppercase tracking-wider">
+          <HealthStat label="ISO" count={catalogHealth.withIso} total={catalogHealth.total} onClick={() => setSelectedAsset('iso')} />
+          <HealthStat label="CAD" count={catalogHealth.withCad} total={catalogHealth.total} onClick={() => setSelectedAsset('cad')} />
+          <HealthStat label="3D" count={catalogHealth.with3d} total={catalogHealth.total} onClick={() => setSelectedAsset('stl')} />
+          {catalogHealth.missingBoth > 0 && (
+            <HealthStat
+              label="Sin nada"
+              count={catalogHealth.missingBoth}
+              total={catalogHealth.total}
+              tone="danger"
+              onClick={() => setSelectedAsset('missing-pdf')}
+            />
+          )}
+        </div>
+      )}
+      {status !== 'loading' && totalCount > 0 && (
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-dim">
+          {visibleCount} de {totalCount} piezas
+        </span>
+      )}
+    </>
+  ) : null;
+
   const toolbar = (
-    <div className={cn('flex items-start gap-3', isPage ? 'flex-col sm:flex-row sm:items-center' : 'flex-col')}>
-      <div className="relative flex-1 w-full">
+    <div className={cn('flex gap-3', isPage ? 'flex-wrap items-center' : 'flex-col items-start')}>
+      <div className={cn('relative flex-1 w-full', isPage && 'min-w-[240px] sm:max-w-md')}>
         <Search size={14} className="absolute left-3 top-2.5 text-ink-dim" />
         <Input
           ref={searchInputRef}
@@ -883,7 +953,8 @@ export function ToolcribLibraryPanel({
           </div>
         )}
       </div>
-      <div className={cn('flex w-full flex-wrap items-center gap-2', isPage && 'sm:w-auto sm:flex-nowrap')}>
+      {pageFilters}
+      <div className={cn('flex w-full flex-wrap items-center gap-2', isPage && 'sm:w-auto sm:flex-nowrap sm:ml-auto')}>
         <Button
           variant="outline"
           size="sm"
@@ -954,50 +1025,16 @@ export function ToolcribLibraryPanel({
     </div>
   );
 
-  // Huecos del catálogo, de un vistazo: cuánto falta digitalizar sin ir
-  // pieza por pieza. Sólo en Biblioteca dedicada — el acordeón de Reporte no
-  // necesita esta vista de auditoría.
-  const healthStrip = isPage && catalogHealth.total > 0 && (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 font-mono text-[10px] text-ink-dim uppercase tracking-wider">
-      <span className="font-bold text-ink-dim/80">Salud del catálogo:</span>
-      <HealthStat
-        label="Con ISO"
-        count={catalogHealth.withIso}
-        total={catalogHealth.total}
-        onClick={() => setSelectedAsset('iso')}
-      />
-      <HealthStat
-        label="Con CAD"
-        count={catalogHealth.withCad}
-        total={catalogHealth.total}
-        onClick={() => setSelectedAsset('cad')}
-      />
-      <HealthStat
-        label="Con 3D"
-        count={catalogHealth.with3d}
-        total={catalogHealth.total}
-        onClick={() => setSelectedAsset('stl')}
-      />
-      {catalogHealth.missingBoth > 0 && (
-        <HealthStat
-          label="Sin nada"
-          count={catalogHealth.missingBoth}
-          total={catalogHealth.total}
-          tone="danger"
-          onClick={() => setSelectedAsset('missing-pdf')}
-        />
-      )}
-    </div>
-  );
-
   // No exigimos status === 'ready': un refresh fallido (status 'error') no debe
   // borrar la tabla si ya había un catálogo cargado de una consulta anterior.
   const tableBlock = status !== 'loading' && totalCount > 0 && (
     <div className={cn('space-y-2', isPage && 'flex-1 min-h-0 flex flex-col')}>
-      <p className="font-mono text-[11px] uppercase tracking-wider text-ink-dim shrink-0">
-        Mostrando {visibleCount} de {totalCount} piezas
-        {views.length !== totalCount ? ` · ${views.length} archivos` : ''}.
-      </p>
+      {!isPage && (
+        <p className="font-mono text-[11px] uppercase tracking-wider text-ink-dim shrink-0">
+          Mostrando {visibleCount} de {totalCount} piezas
+          {views.length !== totalCount ? ` · ${views.length} archivos` : ''}.
+        </p>
+      )}
       <ToolcribSetSuggestions
         suggestions={setSuggestions}
         onAccept={acceptSuggestion}
@@ -1127,6 +1164,7 @@ export function ToolcribLibraryPanel({
                   onLinkSet={openSetDraftFor}
                   noteCount={partNotes.get(setPartKey(group.partNumber))?.length ?? 0}
                   onNotes={setNotesTarget}
+                  compact={isPage}
                 />
               ))
             )}
@@ -1162,10 +1200,9 @@ export function ToolcribLibraryPanel({
   );
 
   const body = (
-    <div className={cn(isPage ? 'flex-1 min-h-0 flex flex-col gap-4 p-5' : 'space-y-4')}>
+    <div className={cn(isPage ? 'flex-1 min-h-0 flex flex-col gap-3 p-4 sm:p-6' : 'space-y-4')}>
       {toolbar}
-      {filters}
-      {healthStrip}
+      {!isPage && filters}
       {errorMessage && (
         <div className="flex items-start gap-2 border-2 border-danger/60 bg-danger/10 px-3 py-2 text-[11px] font-mono text-danger">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -1224,29 +1261,13 @@ export function ToolcribLibraryPanel({
   return (
     <div
       className={cn(
-        'catalog-workspace border border-line bg-surface text-ink rounded-xl shadow-sm',
-        isPage && 'h-full min-h-0 flex flex-col overflow-hidden',
+        'catalog-workspace bg-surface text-ink',
+        isPage
+          ? 'flex-1 min-w-0 h-full min-h-0 flex flex-col overflow-hidden'
+          : 'border border-line rounded-xl shadow-sm',
       )}
     >
-      {isPage ? (
-        <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-line bg-surface-2 text-ink">
-          <span className="flex items-center gap-2.5 font-display font-semibold text-lg tracking-tight text-ink">
-            <FolderOpen size={18} className="text-accent" />
-            Biblioteca Tool Crib
-          </span>
-          <span className="flex items-center gap-2 font-mono text-xs text-white/80">
-            {status === 'loading' ? (
-              <Loader2 size={14} className="animate-spin text-accent" />
-            ) : status === 'ready' ? (
-              <span className="bg-accent text-bg px-2 py-0.5 text-[11px] font-bold">
-                {totalCount} piezas
-              </span>
-            ) : status === 'error' ? (
-              <AlertCircle size={14} className="text-danger" />
-            ) : null}
-          </span>
-        </div>
-      ) : (
+      {!isPage && (
         <button
           type="button"
           onClick={() => setIsOpen((prev) => !prev)}
@@ -1424,6 +1445,8 @@ interface PartGroupRowProps {
   onLinkSet: (group: ToolcribPartGroup) => void;
   noteCount: number;
   onNotes: (partNumber: string) => void;
+  /** Biblioteca (isPage): fila baja con una acción principal y el resto en el menú. */
+  compact: boolean;
 }
 
 const PartGroupRow = memo(function PartGroupRow({
@@ -1450,6 +1473,7 @@ const PartGroupRow = memo(function PartGroupRow({
   onLinkSet,
   noteCount,
   onNotes,
+  compact,
 }: PartGroupRowProps): ReactElement {
   const printView = printDrawingForGroup(group);
   const previewView = previewDrawingForGroup(group);
@@ -1476,13 +1500,16 @@ const PartGroupRow = memo(function PartGroupRow({
     : !printView.pdfUrl
       ? 'Este plano no tiene un PDF accesible'
       : 'Imprimir OT';
+  const cellY = compact ? 'py-1.5' : 'py-3';
+  // Con vínculo pendiente, "Usar para…" es la acción principal; si no, Imprimir.
+  const usePrimary = Boolean(pendingLinkLabel && onUseForPending && pendingView);
   const cadFile = group.cad ? fileBasename(group.cad.sourcePath) : null;
   const isoFile = group.iso ? fileBasename(group.iso.sourcePath) : null;
 
   return (
     <TableRow className="border-b-2 border-line hover:bg-surface-2/60 transition-colors">
       {showCheckbox && (
-        <TableCell className="py-3 align-top">
+        <TableCell className={cn(cellY, 'align-top')}>
           <input
             type="checkbox"
             checked={selected}
@@ -1493,10 +1520,10 @@ const PartGroupRow = memo(function PartGroupRow({
           />
         </TableCell>
       )}
-      <TableCell className="py-3 align-top">
+      <TableCell className={cn(cellY, 'align-top')}>
         <ToolcribThumbnail pdfUrl={thumbnailUrl} alt={group.partNumber} />
       </TableCell>
-      <TableCell className="font-medium whitespace-nowrap py-3">
+      <TableCell className={cn('font-medium whitespace-nowrap', cellY)}>
         <div className="flex flex-col items-start">
           <div className="flex items-center gap-1.5">
             <span className="font-mono text-xs font-bold text-ink">
@@ -1560,7 +1587,7 @@ const PartGroupRow = memo(function PartGroupRow({
           )}
         </div>
       </TableCell>
-      <TableCell className="py-3">
+      <TableCell className={cellY}>
         <div className="flex flex-col max-w-[200px] sm:max-w-xs">
           <span className="truncate text-xs text-ink font-medium" title={group.description}>
             {group.description ? (
@@ -1581,7 +1608,7 @@ const PartGroupRow = memo(function PartGroupRow({
           </span>
         </div>
       </TableCell>
-      <TableCell className="py-3">
+      <TableCell className={cellY}>
         <div className="flex flex-col items-start gap-0.5">
           {group.cad && (
             <span className="inline-flex items-center justify-center bg-surface-2 border-2 border-line px-2 py-0.5 text-[11px] font-mono font-bold text-ink rounded-none">
@@ -1595,9 +1622,9 @@ const PartGroupRow = memo(function PartGroupRow({
           )}
         </div>
       </TableCell>
-      <TableCell className="text-right py-3">
+      <TableCell className={cn('text-right', cellY)}>
         <div className="flex items-center justify-end gap-1.5">
-          {group.stlView && (
+          {!compact && group.stlView && (
             <Button
               variant="outline"
               size="xs"
@@ -1609,6 +1636,7 @@ const PartGroupRow = memo(function PartGroupRow({
               <span className="ml-1 hidden sm:inline">3D</span>
             </Button>
           )}
+          {!compact && (
           <Button
             variant="outline"
             size="xs"
@@ -1620,6 +1648,8 @@ const PartGroupRow = memo(function PartGroupRow({
             <Eye size={11} />
             <span className="ml-1 hidden sm:inline">Ver</span>
           </Button>
+          )}
+          {!(compact && usePrimary) && (
           <Button
             variant="outline"
             size="xs"
@@ -1631,6 +1661,7 @@ const PartGroupRow = memo(function PartGroupRow({
             {printBusy ? <Loader2 size={11} className="animate-spin text-accent" /> : <Printer size={11} />}
             <span className="ml-1 hidden sm:inline">Imprimir</span>
           </Button>
+          )}
           {pendingLinkLabel && onUseForPending && pendingView && (
             <Button
               variant="default"
@@ -1648,7 +1679,7 @@ const PartGroupRow = memo(function PartGroupRow({
               <span className="ml-1 hidden sm:inline">Usar para {pendingLinkLabel}</span>
             </Button>
           )}
-          {showAttach && (
+          {!compact && showAttach && (
             <Button
               variant={attachTargetAttached ? 'secondary' : 'default'}
               size="xs"
@@ -1682,13 +1713,29 @@ const PartGroupRow = memo(function PartGroupRow({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="min-h-11 min-w-11 rounded-lg border border-line bg-surface text-ink hover:bg-surface-2 hover:border-accent hover:text-accent transition-colors inline-flex items-center justify-center"
+              className={cn('rounded-lg border border-line bg-surface text-ink hover:bg-surface-2 hover:border-accent hover:text-accent transition-colors inline-flex items-center justify-center', compact ? 'min-h-8 min-w-8' : 'min-h-11 min-w-11')}
               title="Más acciones"
               aria-label="Más acciones del plano"
             >
               <MoreHorizontal size={12} />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[180px] bg-surface border-2 border-line shadow-hard-accent text-ink rounded-none p-1">
+              {compact && usePrimary && (
+                <DropdownMenuItem
+                  disabled={printDisabled}
+                  onClick={() => printView && onPrint(printView)}
+                  className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5"
+                >
+                  <Printer size={12} className="mr-1.5" />
+                  Imprimir OT
+                </DropdownMenuItem>
+              )}
+              {compact && group.stlView && (
+                <DropdownMenuItem onClick={() => group.stlView && onStl(group.stlView)} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
+                  <Box size={12} className="mr-1.5" />
+                  Ver 3D (STL)
+                </DropdownMenuItem>
+              )}
               {group.cad?.pdfUrl && (
                 <DropdownMenuItem onClick={() => group.cad && onPreview(group.cad)} className="font-mono text-xs cursor-pointer hover:bg-surface-2 rounded-none px-2 py-1.5">
                   <Eye size={12} className="mr-1.5" />

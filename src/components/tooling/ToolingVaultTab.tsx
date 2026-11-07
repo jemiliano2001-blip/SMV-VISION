@@ -450,7 +450,7 @@ export function ToolingVaultTab(): ReactElement {
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label htmlFor="tooling-brand" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Marca</label>
                 <Input
@@ -483,7 +483,7 @@ export function ToolingVaultTab(): ReactElement {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label htmlFor="tooling-provider" className="block text-[10px] font-black uppercase tracking-widest text-ink-dim mb-1">Proveedor</label>
                 <Input

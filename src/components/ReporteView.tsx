@@ -17,7 +17,6 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  Maximize2,
   Printer,
   Pencil,
   Trash2,
@@ -37,10 +36,17 @@ import type { VisionAnalysisHook } from '../hooks/useVisionAnalysis';
 import { useSyncMeta } from '../hooks/useSyncMeta';
 import type { UseToolcribCatalogResult } from '../hooks/useToolcribCatalog';
 import { ToolcribLibraryPanel } from './ToolcribLibraryPanel';
+import { PageFrame } from './shell/PageFrame';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from './ui/sheet';
 import { ReportRowActions } from './ReportRowActions';
 import { describeIsometricView, purchaseRowKey } from '../lib/reportViewMeta';
 import { checkRevisionDiscrepancy } from '../lib/matching';
-import { getReportDrawingSnapshot } from '../lib/orderDrawingBridge';
 import { formatAgeDays, getOrderAgeDays } from '../lib/age';
 
 /**
@@ -728,6 +734,7 @@ export const ReporteView = memo(function ReporteView({
   const [tableViewMode, setTableViewMode] = useState<'dashboard' | 'print'>('dashboard');
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'ready' | 'missing' | 'mismatch'>('all');
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(new Set());
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const { state: syncState, isError: isSyncError, isStale: isSyncStale } = useSyncMeta();
   const syncCopy = syncState === 'loading'
     ? { title: 'Verificando conexión con Odoo', detail: 'Confirmando el estado de la última sincronización.', tone: 'text-ink-dim' }
@@ -852,194 +859,56 @@ export const ReporteView = memo(function ReporteView({
   );
 
   return (
-    <div className="h-full flex flex-col xl:flex-row">
-      {/* ── Columna de entrada (CTA siempre visible al pie) ── */}
-      <section className="xl:w-[420px] xl:shrink-0 xl:h-full border-b xl:border-b-0 xl:border-r border-line bg-surface flex flex-col">
-        <div className="flex-1 overflow-y-auto p-5 space-y-7">
-          <div>
-            <p className="workspace-kicker mb-2">
-              Auditoría de planos
-            </p>
-            <h1 className="workspace-title text-4xl">
-              Generar reporte
-            </h1>
-          </div>
-
-          {/* 01 Pedidos */}
-          <div className="space-y-3">
-            <StepLabel
-              n="01"
-              label="Órdenes Odoo"
-              done={vision.seededBridgeLinks.length > 0 || Boolean(vision.results)}
-            />
-            <div className="min-h-[150px] rounded-xl border border-line bg-surface-2/70 flex flex-col items-center justify-center p-6 relative">
-              <div className="text-center space-y-2">
-                <Database className={`mx-auto w-10 h-10 ${syncCopy.tone}`} />
-                <p className={`font-display font-semibold text-sm tracking-tight ${syncCopy.tone}`} aria-live="polite">
-                  {syncCopy.title}
-                </p>
-                {vision.seededBridgeLinks.length > 0 ? (
-                  <p className="text-[9px] text-accent font-mono uppercase font-black">
-                    {vision.seededBridgeLinks.length} línea
-                    {vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes
-                    {vision.seededBridgeLinks.some((l) => {
-                      const snap = getReportDrawingSnapshot(l);
-                      return (
-                        snap &&
-                        (snap.partNumber.toLowerCase().includes('.iso') ||
-                          snap.sourcePath.toLowerCase().includes('.iso'))
-                      );
-                    })
-                      ? ' · cara ISO eDrawings lista'
-                      : ''}
-                  </p>
-                ) : (
-                  <p className="text-[9px] text-ink-dim font-mono uppercase">
-                    {syncCopy.detail}
-                  </p>
-                )}
-              </div>
-            </div>
-            {vision.seedWarning && (
-              <div className="border-2 border-warn bg-warn/10 p-3 flex items-start gap-2">
-                <AlertTriangle size={14} className="text-warn shrink-0 mt-0.5" />
-                <div className="grow min-w-0">
-                  <p className="font-mono text-[9px] uppercase tracking-widest text-warn font-black mb-1">
-                    Aviso al adjuntar
-                  </p>
-                  <p className="font-mono text-[10px] text-ink break-words">{vision.seedWarning}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={vision.clearSeedWarning}
-                  className="text-ink-dim hover:text-ink"
-                  title="Cerrar"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )}
-            {vision.seededBridgeLinks.length > 0 && (
-              <div className="border-2 border-accent/40 bg-accent/5 p-3 space-y-2">
-                <p className="font-mono text-[9px] uppercase tracking-widest text-accent font-black">
-                  {vision.seededBridgeLinks.length} enviada
-                  {vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {vision.seededBridgeLinks.map((link) => (
-                    <button
-                      key={link.key}
-                      type="button"
-                      onClick={() => vision.removeSeededBridgeLink(link.key)}
-                      className="inline-flex items-center gap-1 border border-line bg-surface px-2 py-1 font-mono text-[9px] uppercase hover:border-danger hover:text-danger"
-                      title="Quitar de la semilla del reporte"
-                    >
-                      {link.soNumber}
-                      {link.numeroParte ? ` · ${link.numeroParte}` : ''}
-                      <X size={10} />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 02 Biblioteca */}
-          <div className="space-y-3">
-            <StepLabel n="02" label="Biblioteca de Planos" />
-            <ToolcribLibraryPanel
-              onAttachDrawing={vision.handleAttachToolcribDrawing}
-              attachedDrawingIds={vision.attachedToolcribDrawingIds}
-              onCatalogChanged={() => void catalog.reload()}
-            />
-          </div>
-
-          {/* 03 Workspace */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <StepLabel n="03" label="Workspace" done={vision.workshopPdfs.length > 0} />
-              <span className="bg-ink text-bg px-2 py-0.5 text-[10px] font-black font-mono">
-                {vision.workshopPdfs.length} PLANOS
-              </span>
-            </div>
-            <div
-              className={`border-2 border-dashed p-2 transition-all ${
-                vision.draggingZone === 'workshop'
-                  ? 'border-accent bg-accent/10'
-                  : 'border-line bg-surface-2/40'
-              }`}
-              {...vision.buildDropHandlers('workshop', vision.ingestWorkshopFiles)}
+    <>
+      <PageFrame
+        title="Generar reporte"
+        scrollBody={false}
+        subtitle={`${
+          vision.results
+            ? `${vision.results.length} órdenes en el reporte`
+            : vision.seededBridgeLinks.length > 0
+              ? `${vision.seededBridgeLinks.length} órdenes enviadas desde Órdenes`
+              : 'Órdenes pendientes de Odoo'
+        } · ${vision.workshopPdfs.length} planos adjuntos`}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setLibraryOpen(true)}
+              className="min-h-11 px-4 rounded-xl border-2 border-line bg-surface text-ink font-display font-bold text-sm hover:border-accent hover:text-accent transition-colors inline-flex items-center gap-2"
             >
-              {vision.workshopPdfs.length > 0 ? (
-                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                  {vision.workshopPdfs.map((pdf) => (
-                    <div
-                      key={pdf.id}
-                      className="relative group border border-line bg-surface-2 p-2 flex items-center justify-between gap-2"
-                    >
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        {vision.workshopLoadingStates[pdf.id] === 'loading' ? (
-                          <Loader2 size={12} className="text-accent animate-spin shrink-0" />
-                        ) : vision.workshopLoadingStates[pdf.id] === 'error' ? (
-                          <AlertCircle size={12} className="text-danger shrink-0" />
-                        ) : (
-                          <CheckCircle2 size={12} className="text-ok shrink-0" />
-                        )}
-                        <span className="text-[9px] font-mono truncate uppercase font-bold text-ink">
-                          {pdf.relativePath.split('/').pop()}
-                        </span>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          vision.removeFile('workshop', pdf.id);
-                        }}
-                        className="text-ink-dim hover:text-accent transition-colors"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+              <LayoutGrid size={16} />
+              Planos ({vision.workshopPdfs.length})
+            </button>
+            <button
+              type="button"
+              onClick={vision.extractInfo}
+              disabled={vision.isExtracting}
+              className="min-h-11 px-5 rounded-xl bg-accent text-white font-display font-bold text-sm tracking-wide transition-all shadow-hard-accent hover:bg-accent/90 active:scale-[0.98] disabled:bg-surface disabled:text-ink-dim disabled:shadow-none disabled:cursor-not-allowed inline-flex items-center gap-2"
+            >
+              {vision.isExtracting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> Analizando…
+                </>
+              ) : vision.seededBridgeLinks.length > 0 ? (
+                `Auditar ${vision.seededBridgeLinks.length} enviada${
+                  vision.seededBridgeLinks.length === 1 ? '' : 's'
+                }`
               ) : (
-                <p className="text-[10px] font-mono text-ink-dim text-center py-3 uppercase tracking-wider">
-                  Arrastra planos PDF aquí o úsalos desde la biblioteca
-                </p>
+                'Ejecutar auditoría'
               )}
-            </div>
-          </div>
-        </div>
-
-        {/* CTA fija */}
-        <div className="border-t-2 border-line p-4 bg-surface-2">
-          <button
-            onClick={vision.extractInfo}
-            disabled={vision.isExtracting}
-            className="w-full min-h-14 rounded-xl bg-accent text-white font-display font-bold py-4 text-base tracking-wide transition-all shadow-hard-accent hover:bg-accent/90 active:scale-[0.98] disabled:bg-surface disabled:text-ink-dim disabled:shadow-none disabled:cursor-not-allowed flex items-center justify-center gap-3"
-          >
-            {vision.isExtracting ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" /> Analizando…
-              </>
-            ) : vision.seededBridgeLinks.length > 0 ? (
-              `Auditar ${vision.seededBridgeLinks.length} enviada${
-                vision.seededBridgeLinks.length === 1 ? '' : 's'
-              }`
-            ) : (
-              'Ejecutar Auditoría'
-            )}
-          </button>
-        </div>
-      </section>
-
-      {/* ── Columna de resultados ── */}
+            </button>
+          </>
+        }
+      >
+      {/* â”€â”€ Resultados a todo el ancho â”€â”€ */}
       <section className="flex-1 min-w-0 h-full overflow-y-auto bp-grid">
         <div className="p-6 lg:p-8 flex flex-col min-h-full">
           <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <span className="w-2.5 h-2.5 rounded-full bg-accent" />
               <h2 className="workspace-title text-2xl">
-                Audit Dashboard
+                Panel de auditoría
               </h2>
             </div>
 
@@ -1163,47 +1032,79 @@ export const ReporteView = memo(function ReporteView({
                 key="waiting"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="grow border-2 border-line border-dashed flex flex-col items-center justify-center text-center p-12 bg-surface/40 corner-ticks"
+                className={`grow border-2 border-dashed flex flex-col justify-center p-6 sm:p-10 corner-ticks transition-colors ${
+                  vision.draggingZone === 'workshop' ? 'border-accent bg-accent/10' : 'border-line bg-surface/40'
+                }`}
+                {...vision.buildDropHandlers('workshop', vision.ingestWorkshopFiles)}
               >
-                <div className="relative mb-8">
-                  <Maximize2 className="text-line w-28 h-28" />
-                  <FileText className="absolute inset-0 m-auto text-ink-dim w-10 h-10" />
-                </div>
-                {vision.seededBridgeLinks.length > 0 ? (
-                  <>
-                    <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">
-                      {vision.seededBridgeLinks.length} lista
-                      {vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes
-                    </h3>
-                    <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px] max-w-lg">
-                      Planos adjuntos — pulsa &quot;Auditar {vision.seededBridgeLinks.length} enviada
-                      {vision.seededBridgeLinks.length === 1 ? '' : 's'}&quot; o espera si la auditoría ya arrancó sola.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <h3 className="font-display font-black text-4xl uppercase tracking-tighter text-ink-dim italic mb-3">
-                      Esperando Instrucciones
-                    </h3>
-                    <p className="text-[11px] font-mono text-ink-dim uppercase tracking-[4px]">
-                      Presiona &quot;Ejecutar Auditoría&quot; — las órdenes se leen de Odoo automáticamente
-                    </p>
-                    <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl w-full">
-                      {[
-                        ['01', 'Las órdenes pendientes se leen de Odoo automáticamente.'],
-                        ['02', 'Usa el Auto-Matching o la Biblioteca para buscar planos.'],
-                        ['03', 'Presiona "Ejecutar" para que Vision AI audite las piezas.'],
-                      ].map(([n, text]) => (
-                        <div key={n} className="p-4 border-2 border-line bg-surface text-left">
-                          <p className="font-display font-black text-[11px] uppercase mb-1 text-accent">
-                            Paso {n}
-                          </p>
-                          <p className="text-[9px] font-mono text-ink-dim leading-tight">{text}</p>
-                        </div>
+                <div className="max-w-2xl w-full mx-auto space-y-5">
+                  <h3 className="font-display font-black text-2xl sm:text-3xl tracking-tight text-ink">
+                    Esto es lo que se va a auditar
+                  </h3>
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="p-4 border-2 border-line bg-surface">
+                      <dt className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Órdenes</dt>
+                      <dd className="font-display text-3xl font-black text-ink">
+                        {vision.seededBridgeLinks.length > 0 ? vision.seededBridgeLinks.length : 'Odoo'}
+                      </dd>
+                      <p className={`text-xs mt-1 ${syncCopy.tone}`} aria-live="polite">
+                        {vision.seededBridgeLinks.length > 0
+                          ? `Enviada${vision.seededBridgeLinks.length === 1 ? '' : 's'} desde Órdenes`
+                          : `${syncCopy.title}. ${syncCopy.detail}`}
+                      </p>
+                    </div>
+                    <div className="p-4 border-2 border-line bg-surface">
+                      <dt className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Planos adjuntos</dt>
+                      <dd className="font-display text-3xl font-black text-ink">{vision.workshopPdfs.length}</dd>
+                      <p className="text-xs mt-1 text-ink-dim">
+                        {vision.workshopPdfs.length > 0
+                          ? 'Se analizarán junto con el auto-matching de la biblioteca.'
+                          : 'Ninguno todavía.'}
+                      </p>
+                    </div>
+                  </dl>
+                  <div className="p-4 border-2 border-line bg-surface space-y-1">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-ink-dim">Qué falta</p>
+                    {vision.workshopPdfs.length === 0 ? (
+                      <p className="text-sm text-warn">
+                        Sin planos adjuntos: se usará solo el auto-matching con la biblioteca. Abre «Planos» para adjuntar o arrastra PDFs.
+                      </p>
+                    ) : (
+                      <p className="text-sm text-ok">Nada: ya hay planos para auditar. Pulsa «Ejecutar auditoría».</p>
+                    )}
+                  </div>
+                  {vision.seedWarning && (
+                    <div className="border-2 border-warn bg-warn/10 p-3 flex items-start gap-2">
+                      <AlertTriangle size={14} className="text-warn shrink-0 mt-0.5" />
+                      <p className="grow min-w-0 text-xs text-ink break-words">{vision.seedWarning}</p>
+                      <button
+                        type="button"
+                        onClick={vision.clearSeedWarning}
+                        className="text-ink-dim hover:text-ink"
+                        title="Cerrar"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  )}
+                  {vision.seededBridgeLinks.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {vision.seededBridgeLinks.map((link) => (
+                        <button
+                          key={link.key}
+                          type="button"
+                          onClick={() => vision.removeSeededBridgeLink(link.key)}
+                          className="inline-flex items-center gap-1 border border-line bg-surface px-2 py-1 font-mono text-[9px] uppercase hover:border-danger hover:text-danger"
+                          title="Quitar de la semilla del reporte"
+                        >
+                          {link.soNumber}
+                          {link.numeroParte ? ` · ${link.numeroParte}` : ''}
+                          <X size={10} />
+                        </button>
                       ))}
                     </div>
-                  </>
-                )}
+                  )}
+                </div>
               </motion.div>
             )}
 
@@ -1896,6 +1797,77 @@ export const ReporteView = memo(function ReporteView({
           </div>
         )}
       </section>
-    </div>
+      </PageFrame>
+      <Sheet open={libraryOpen} onOpenChange={setLibraryOpen}>
+        <SheetContent
+          className="data-[side=right]:w-full data-[side=right]:sm:max-w-3xl overflow-y-auto p-4 sm:p-6"
+        >
+          <SheetHeader className="p-0">
+            <SheetTitle>Planos ({vision.workshopPdfs.length})</SheetTitle>
+            <SheetDescription>Biblioteca Tool Crib y planos adjuntos a la auditoría.</SheetDescription>
+          </SheetHeader>
+          <ToolcribLibraryPanel
+            variant="embedded"
+            onAttachDrawing={vision.handleAttachToolcribDrawing}
+            attachedDrawingIds={vision.attachedToolcribDrawingIds}
+            onCatalogChanged={() => void catalog.reload()}
+          />
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <StepLabel n="03" label="Workspace" done={vision.workshopPdfs.length > 0} />
+              <span className="bg-ink text-bg px-2 py-0.5 text-[10px] font-black font-mono">
+                {vision.workshopPdfs.length} PLANOS
+              </span>
+            </div>
+            <div
+              className={`border-2 border-dashed p-2 transition-all ${
+                vision.draggingZone === 'workshop'
+                  ? 'border-accent bg-accent/10'
+                  : 'border-line bg-surface-2/40'
+              }`}
+              {...vision.buildDropHandlers('workshop', vision.ingestWorkshopFiles)}
+            >
+              {vision.workshopPdfs.length > 0 ? (
+                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                  {vision.workshopPdfs.map((pdf) => (
+                    <div
+                      key={pdf.id}
+                      className="relative group border border-line bg-surface-2 p-2 flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        {vision.workshopLoadingStates[pdf.id] === 'loading' ? (
+                          <Loader2 size={12} className="text-accent animate-spin shrink-0" />
+                        ) : vision.workshopLoadingStates[pdf.id] === 'error' ? (
+                          <AlertCircle size={12} className="text-danger shrink-0" />
+                        ) : (
+                          <CheckCircle2 size={12} className="text-ok shrink-0" />
+                        )}
+                        <span className="text-[9px] font-mono truncate uppercase font-bold text-ink">
+                          {pdf.relativePath.split('/').pop()}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          vision.removeFile('workshop', pdf.id);
+                        }}
+                        className="text-ink-dim hover:text-accent transition-colors"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[10px] font-mono text-ink-dim text-center py-3 uppercase tracking-wider">
+                  Arrastra planos PDF aquí o úsalos desde la biblioteca
+                </p>
+              )}
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 });

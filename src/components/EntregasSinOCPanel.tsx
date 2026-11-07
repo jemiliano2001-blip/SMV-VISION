@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2, FileWarning, RefreshCw, AlertCircle, X } from 'lucide-react';
 import { Button } from './ui/button';
+import { PageFrame } from './shell/PageFrame';
 import {
   Table,
   TableBody,
@@ -67,203 +68,141 @@ export function EntregasSinOCPanel() {
   }, [fetchOrders]);
 
   return (
-    <div className="h-full flex flex-col bg-bg">
-      {/* ── Header ── */}
-      <header className="shrink-0 border-b border-line bg-surface/95 backdrop-blur-xl px-4 sm:px-6 lg:px-9 py-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div className="size-11 rounded-xl bg-warn/12 text-warn flex items-center justify-center shrink-0">
-            <FileWarning size={20} strokeWidth={2.5} />
-          </div>
-          <div>
-            <h1 className="font-display font-bold text-2xl sm:text-3xl tracking-[-0.04em] leading-none">
-              Entregas sin OC
-            </h1>
-            <p className="text-xs text-ink-dim mt-1">
-              Cotizaciones entregadas sin orden de compra capturada
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
+    <PageFrame
+      title="Entregas sin OC"
+      subtitle={
+        <>
+          Cotizaciones entregadas sin orden de compra capturada
           {effectiveLastSyncDate && (
-            <div
-              className={`font-mono text-[9px] sm:text-[10px] uppercase tracking-widest px-2.5 sm:px-3 py-1.5 sm:py-2 border-2 ${
-                isError
-                  ? 'border-danger/50 bg-danger/10 text-danger'
-                  : 'border-line text-ink-dim'
-              }`}
-            >
-              {isError
-                ? `SYNC AVISO · ${formatRelativeTime(effectiveLastSyncDate)}`
-                : `SYNC · ${formatRelativeTime(effectiveLastSyncDate)}`}
-            </div>
+            <span className={isError ? 'text-danger' : undefined}>
+              {' · '}
+              {isError ? 'aviso de sync' : 'sync'} {formatRelativeTime(effectiveLastSyncDate)}
+            </span>
           )}
-          <Button
-            variant="ghost"
-            onClick={() => void handleRefreshSync()}
-            disabled={loading || syncing}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg border border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[10px] sm:text-[11px] font-semibold h-10 text-ink"
-          >
-            <RefreshCw size={14} className={(loading || syncing) ? 'animate-spin' : ''} />
-            {syncing ? 'Sincronizando…' : loading ? 'Cargando…' : 'Refrescar Odoo'}
-          </Button>
+        </>
+      }
+      actions={
+        <Button
+          variant="ghost"
+          onClick={() => void handleRefreshSync()}
+          disabled={loading || syncing}
+          className="flex items-center gap-2 px-4 rounded-lg border border-line bg-surface-2 hover:border-warn hover:text-warn transition-colors disabled:opacity-50 text-[11px] font-semibold h-10 text-ink"
+        >
+          <RefreshCw size={14} className={loading || syncing ? 'animate-spin' : ''} />
+          {syncing ? 'Sincronizando…' : loading ? 'Cargando…' : 'Refrescar Odoo'}
+        </Button>
+      }
+      notices={
+        error && orders.length > 0 ? (
+          <div className="shrink-0 flex items-start gap-2 border-b border-danger/50 bg-danger/10 px-4 sm:px-6 py-2 text-sm text-danger">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span className="grow">{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-danger/70 hover:text-danger shrink-0"
+              aria-label="Cerrar error"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ) : undefined
+      }
+    >
+      {loading ? (
+        <div className="py-24 flex flex-col items-center justify-center gap-3 text-ink-dim">
+          <Loader2 size={28} className="animate-spin text-warn" />
+          <p className="text-xs">Obteniendo entregas sin OC…</p>
         </div>
-      </header>
-
-      {/* ── Contenido ── */}
-      <main className="flex-1 overflow-y-auto p-3.5 sm:p-6">
-        {loading ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4">
-            <Loader2 size={32} className="animate-spin text-warn" />
-            <p className="font-mono text-[11px] uppercase tracking-widest">Obteniendo entregas sin OC…</p>
-          </div>
-        ) : error && orders.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-danger space-y-4">
-            <AlertCircle size={48} />
-            <p className="font-mono text-sm border border-danger/50 bg-danger/10 p-4">{error}</p>
-          </div>
-        ) : orders.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-ink-dim space-y-4 border-2 border-dashed border-line bg-surface-2/30 p-8 sm:p-12 text-center max-w-2xl mx-auto">
-            <FileWarning size={48} className="text-line" />
-            <p className="font-display font-black text-xl sm:text-2xl uppercase italic">No hay entregas pendientes de OC</p>
-            <p className="font-mono text-xs uppercase tracking-widest">
-              Ninguna de las entregas recientes de Suprajit está pendiente de Orden de Compra.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-6 max-w-6xl mx-auto">
-            {error && (
-              <div className="flex items-start gap-2 border border-danger/50 bg-danger/10 px-3 py-2 text-sm text-danger">
-                <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                <span className="grow">{error}</span>
-                <button
-                  type="button"
-                  onClick={() => setError(null)}
-                  className="text-danger/70 hover:text-danger shrink-0"
-                  title="Cerrar"
-                  aria-label="Cerrar error"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            )}
-            {orders.map((order) => {
-              const ageDays = order.date_order ? getOrderAgeDays(order.date_order.split(' ')[0]) : null;
-
-              return (
-                <div key={order.id} className="border-2 border-warn bg-warn/5 flex flex-col shadow-hard">
-                  <div className="border-b-2 border-warn bg-warn text-bg px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-                        <h2 className="font-display font-black text-lg sm:text-xl tracking-tight uppercase text-black">
-                          {order.name}
-                        </h2>
-                        <span className="bg-black text-white px-2 py-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-widest">
-                          {order.partner}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 sm:gap-4 mt-1 font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-black/80 flex-wrap">
-                        <span>ESTADO: {order.state.toUpperCase()}</span>
-                        {order.date_order && (
-                          <span>
-                            FECHA: {order.date_order.split(' ')[0]}
-                            {ageDays !== null && ` (${formatAgeDays(ageDays)})`}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4 text-black ml-auto sm:ml-0">
-                      <span className="px-2 py-1 text-[9px] sm:text-[10px] font-black uppercase tracking-widest font-mono bg-black text-warn">
-                        FALTA OC
-                      </span>
-                      <div className="text-right">
-                        <p className="text-[9px] uppercase font-black tracking-widest opacity-80">Líneas entregadas</p>
-                        <p className="font-display text-lg sm:text-xl font-black">
-                          {order.order_lines.filter(l => l.qty_pending <= 0).length} / {order.order_lines.length}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="p-0 bg-surface overflow-x-auto">
-                    <Table className="w-full text-left border-collapse min-w-[550px] sm:min-w-full">
-                      <TableHeader>
-                        <TableRow className="bg-surface-2 text-[10px] font-black uppercase tracking-widest text-ink-dim border-b border-line hover:bg-surface-2">
-                          <TableHead className="px-5 py-2 font-bold w-1/2 text-ink-dim h-auto">Producto</TableHead>
-                          <TableHead className="px-5 py-2 font-bold text-ink-dim h-auto">Descripción</TableHead>
-                          <TableHead className="px-5 py-2 font-bold text-center w-32 text-ink-dim h-auto">Entregado</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {order.order_lines.map((line, idx) => {
-                          return (
-                            <TableRow
+      ) : error && orders.length === 0 ? (
+        <div className="py-24 flex flex-col items-center justify-center gap-3 text-danger">
+          <AlertCircle size={32} />
+          <p className="text-sm">{error}</p>
+        </div>
+      ) : orders.length === 0 ? (
+        <div className="py-24 flex flex-col items-center justify-center gap-3 text-center text-ink-dim">
+          <FileWarning size={32} className="text-line" />
+          <p className="font-display font-semibold text-lg text-ink">No hay entregas pendientes de OC</p>
+          <p className="text-xs">Ninguna entrega reciente de Suprajit está pendiente de orden de compra.</p>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-line bg-surface overflow-x-auto">
+          <Table className="min-w-[860px]">
+            <TableHeader>
+              <TableRow className="bg-surface-2 hover:bg-surface-2 text-[10px] font-black uppercase tracking-widest">
+                <TableHead className="w-32 px-4 h-10 text-ink-dim">Cotización</TableHead>
+                <TableHead className="w-44 px-4 h-10 text-ink-dim">Fecha</TableHead>
+                <TableHead className="px-4 h-10 text-ink-dim">Piezas entregadas</TableHead>
+                <TableHead className="w-64 px-4 h-10 text-ink-dim">Remisiones</TableHead>
+                <TableHead className="w-24 px-4 h-10 text-ink-dim">Estado</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {orders.map((order) => {
+                const ageDays = order.date_order ? getOrderAgeDays(order.date_order.split(' ')[0]) : null;
+                return (
+                  <TableRow key={order.id} className="align-top hover:bg-surface-2/40">
+                    <TableCell className="px-4 py-3 align-top">
+                      <span className="font-mono text-sm font-bold text-ink block">{order.name}</span>
+                      <span className="text-[11px] text-ink-dim block whitespace-normal">{order.partner}</span>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 align-top text-xs text-ink">
+                      {order.date_order?.split(' ')[0] ?? '—'}
+                      {ageDays !== null && (
+                        <span className="block text-[11px] text-ink-dim">{formatAgeDays(ageDays)}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 align-top whitespace-normal">
+                      {order.order_lines.length === 0 ? (
+                        <span className="text-xs text-ink-dim">Sin líneas de producto</span>
+                      ) : (
+                        <ul className="space-y-1">
+                          {order.order_lines.map((line, idx) => (
+                            <li
                               key={idx}
-                              className={`border-b border-line last:border-b-0 transition-colors ${
-                                line.qty_delivered > 0
-                                  ? 'bg-ok/5 hover:bg-ok/10'
-                                  : 'hover:bg-surface-2/40 opacity-50'
-                              }`}
+                              className={`flex items-baseline gap-3 text-xs ${line.qty_delivered > 0 ? 'text-ink' : 'text-ink-dim'}`}
                             >
-                              <TableCell className="px-5 py-3 align-top">
-                                <span className="font-display font-black uppercase tracking-tight text-sm text-ink block">
-                                  {line.product.split('] ')[1] || line.product}
-                                </span>
-                                {line.product.includes(']') && (
-                                  <span className="font-mono text-[9px] text-ink-dim">
-                                    {line.product.split(']')[0] + ']'}
-                                  </span>
-                                )}
-                              </TableCell>
-                              <TableCell className="px-5 py-3 font-mono text-xs text-ink align-top leading-snug">
-                                {line.description || '—'}
-                              </TableCell>
-                              <TableCell className="px-5 py-3 text-center align-top">
-                                <div>
-                                  <span className="font-black text-xl italic">{line.qty_delivered}</span>
-                                  <span className="block font-mono text-[9px] text-ink-dim">
-                                    de {line.qty} cotizadas
-                                  </span>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                        {order.order_lines.length === 0 && (
-                          <TableRow>
-                            <TableCell colSpan={3} className="px-5 py-8 text-center text-ink-dim font-mono text-[10px] uppercase tracking-widest">
-                              No hay líneas de producto en esta cotización
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-
-                    {/* Mostrar remisiones (deliveries) */}
-                    {order.deliveries && order.deliveries.length > 0 && (
-                      <div className="border-t border-line p-4 bg-surface-2/30">
-                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-ink-dim mb-2">
-                          Remisiones (Stock Pickings)
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {order.deliveries.map(d => (
-                            <div key={d.name} className="flex items-center gap-2 border border-line bg-surface px-2 py-1">
-                              <span className="font-mono text-xs font-bold">{d.name}</span>
+                              <span className="font-mono font-bold tabular-nums shrink-0">
+                                {line.qty_delivered}/{line.qty}
+                              </span>
+                              <span className="min-w-0 break-words">
+                                <span className="font-semibold">{line.product.split('] ')[1] || line.product}</span>
+                                {line.description ? ` · ${line.description}` : ''}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 align-top whitespace-normal">
+                      {order.deliveries && order.deliveries.length > 0 ? (
+                        <ul className="space-y-1">
+                          {order.deliveries.map((d) => (
+                            <li key={d.name} className="flex flex-wrap items-center gap-x-2 text-xs">
+                              <span className="font-mono font-bold">{d.name}</span>
                               <span className={`px-1.5 text-[9px] font-bold uppercase ${d.state === 'done' ? 'bg-ok text-bg' : 'bg-line text-ink'}`}>
                                 {d.state}
                               </span>
-                              {d.date_done && <span className="text-[9px] font-mono text-ink-dim">{d.date_done.split(' ')[0]}</span>}
-                            </div>
+                              {d.date_done && <span className="text-[10px] text-ink-dim">{d.date_done.split(' ')[0]}</span>}
+                            </li>
                           ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </main>
-    </div>
+                        </ul>
+                      ) : (
+                        <span className="text-xs text-ink-dim">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 align-top">
+                      <span className="px-2 py-1 text-[10px] font-black uppercase tracking-widest font-mono bg-warn text-bg">
+                        Falta OC
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </PageFrame>
   );
 }

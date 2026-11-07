@@ -29,7 +29,7 @@ export function CalculatorHeader({ state }: CalculatorHeaderProps): ReactElement
   const machines = listHaasMachinesByType(operationMode === 'turning' ? 'lathe' : 'mill');
 
   return (
-    <div className="border-2 border-line bg-surface p-4 shadow-hard">
+    <div className="border-2 border-line bg-surface p-3 shadow-hard">
       <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         {/* Tabs Operación */}
         <div className="flex flex-wrap items-center gap-2">
@@ -84,7 +84,7 @@ export function CalculatorHeader({ state }: CalculatorHeaderProps): ReactElement
       </div>
 
       {/* Fila de Selectores: Material y Máquina Haas */}
-      <div className="mt-4 pt-3 border-t-2 border-line/40 flex flex-wrap items-end justify-between gap-4">
+      <div className="mt-2 pt-2 border-t-2 border-line/40 flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-wrap items-end gap-3 w-full lg:w-auto">
           <div>
             <label htmlFor="sf-material" className="block text-[9px] font-black uppercase tracking-widest text-ink-dim mb-1">
@@ -148,7 +148,7 @@ export function CalculatorHeader({ state }: CalculatorHeaderProps): ReactElement
 
       {/* Mini-ficha técnica de la máquina */}
       {selectedMachine && (
-        <div className="mt-3 pt-3 border-t-2 border-line/40 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-ink-dim">
+        <div className="mt-2 pt-2 border-t-2 border-line/40 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-ink-dim">
           <span>
             Máx. RPM: <strong className="text-ink">{selectedMachine.maxRpm.toLocaleString()}</strong>
           </span>

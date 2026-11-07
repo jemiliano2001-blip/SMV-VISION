@@ -1,5 +1,6 @@
 import { doc, onSnapshot, type Timestamp } from 'firebase/firestore';
 import { getFirestoreClient } from './client';
+import { noteFirestoreError } from './firestoreHealth';
 import { log } from '../log';
 
 const SYNC_META_COLLECTION = 'syncMeta';
@@ -62,33 +63,51 @@ export function subscribeToOdooSyncMeta(
 
   const ref = doc(database, SYNC_META_COLLECTION, SYNC_META_DOC);
 
-  return onSnapshot(
-    ref,
-    (snap) => {
-      if (!snap.exists()) {
-        cb(null, 'empty');
-        return;
-      }
-      const data = snap.data();
-      // serverTimestamp() resolves to null locally before the write completes
-      const ts = data.lastSyncAt as Timestamp | null;
-      if (!ts) {
-        cb(null, 'loading');
-        return;
-      }
-      const successTs = data.lastSuccessfulSyncAt as Timestamp | null | undefined;
-      cb({
-        lastSyncAt: ts.toDate(),
-        lastSuccessfulSyncAt: successTs?.toDate?.() ?? (data.status === 'ok' ? ts.toDate() : undefined),
-        ordersProcessed: typeof data.ordersProcessed === 'number' ? data.ordersProcessed : 0,
-        status: data.status === 'error' ? 'error' : 'ok',
-        errorMessage: data.errorMessage as string | undefined,
-        partners: normalizePartners(data.partners),
-      }, 'ready');
-    },
-    (error) => {
-      log.warn('[smv-vision][syncMeta] onSnapshot falló, chip de sync sin datos', error);
-      cb(null, 'error');
-    },
-  );
+  let unsubscribe: () => void;
+  try {
+    unsubscribe = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          cb(null, 'empty');
+          return;
+        }
+        const data = snap.data();
+        // serverTimestamp() resolves to null locally before the write completes
+        const ts = data.lastSyncAt as Timestamp | null;
+        if (!ts) {
+          cb(null, 'loading');
+          return;
+        }
+        const successTs = data.lastSuccessfulSyncAt as Timestamp | null | undefined;
+        cb({
+          lastSyncAt: ts.toDate(),
+          lastSuccessfulSyncAt: successTs?.toDate?.() ?? (data.status === 'ok' ? ts.toDate() : undefined),
+          ordersProcessed: typeof data.ordersProcessed === 'number' ? data.ordersProcessed : 0,
+          status: data.status === 'error' ? 'error' : 'ok',
+          errorMessage: data.errorMessage as string | undefined,
+          partners: normalizePartners(data.partners),
+        }, 'ready');
+      },
+      (error) => {
+        log.warn('[smv-vision][syncMeta] onSnapshot falló, chip de sync sin datos', error);
+        cb(null, 'error');
+      },
+    );
+  } catch (error) {
+    noteFirestoreError(error);
+    log.warn('[smv-vision][syncMeta] no se pudo suscribir', error);
+    cb(null, 'error');
+    return () => {};
+  }
+
+  // Corre en el cleanup de un useEffect: si lanza, React desmonta toda la app.
+  return () => {
+    try {
+      unsubscribe();
+    } catch (error) {
+      noteFirestoreError(error);
+      log.warn('[smv-vision][syncMeta] no se pudo desuscribir', error);
+    }
+  };
 }

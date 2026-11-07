@@ -117,6 +117,7 @@ Key modules:
 - `purchases.ts` — CRUD for `purchases` collection. Exports `listPurchases`, `createPurchase`, `updatePurchase`, `deletePurchase`.
 - `odooOrders.ts` — Read-only queries for `odooSaleOrders` (`listOrdersToInvoice`, `listEntregasSinOC`). Same result-type contract; writing is done only by Cloud Function.
 - `syncOdoo.ts` — Wrapper cliente de `httpsCallable('triggerOdooSync')`.
+- `firestoreHealth.ts` — Detecta el bug del SDK que mata el cliente hasta recargar (aserciones `ca9`/`b815`, firebase-js-sdk #10310) y alimenta `FirestoreDeadBanner`. Con el cliente muerto, `onSnapshot` y su `unsubscribe` lanzan de forma síncrona: **todo listener nuevo debe protegerse como `syncMeta.ts`**, porque un throw en el cleanup de un `useEffect` tumba toda la app.
 - `authValidators.ts` — Normalización de forma para el usuario de Auth.
 - `analysisRuns.ts` — Fire-and-forget audit log for each analysis run.
 - `auth.ts` — Email/password sign-in only (Google flow removed on purpose: private app without domain allowlist); `useFirebaseUser()` hook (backed by `useSyncExternalStore`).
